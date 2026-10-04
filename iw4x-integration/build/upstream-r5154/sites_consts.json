@@ -1,0 +1,182 @@
+[
+ {
+  "kind": "engine_ptr",
+  "old_rva": "0x360430",
+  "new_rva": "0x36a430",
+  "old_bytes_at_site": "90931d03",
+  "new_bytes_at_site": "90931d03",
+  "label": "svs_clients .data  Game::svs_clients",
+  "resolved": true,
+  "how": "win[-24,+24)"
+ },
+ {
+  "kind": "engine_ptr",
+  "old_rva": "0x3979e",
+  "new_rva": "0x3a8b3",
+  "old_bytes_at_site": "80d69b01",
+  "new_bytes_at_site": "80d69b01",
+  "label": "level_bgs .text  mov [esi+0xC], level_bgs (TLS bgs)",
+  "resolved": true,
+  "how": "win[-24,+24)"
+ },
+ {
+  "kind": "engine_ptr",
+  "old_rva": "0x298a18",
+  "new_rva": "0x2a0b2c",
+  "old_bytes_at_site": "80d69b01",
+  "new_bytes_at_site": "80d69b01",
+  "label": "level_bgs .rdata engine address table: level_bgs",
+  "resolved": true,
+  "how": "win[-4,+4)"
+ },
+ {
+  "kind": "engine_ptr",
+  "old_rva": "0x34b2b",
+  "new_rva": "0x34cd5",
+  "old_bytes_at_site": "c8d48e00",
+  "new_bytes_at_site": "c8d48e00",
+  "label": "cg_tail .text  cmp eax,&cg.clientinfo[18] (find client by name) -> &clientinfo[32]",
+  "resolved": true,
+  "how": "win[-24,+24)"
+ },
+ {
+  "kind": "engine_ptr",
+  "old_rva": "0x3ff43",
+  "new_rva": "0x4147f",
+  "old_bytes_at_site": "b8e48e00",
+  "new_bytes_at_site": "b8e48e00",
+  "label": "post_cg_globals .text  push [0x8EE4B8] (first global after cg_s)",
+  "resolved": true,
+  "how": "win[-24,+24)"
+ },
+ {
+  "kind": "engine_ptr",
+  "old_rva": "0x3ffaa",
+  "new_rva": "0x414e6",
+  "old_bytes_at_site": "b8e48e00",
+  "new_bytes_at_site": "b8e48e00",
+  "label": "post_cg_globals .text  push [0x8EE4B8] (first global after cg_s)",
+  "resolved": true,
+  "how": "win[-24,+24)"
+ },
+ {
+  "kind": "engine_ptr",
+  "old_rva": "0xaa66c",
+  "new_rva": "0xac5f1",
+  "old_bytes_at_site": "54502e06",
+  "new_bytes_at_site": "54502e06",
+  "label": "ui_playerClientNums .text  voice mute UI: sharedUiInfo.playerClientNums[i]",
+  "resolved": true,
+  "how": "win[-4,+4)"
+ },
+ {
+  "kind": "engine_ptr",
+  "old_rva": "0xabe25",
+  "new_rva": "0xadee6",
+  "old_bytes_at_site": "d44b2e06",
+  "new_bytes_at_site": "d44b2e06",
+  "label": "ui_playerNames .text  sharedUiInfo.playerNames[i]",
+  "resolved": true,
+  "how": "scored 111>92"
+ },
+ {
+  "kind": "engine_ptr",
+  "old_rva": "0xabe79",
+  "new_rva": "0xadf3a",
+  "old_bytes_at_site": "d44b2e06",
+  "new_bytes_at_site": "d44b2e06",
+  "label": "ui_playerNames .text  sharedUiInfo.playerNames[i]",
+  "resolved": true,
+  "how": "scored 107>92"
+ },
+ {
+  "kind": "const",
+  "old_rva": "0x32f76",
+  "new_rva": "0x33120",
+  "old_bytes_at_site": "6a12",
+  "new_bytes_at_site": "6a12",
+  "label": "spawnBot all: count = MAX_CLIENTS 18 -> 32",
+  "resolved": true,
+  "how": "win[-8,+8)"
+ },
+ {
+  "kind": "const",
+  "old_rva": "0x32fab",
+  "new_rva": "0x33155",
+  "old_bytes_at_site": "83fb12",
+  "new_bytes_at_site": "83fb12",
+  "label": "spawnBot: std::min(count, MAX_CLIENTS) compare 18 -> 32",
+  "resolved": true,
+  "how": "win[-8,+8)"
+ },
+ {
+  "kind": "const",
+  "old_rva": "0x38285",
+  "new_rva": "0x383cf",
+  "old_bytes_at_site": "c745a812000000",
+  "new_bytes_at_site": "c745a812000000",
+  "label": "ClanTags::SendClanTagsToClients loop count 18 -> 32",
+  "resolved": true,
+  "how": "win[-0,+15)"
+ },
+ {
+  "kind": "const",
+  "old_rva": "0x3837b",
+  "new_rva": "0x384c5",
+  "old_bytes_at_site": "6a12",
+  "new_bytes_at_site": "6a12",
+  "label": "ClanTags::ParseClanTags loop count 18 -> 32",
+  "resolved": true,
+  "how": "scored 109>102"
+ },
+ {
+  "kind": "const",
+  "old_rva": "0xaa484",
+  "new_rva": "0xac409",
+  "old_bytes_at_site": "abababab66ab5fc3",
+  "new_bytes_at_site": "abababab66ab5fc3",
+  "label": "Voice mute reset: clear 32 entries (push 8; pop ecx; rep stosd)",
+  "resolved": true,
+  "how": "win[-0,+16)"
+ },
+ {
+  "kind": "const",
+  "old_rva": "0xa9eb5",
+  "new_rva": "0xabe3a",
+  "old_bytes_at_site": "83f812",
+  "new_bytes_at_site": "83f812",
+  "label": "Voice::SV_UnmuteClient bounds check 18 -> 32 (runs on every disconnect)",
+  "resolved": true,
+  "how": "win[-8,+8)"
+ },
+ {
+  "kind": "const",
+  "old_rva": "0xaa4bf",
+  "new_rva": "0xac444",
+  "old_bytes_at_site": "83f812",
+  "new_bytes_at_site": "83f812",
+  "label": "Voice_UnmuteMember_Hk bounds check 18 -> 32",
+  "resolved": true,
+  "how": "win[-4,+4)"
+ },
+ {
+  "kind": "const",
+  "old_rva": "0xaa5ac",
+  "new_rva": "0xac531",
+  "old_bytes_at_site": "3c12",
+  "new_bytes_at_site": "3c12",
+  "label": "CL_VoicePacket: talker < 18 -> 32 (engine talkTime/decoders are 32 since r15)",
+  "resolved": true,
+  "how": "win[-8,+8)"
+ },
+ {
+  "kind": "rdata_const",
+  "old_rva": "0x226bc4",
+  "new_rva": "0x22ebf4",
+  "old_bytes_at_site": "12000000",
+  "new_bytes_at_site": "12000000",
+  "label": "const int MAX_CLIENTS (only user: spawnBot clamp @+0x32FB2)",
+  "resolved": true,
+  "how": "win[-24,+24)"
+ }
+]

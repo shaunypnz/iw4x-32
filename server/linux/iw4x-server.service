@@ -1,0 +1,39 @@
+# /etc/systemd/system/iw4x-server.service — IW4x 32-player dedicated server under Wine (headless, unprivileged user)
+[Unit]
+Description=IW4x-32 dedicated server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=iw4x
+Group=iw4x
+WorkingDirectory=/srv/iw4x/root
+EnvironmentFile=/srv/iw4x/server.env
+Environment=WINEPREFIX=/srv/iw4x/wineprefix WINEDEBUG=-all WINEDLLOVERRIDES=winemenubuilder.exe=d
+ExecStartPre=/usr/bin/test -s /srv/iw4x/root/iw4x.exe
+ExecStart=/usr/bin/xvfb-run -a /usr/bin/wine iw4x.exe -dedicated -stdout +set sv_lanonly ${LANONLY} +set net_port ${PORT} \
+  +set fs_game "${FS_GAME}" +exec ${CFG} +set sv_maxclients ${MAXCLIENTS} +set party_maxplayers ${MAXCLIENTS} +set party_enable 0 +map_rotate
+# no ExecStop: systemd stops the whole cgroup (wine, wineserver, Xvfb) - wineserver is not on PATH in Ubuntu wine packages
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=20
+# hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/srv/iw4x
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictNamespaces=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+MemoryMax=2800M
+
+[Install]
+WantedBy=multi-user.target

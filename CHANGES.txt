@@ -1,0 +1,173 @@
+IW4x-32 v1.0 - complete list of changes (player build)
+============================================================
+Plain text on purpose, for people and for AI assistants. Every changed byte is in source/manifest_iw4x_exe.json
+and source/manifest_iw4x_dll.json; source/iw4x32_check.py verifies both against your own official IW4x files.
+
+WHY
+  MW2's engine and IW4x size everything per-player for 18 players (MAX_CLIENTS = 18): arrays of player info, loop
+  bounds, 'is this entity a player' checks (entity numbers 0..17 = players, 18..25 = dead bodies). On a 32-player
+  server players 19-32 would be invisible, missing from the scoreboard/minimap, or overwrite memory. The changes
+  below give the CLIENT room and logic for 32 players. Server-side (hosting) code is not changed: a server started
+  with these files is limited to 18 players (stock sv_maxclients range 1..18).
+
+FILES
+  iw4x.exe: built from the official file sha256 49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009 (md5 9c42ffa4f7aefd08fd501b40f5e41eab)
+            ours: sha256 2609c2687dd2ffb3f32c7687ed04f57b38ef6879c14b1c546faf8bfd8f35ea6b, 22517 bytes changed in 617 places
+  iw4x.dll: built from the official file sha256 82819f1a0c8e3758af8acb8773dc2e2f5cc069202b995e79772a23c9551236cd (md5 c5d73b3ec5e4b36e284a4ae0cfc7fb13)
+            ours: sha256 57f1189ebfcb6a6acc7338311e862a7fa0974a5242c5991e6f1267a17afb3cef, 109 bytes changed in 37 places
+  Official files = IW4x r5154 (protocol 153). The official iw4x.exe of r5154 is the same file IW4x has shipped since r5121.
+
+SAFETY FACTS (checked by source/iw4x32_check.py)
+  - The import tables (Windows functions each file can call) are byte-identical to the official files.
+  - No network code, file access or process access was added. The added code calls only game functions and
+    VirtualProtect (looked up through the game's own GetProcAddress) to rewrite 16 code sites in its own exe.
+  - One behaviour change besides 32 players: the IW4x 'update available' notice is never set (see DLL D3).
+
+============================================================
+iw4x.exe
+============================================================
+E1  Two new PE sections
+    .iw432 @ 0x7100000: zero-filled data (no bytes in the file) holding the enlarged per-player arrays (E2).
+    .iw4c  @ 0x8800000: about 250 lines of C/asm compiled with mingw gcc 13 (source/engine32c/): hook stubs + compat code.
+
+E2  Per-player arrays moved/grown for 32 players (every instruction that addresses them is rewritten)
+    post_cg_globals      0x08ee4b8..0x08f37d0 -> 0x7100000 size 0x05318  (216 address operands)
+    cg_tail              0x08ed4c8..0x08ee4b8 -> 0x08f1d30 size 0x00ff0  (277 address operands)
+    ui_playerNames       0x62e4bd4..0x62e4e14 -> 0x7106000 size 0x00400  (3 address operands)
+    ui_playerClientNums  0x62e5054..0x62e509c -> 0x7107000 size 0x00080  (4 address operands)
+    cg_scores            0x0863c38..0x0863f08 -> 0x7108000 size 0x00500  (11 address operands)
+    compass_actors       0x07d7fa8..0x07d85c0 -> 0x7109000 size 0x00960  (12 address operands)
+    cl_ring44            0x62c8228..0x62c86f0 -> 0x710a000 size 0x00880  (3 address operands)
+    cl_voiceDecoders     0x64a39e0..0x64a3a28 -> 0x710b000 size 0x00080  (8 address operands)
+    cl_voiceTalkTime     0x64a3a28..0x64a3a70 -> 0x710c000 size 0x00080  (3 address operands)
+    snd_voiceBufPool     0x1aa5e48..0x1aa63a0 -> 0x710d000 size 0x00948  (1 address operands)
+    cg_tail/post_cg_globals: the client's clientinfo[18] inside cg_s grows in place to [32]; what followed it moves.
+    compass_actors: minimap actor table 26 -> 40 (players 0..31 + 8 dead bodies). cg_scores: scoreboard rows 18 -> 32.
+    ui_player*: UI player list. cl_voice*/snd_voiceBufPool: voice receive state. cl_ring44: per-player history ring.
+
+E3  Size constants
+    0x4ad333  0xfd540 -> 0x101da8  CG_Init memset(cg) size incl. grown clientinfo
+    0x4e32b4  0xfd540 -> 0x101da8  memset(cg) size incl. grown clientinfo
+    0x40c1e6  0x2d0 -> 0x500  memset(cg_scores rows) size
+    0x59200f  0x2d0 -> 0x500  CG_ParseScores memset(cg_scores rows) size
+
+E4  Code patches (address, original bytes -> new bytes, meaning). [S] = switched back to the original bytes
+    automatically while you play on a normal 18-player server (see E6).
+    0x4c50c2 [S] 83fb12 -> 83fb20  entnum < MAX_CLIENTS check 18 -> 32
+    0x58e175 [S] 83fb12 -> 83fb20  entnum < MAX_CLIENTS check 18 -> 32
+    0x59df11 [S] 837c244412 -> 837c244420  entnum < MAX_CLIENTS check 18 -> 32
+    0x4d76f4 [S] 83e812 -> 83e824  corpse: corpseinfo[entnum - 18] -> [entnum - 36] (sub eax)
+    0x4e8564 [S] 8d70ee -> 8d70dc  CG_PlayerCorpse: corpseinfo[entnum - 18] -> [entnum - 36] (lea esi)
+    0x595295 [S] 83ee12 -> 83ee24  corpse: corpseinfo[entnum - 18] -> [entnum - 36] (sub esi)
+    0x5955ae [S] 8bb8d88d7e00 -> 8bb8c0307e00  corpse: folded corpseinfo[entnum-18].pXAnimTree 0x7E8DD8 -> 0x7E30C0
+    0x5955b4 [S] 8bb0848c7e00 -> 8bb06c2f7e00  corpse: folded corpseinfo[entnum-18]+0x3A8 0x7E8C84 -> 0x7E2F6C
+    0x5955ba [S] 8d80dc887e00 -> 8d80c42b7e00  corpse: folded &corpseinfo[entnum-18] 0x7E88DC -> 0x7E2BC4
+    0x4664df [S] 81c6f0608f00 -> 81c638858f00  cg: own body cg_entities[18 + idx] -> [36 + idx] (0x8F60F0 -> 0x8F8538)
+    0x595f88 [S] 81c6f0608f00 -> 81c638858f00  cg: own body cg_entities[18 + idx] -> [36 + idx] (0x8F60F0 -> 0x8F8538)
+    0x4d767f [S] 83bedc00000012 -> 83bedc00000020  cg lerp: trType 3 player interpolation entnum < 18 -> 32
+    0x45d5c1 [S] 83fe12 -> 83fe20  cg entity eye position: add view height for entnum < 18 -> 32
+    0x581e33 [S] 6683fb12 -> 6683fb20  cg crosshair trace: hit is a player (names) < 18 -> 32
+    0x4b1b0c [S] 663d1200 -> 663d2000  pmove trace: hit is a player < 18 -> 32
+    0x586d99     83ff12 -> 83ff20  CG_Obituary: target clientNum < 18 -> 32 (else Com_Error drop)
+    0x59aefc     81c7e8c80f00 -> 81c750111000  cg: tail copy destination cg+0xFC8E8 -> +0x4868 (0x101150)
+    0x442249     83ff12 -> 83ff20  compass: actor index < 18 = player (else corpse) -> 32
+    0x4422d5     83ff12 -> 83ff20  compass: player actor: copy client position (< 18 -> 32)
+    0x44232b     83ff12 -> 83ff20  compass: player actor: name / cg lookup (< 18 -> 32)
+    0x4422a8     6bc91a -> 6bc928  compass: per-local-client stride 26 -> 40 actors
+    0x4423a0     6bf61a -> 6bf628  compass: per-local-client stride 26 -> 40 actors
+    0x57feb6     6bc91a -> 6bc928  compass: per-local-client stride 26 -> 40 actors
+    0x46cd81     69f618060000 -> 69f660090000  compass: per-local-client table size 0x618 -> 0x960
+    0x4fe146     69ff18060000 -> 69ff60090000  compass: per-local-client table size 0x618 -> 0x960
+    0x57f6ff     69c018060000 -> 69c060090000  compass: per-local-client table size 0x618 -> 0x960
+    0x58a0ef     69ff18060000 -> 69ff60090000  compass: per-local-client table size 0x618 -> 0x960
+    0x58a1d3     69f618060000 -> 69f660090000  compass: per-local-client table size 0x618 -> 0x960
+    0x58ab87     69ff18060000 -> 69ff60090000  compass: per-local-client table size 0x618 -> 0x960
+    0x4b2140     6818060000 -> 6860090000  compass: memset(actor table) size 0x618 -> 0x960
+    0x46cd97     c744242812000000 -> c744242820000000  compass: player actor loop count 18 -> 32
+    0x58a0fe     bb1a000000 -> bb28000000  compass: all-actor loop count 26 -> 40
+    0x58a1e8     bb1a000000 -> bb28000000  compass: all-actor loop count 26 -> 40
+    0x58ab9e     c74424101a000000 -> c744241028000000  compass: all-actor loop count 26 -> 40
+    0x57f73f     8d4112 -> 8d4120  compass: corpse actor index = slot + 18 -> + 32
+    0x57fd61     69f618060000 -> 69f660090000  compass: per-local-client table size 0x618 -> 0x960
+    0x58b03e     69f618060000 -> 69f660090000  compass: per-local-client table size 0x618 -> 0x960
+    0x58b062     c74424141a000000 -> c744241428000000  compass: all-actor loop count 26 -> 40
+    0x51e8b9     c747fc00004800 -> c747fc00009000  skinned cache: descriptor capacity 0x480000 -> 0x900000
+    0x51e8d8     6800004800 -> 6800009000  skinned cache: CreateVertexBuffer length 0x480000 -> 0x900000
+    0x51e8eb     6800004800 -> 6800009000  skinned cache: size in the create-failure message
+    0x549e43     81f900004800 -> 81f900009000  skinned cache: per-surface capacity check 0x480000 -> 0x900000
+    0x5713fe     83f912 -> 83f920  BG TLS clientinfo accessor: NULL for clientNum >= 18 -> 32 (server+client)
+    0x4d49b9 [S] 83fd12 -> 83fd20  cg entity: player-only path for entnum < 18 -> 32
+    0x4dd034     83f812 -> 83f820  cg event: clientNum clamp before clientinfo[] 18 -> 32
+    0x582374     83fd12 -> 83fd1f  cg crosshair owner: clientinfo[n] for n <= 18 (jg) -> n <= 31
+    0x588041     83f812 -> 83f820  cg event: clientinfo[clientNum] bound 18 -> 32
+    0x5d7c17     83f812 -> 83f820  spectate/follow target clientNum validated < 18 -> 32
+    0x46553a     83fe12 -> 83fe20  talker HUD list: scan clientNums 0..31 (talkTime[] relocated in r15)
+    0x5ac62e     83f812 -> 83f820  CL_ParseGamestate: clientNum >= MAX_CLIENTS -> 'bad clientNum' 18 -> 32
+    0x586e05     83fb11 -> 83fb1f  cg: client index <= 17 check before clientinfo[] -> <= 31
+    0x591f5f     83f812 -> 83f820  CG_ParseScores: numScores clamp 18 -> 32 (compare)
+    0x591f69     c705043c860012000000 -> c705043c860020000000  CG_ParseScores: numScores clamp 18 -> 32 (store)
+    0x46b888     81ff00030000 -> 81fff9020000  CL_GetSnapshot: entity cap 768 -> 761 (compare)
+    0x46b8dc     c744241c00030000 -> c744241cf9020000  CL_GetSnapshot: entity cap 768 -> 761 (clamp)
+    0x46b8b0     6800030000 -> 68f9020000  CL_GetSnapshot: truncation warning arg 768 -> 761
+    0x46b8c7     6800030000 -> 68f9020000  CL_GetSnapshot: truncation warning arg 768 -> 761
+    0x46b980     83f812 -> 83f820  CL_GetSnapshot: clientState cap 18 -> 32 (compare)
+    0x46b989     c744241c12000000 -> c744241c20000000  CL_GetSnapshot: clientState cap 18 -> 32 (clamp)
+    0x46b9a1     81c630310300 -> 81c6682a0300  CL_GetSnapshot: snap->clients base +0x33130 -> +0x32A68
+    0x4502ee     81c534310300 -> 81c56c2a0300  cg snapshot processing: &snap->clients[0].f +0x33134 -> +0x32A6C
+    0x45099c     81c730310300 -> 81c7682a0300  cg snapshot processing: snap->clients base -> +0x32A68
+    0x594f20     8bb42830310300 -> 8bb428682a0300  cg: snap->clients[i] read -> +0x32A68
+    0x594f27     8d9c2830310300 -> 8d9c28682a0300  cg: &snap->clients[i] -> +0x32A68
+
+E5  Hooks (the original instructions are replaced by a jump into .iw4c, which runs them and returns)
+    0x487c10  8b4424088b542404 -> jmp _e32_xuid_for_slot  Session_GetXuidForSlot: slot >= 18 -> 0
+    0x49abb0  83ec14568b74241c -> jmp _e32_set_addr  Session_SetClientAddress: slot >= 18 -> return
+    0x4d3d00  83ec285355 -> jmp _e32_member_teardown  PartyHost member teardown: slot >= 18 -> return
+    0x4261b5  a3908d0902 -> jmp _e32_marker_hook  SV_SpawnServer: register dvar iw4x32, force the 32-player layout
+    0x4d9571  6830427200 -> jmp _e32_cl_init_hook  CL_Init: register dvar iw4x32 (sent in userinfo)
+    0x4ccf44  68b0b56f00 -> jmp _e32_cg_si_hook  CG_ParseServerinfo: stock vs 32-player body layout switch
+
+E6  What the injected code does (source/engine32c/compat.c)
+    - registers a read-only userinfo dvar iw4x32=1 so 32-player servers can tell your game has IW4x-32;
+    - when the game parses a server's info (CG_ParseServerinfo) it reads sv_iw4x32: if the server is a normal
+      18-player IW4x server, the 16 [S] sites are written back to their original bytes (normal player/body layout);
+      on a 32-player server our bytes are restored. This uses VirtualProtect on those exact addresses only;
+    - Session_* guards: player slots >= 18 are kept out of the 18-entry party/session tables (no overflow);
+    - if you start a (max 18-slot) server yourself it always uses the normal layout.
+
+============================================================
+iw4x.dll  (IW4x r5154, GPL-3.0 - https://github.com/iw4x/iw4x-client)
+============================================================
+D1  Engine addresses of the moved client arrays (E2)
+    file offset 0x33f2b: .text  cmp eax,&cg.clientinfo[18] (find client by name) -> &clientinfo[32]
+    file offset 0x3f343: .text  push [0x8EE4B8] (first global after cg_s)
+    file offset 0x3f3aa: .text  push [0x8EE4B8] (first global after cg_s)
+    file offset 0xa9a6c: .text  voice mute UI: sharedUiInfo.playerClientNums[i]
+    file offset 0xab225: .text  sharedUiInfo.playerNames[i]
+    file offset 0xab279: .text  sharedUiInfo.playerNames[i]
+D2  New zero-filled section .iw432d with 32-entry copies of IW4x arrays sized [18]
+    ClanTags_ClientState   [18] x 0x5 bytes -> [32]   expected references: 6
+    Voice_mute_a           [18] x 0x1 bytes -> [32]   expected references: 9
+    ClanTags_ClientState = clan tags per player; Voice_mute_a = S_PlayerMute (your client-side mute list);
+    r5154_CustomTitles = calling-card titles per player.
+D3  Constants (r5154 RVAs)
+    rva 0x34d35: CardTitles: TableLookupByRow client index < 18 -> 32   (80f912 -> 80f920)
+    rva 0x34f90: CardTitles: parse 18 custom titles -> 32   (6a12 -> 6a20)
+    rva 0x3503c: CardTitles: memset(CustomTitles) 18*18 -> 32*18 bytes   (6844010000 -> 6840020000)
+    rva 0x384c5: ClanTags::ParseClanTags loop count 18 -> 32   (6a12 -> 6a20)
+    rva 0x98c40: ServerList: drop servers with clients > 18 -> 32 (browser)   (83bd68ffffff12 -> 83bd68ffffff20)
+    rva 0x98c55: ServerList: drop servers with sv_maxclients > 18 -> 32 (browser)   (83bd70ffffff12 -> 83bd70ffffff20)
+    rva 0xab1af: Updater: do not set cl_updateAvailable from the HTTP thread (va() TLS crash 0x4EC749)   (7511 -> eb11)
+    rva 0xac409: Voice mute reset: clear 32 entries (push 8; pop ecx; rep stosd)   (abababab66ab5fc3 -> 6a0859f3ab5fc390)
+    rva 0xac444: Voice_UnmuteMember_Hk bounds check 18 -> 32   (83f812 -> 83f820)
+    rva 0xac531: CL_VoicePacket: talker < 18 -> 32 (engine talkTime/decoders are 32 since r15)   (3c12 -> 3c20)
+    The Updater line: IW4x's background HTTP thread set cl_updateAvailable from that thread; the engine's dvar code
+    is not thread-safe there and the game could crash (null read at 0x4EC749). The jump makes it never set the
+    flag: no update notice. Updating would put the 18-player files back anyway; update IW4x-32 by hand.
+
+============================================================
+VERIFY OR REBUILD
+============================================================
+  python IW4x-32/source/iw4x32_check.py                        (after installing: files/ vs your backup/)
+  python IW4x-32/source/iw4x32_check.py verify OURS OFFICIAL MANIFEST
+  python IW4x-32/source/iw4x32_check.py build OFFICIAL MANIFEST OUT   (make our file yourself)
+  python IW4x-32/source/iw4x32_check.py explain MANIFEST         (all entries with reasons)

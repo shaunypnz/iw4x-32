@@ -1,0 +1,911 @@
+{
+ "file": "iw4x.dll",
+ "role": "server",
+ "build": "r5154-32d",
+ "official": "iw4x.dll from IW4x r5154 (GPL-3.0, https://github.com/iw4x/iw4x-client)",
+ "official_size": 3787776,
+ "official_sha256": "82819f1a0c8e3758af8acb8773dc2e2f5cc069202b995e79772a23c9551236cd",
+ "official_md5": "c5d73b3ec5e4b36e284a4ae0cfc7fb13",
+ "ours_size": 3787776,
+ "ours_sha256": "4809ef276852e8c41de027298499546789cb0612abb20b5f13e9b800e2cd6fba",
+ "ours_md5": "8be9158578f5b7beaed244d6a9297f84",
+ "changed_bytes": 370,
+ "entries": [
+  {
+   "offset": "0x136",
+   "length": 2,
+   "old": "0600",
+   "new": "0700",
+   "why": "PE header: NumberOfSections"
+  },
+  {
+   "offset": "0x180",
+   "length": 4,
+   "old": "00b06700",
+   "new": "00f06c00",
+   "why": "PE header: SizeOfImage"
+  },
+  {
+   "offset": "0x318",
+   "length": 40,
+   "old": "00000000000000000000000000000000000000000000000000000000000000000000000000000000",
+   "new": "2e697734333264000040050000b067000000000000000000000000000000000000000000800000c0",
+   "why": "PE header: new section .iw432d (zero-filled data: 32-player copies of IW4x arrays, no file bytes)"
+  },
+  {
+   "offset": "0x2ec06",
+   "length": 3,
+   "old": "83f812",
+   "new": "83f820",
+   "why": "rva 0x2f806: Bans: client slot < 18 -> 32 (ban by slot number)"
+  },
+  {
+   "offset": "0x31c88",
+   "length": 4,
+   "old": "e0644610",
+   "new": "00b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x31c9f",
+   "length": 4,
+   "old": "e6644610",
+   "new": "06b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x31cb1",
+   "length": 4,
+   "old": "f4644610",
+   "new": "14b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x31cc3",
+   "length": 4,
+   "old": "f8644610",
+   "new": "18b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x31cd5",
+   "length": 4,
+   "old": "fc644610",
+   "new": "1cb06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x31cdb",
+   "length": 4,
+   "old": "00654610",
+   "new": "20b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x31d43",
+   "length": 4,
+   "old": "e6644610",
+   "new": "06b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x31d49",
+   "length": 4,
+   "old": "00654610",
+   "new": "20b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x31d5c",
+   "length": 4,
+   "old": "e6644610",
+   "new": "06b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x31e63",
+   "length": 4,
+   "old": "e0644610",
+   "new": "00b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x31e6d",
+   "length": 4,
+   "old": "e0644610",
+   "new": "00b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x31e79",
+   "length": 4,
+   "old": "00654610",
+   "new": "20b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x31f25",
+   "length": 4,
+   "old": "e4644610",
+   "new": "04b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x31f31",
+   "length": 4,
+   "old": "00654610",
+   "new": "20b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x31f3a",
+   "length": 4,
+   "old": "e5644610",
+   "new": "05b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x32011",
+   "length": 4,
+   "old": "ec644610",
+   "new": "0cb06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x32017",
+   "length": 4,
+   "old": "ea644610",
+   "new": "0ab06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x3201d",
+   "length": 4,
+   "old": "00654610",
+   "new": "20b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x320c7",
+   "length": 4,
+   "old": "f0644610",
+   "new": "10b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x320d5",
+   "length": 4,
+   "old": "f1644610",
+   "new": "11b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x320db",
+   "length": 4,
+   "old": "00654610",
+   "new": "20b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x3214e",
+   "length": 4,
+   "old": "f4644610",
+   "new": "14b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x3215b",
+   "length": 4,
+   "old": "f8644610",
+   "new": "18b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x32168",
+   "length": 4,
+   "old": "fc644610",
+   "new": "1cb06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x3216e",
+   "length": 4,
+   "old": "00654610",
+   "new": "20b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x321b3",
+   "length": 4,
+   "old": "00654610",
+   "new": "20b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x321cc",
+   "length": 4,
+   "old": "ec644610",
+   "new": "0cb06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x321ec",
+   "length": 4,
+   "old": "e0644610",
+   "new": "00b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x321f6",
+   "length": 4,
+   "old": "e4644610",
+   "new": "04b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x32200",
+   "length": 4,
+   "old": "e5644610",
+   "new": "05b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x3220b",
+   "length": 4,
+   "old": "e6644610",
+   "new": "06b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x32217",
+   "length": 4,
+   "old": "e8644610",
+   "new": "08b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x32222",
+   "length": 4,
+   "old": "ea644610",
+   "new": "0ab06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x3222c",
+   "length": 4,
+   "old": "f0644610",
+   "new": "10b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x3223e",
+   "length": 4,
+   "old": "f1644610",
+   "new": "11b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x3224c",
+   "length": 4,
+   "old": "f4644610",
+   "new": "14b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x3226f",
+   "length": 4,
+   "old": "f8644610",
+   "new": "18b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x32295",
+   "length": 4,
+   "old": "fc644610",
+   "new": "1cb06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x322f9",
+   "length": 4,
+   "old": "00654610",
+   "new": "20b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x32309",
+   "length": 4,
+   "old": "e8644610",
+   "new": "08b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x32316",
+   "length": 4,
+   "old": "e6644610",
+   "new": "06b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x32378",
+   "length": 4,
+   "old": "e8644610",
+   "new": "08b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x32400",
+   "length": 4,
+   "old": "e0644610",
+   "new": "00b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x32412",
+   "length": 4,
+   "old": "e6644610",
+   "new": "06b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x32520",
+   "length": 2,
+   "old": "6a12",
+   "new": "6a20",
+   "why": "rva 0x33120: spawnBot all: count = MAX_CLIENTS 18 -> 32"
+  },
+  {
+   "offset": "0x32555",
+   "length": 3,
+   "old": "83fb12",
+   "new": "83fb20",
+   "why": "rva 0x33155: spawnBot: std::min(count, MAX_CLIENTS) compare 18 -> 32"
+  },
+  {
+   "offset": "0x33234",
+   "length": 4,
+   "old": "00654610",
+   "new": "20b06710",
+   "why": "relocate IW4x array g_botai [18] -> [32] at 0x1067b000: address operand"
+  },
+  {
+   "offset": "0x340d5",
+   "length": 4,
+   "old": "c8d48e00",
+   "new": "301d8f00",
+   "why": "engine address 0x8ed4c8 -> 0x8f1d30 (array moved/grown in our iw4x.exe): .text  cmp eax,&cg.clientinfo[18] (find client by name) -> &clientinfo[32]"
+  },
+  {
+   "offset": "0x34135",
+   "length": 3,
+   "old": "80f912",
+   "new": "80f920",
+   "why": "rva 0x34d35: CardTitles: TableLookupByRow client index < 18 -> 32"
+  },
+  {
+   "offset": "0x341ba",
+   "length": 4,
+   "old": "402e3e10",
+   "new": "00de6c10",
+   "why": "relocate IW4x array r5154_CustomTitles [18] -> [32] at 0x106cde00: address operand"
+  },
+  {
+   "offset": "0x34303",
+   "length": 6,
+   "old": "81fe2048bb00",
+   "new": "81fe00f24c01",
+   "why": "rva 0x34f03: CardTitles: send custom titles for 18 clients -> 32"
+  },
+  {
+   "offset": "0x34390",
+   "length": 2,
+   "old": "6a12",
+   "new": "6a20",
+   "why": "rva 0x34f90: CardTitles: parse 18 custom titles -> 32"
+  },
+  {
+   "offset": "0x34395",
+   "length": 4,
+   "old": "402e3e10",
+   "new": "00de6c10",
+   "why": "relocate IW4x array r5154_CustomTitles [18] -> [32] at 0x106cde00: address operand"
+  },
+  {
+   "offset": "0x3443c",
+   "length": 5,
+   "old": "6844010000",
+   "new": "6840020000",
+   "why": "rva 0x3503c: CardTitles: memset(CustomTitles) 18*18 -> 32*18 bytes"
+  },
+  {
+   "offset": "0x34443",
+   "length": 4,
+   "old": "402e3e10",
+   "new": "00de6c10",
+   "why": "relocate IW4x array r5154_CustomTitles [18] -> [32] at 0x106cde00: address operand"
+  },
+  {
+   "offset": "0x35497",
+   "length": 4,
+   "old": "9c924010",
+   "new": "20b56710",
+   "why": "relocate IW4x array Voice_mute_a [18] -> [32] at 0x1067b520: address operand"
+  },
+  {
+   "offset": "0x35ddf",
+   "length": 4,
+   "old": "08934010",
+   "new": "c0b56710",
+   "why": "relocate IW4x array Voice_mute_b [18] -> [32] at 0x1067b5c0: address operand"
+  },
+  {
+   "offset": "0x36011",
+   "length": 2,
+   "old": "6a12",
+   "new": "6a20",
+   "why": "rva 0x36c11: Chat sayTo: clientNum = min(arg, 18) -> 32"
+  },
+  {
+   "offset": "0x36205",
+   "length": 2,
+   "old": "6a12",
+   "new": "6a20",
+   "why": "rva 0x36e05: Chat tellTo: clientNum = min(arg, 18) -> 32"
+  },
+  {
+   "offset": "0x3777e",
+   "length": 4,
+   "old": "902f3e10",
+   "new": "80b46710",
+   "why": "relocate IW4x array ClanTags_ClientState [18] -> [32] at 0x1067b480: address operand"
+  },
+  {
+   "offset": "0x377cb",
+   "length": 4,
+   "old": "902f3e10",
+   "new": "80b46710",
+   "why": "relocate IW4x array ClanTags_ClientState [18] -> [32] at 0x1067b480: address operand"
+  },
+  {
+   "offset": "0x377cf",
+   "length": 7,
+   "old": "c745a812000000",
+   "new": "c745a820000000",
+   "why": "rva 0x383cf: ClanTags::SendClanTagsToClients loop count 18 -> 32"
+  },
+  {
+   "offset": "0x378c5",
+   "length": 2,
+   "old": "6a12",
+   "new": "6a20",
+   "why": "rva 0x384c5: ClanTags::ParseClanTags loop count 18 -> 32"
+  },
+  {
+   "offset": "0x378ca",
+   "length": 4,
+   "old": "902f3e10",
+   "new": "80b46710",
+   "why": "relocate IW4x array ClanTags_ClientState [18] -> [32] at 0x1067b480: address operand"
+  },
+  {
+   "offset": "0x37ac1",
+   "length": 4,
+   "old": "902f3e10",
+   "new": "80b46710",
+   "why": "relocate IW4x array ClanTags_ClientState [18] -> [32] at 0x1067b480: address operand"
+  },
+  {
+   "offset": "0x37be4",
+   "length": 4,
+   "old": "902f3e10",
+   "new": "80b46710",
+   "why": "relocate IW4x array ClanTags_ClientState [18] -> [32] at 0x1067b480: address operand"
+  },
+  {
+   "offset": "0x37d25",
+   "length": 4,
+   "old": "902f3e10",
+   "new": "80b46710",
+   "why": "relocate IW4x array ClanTags_ClientState [18] -> [32] at 0x1067b480: address operand"
+  },
+  {
+   "offset": "0x38a42",
+   "length": 3,
+   "old": "83f812",
+   "new": "83f820",
+   "why": "rva 0x39642: r5154: clientNum parsed from a command argument < 18 -> 32"
+  },
+  {
+   "offset": "0x38d98",
+   "length": 3,
+   "old": "83f812",
+   "new": "83f820",
+   "why": "rva 0x39998: r5154: client flag test: clientNum < 18 -> 32"
+  },
+  {
+   "offset": "0x38d9f",
+   "length": 4,
+   "old": "40303e10",
+   "new": "e0dd6c10",
+   "why": "relocate IW4x array r5154_client_flag [18] -> [32] at 0x106cdde0: address operand"
+  },
+  {
+   "offset": "0x38dba",
+   "length": 4,
+   "old": "40303e10",
+   "new": "e0dd6c10",
+   "why": "relocate IW4x array r5154_client_flag [18] -> [32] at 0x106cdde0: address operand"
+  },
+  {
+   "offset": "0x39b49",
+   "length": 4,
+   "old": "40303e10",
+   "new": "e0dd6c10",
+   "why": "relocate IW4x array r5154_client_flag [18] -> [32] at 0x106cdde0: address operand"
+  },
+  {
+   "offset": "0x39b4d",
+   "length": 6,
+   "old": "abababab66ab",
+   "new": "6a0859f3ab90",
+   "why": "rva 0x3a74d: r5154: client flags reset: 18 bytes -> 32 (push 8; pop ecx; rep stosd)"
+  },
+  {
+   "offset": "0x39b71",
+   "length": 4,
+   "old": "40303e10",
+   "new": "e0dd6c10",
+   "why": "relocate IW4x array r5154_client_flag [18] -> [32] at 0x106cdde0: address operand"
+  },
+  {
+   "offset": "0x39b75",
+   "length": 6,
+   "old": "abababab66ab",
+   "new": "6a0859f3ab90",
+   "why": "rva 0x3a775: r5154: client flags reset: 18 bytes -> 32 (push 8; pop ecx; rep stosd)"
+  },
+  {
+   "offset": "0x39b9b",
+   "length": 3,
+   "old": "83f812",
+   "new": "83f820",
+   "why": "rva 0x3a79b: r5154: client flag clear: clientNum < 18 -> 32"
+  },
+  {
+   "offset": "0x39ba2",
+   "length": 4,
+   "old": "40303e10",
+   "new": "e0dd6c10",
+   "why": "relocate IW4x array r5154_client_flag [18] -> [32] at 0x106cdde0: address operand"
+  },
+  {
+   "offset": "0x39be3",
+   "length": 3,
+   "old": "83ff12",
+   "new": "83ff20",
+   "why": "rva 0x3a7e3: r5154: client flag set: clientNum < 18 -> 32"
+  },
+  {
+   "offset": "0x39c05",
+   "length": 4,
+   "old": "40303e10",
+   "new": "e0dd6c10",
+   "why": "relocate IW4x array r5154_client_flag [18] -> [32] at 0x106cdde0: address operand"
+  },
+  {
+   "offset": "0x39cb3",
+   "length": 4,
+   "old": "80d69b01",
+   "new": "00005d08",
+   "why": "engine address 0x19bd680 -> 0x85d0000 (array moved/grown in our iw4x.exe): .text  mov [esi+0xC], level_bgs (TLS bgs)"
+  },
+  {
+   "offset": "0x4087f",
+   "length": 4,
+   "old": "b8e48e00",
+   "new": "00b06c08",
+   "why": "engine address 0x8ee4b8 -> 0x86cb000 (array moved/grown in our iw4x.exe): .text  push [0x8EE4B8] (first global after cg_s)"
+  },
+  {
+   "offset": "0x408e6",
+   "length": 4,
+   "old": "b8e48e00",
+   "new": "00b06c08",
+   "why": "engine address 0x8ee4b8 -> 0x86cb000 (array moved/grown in our iw4x.exe): .text  push [0x8EE4B8] (first global after cg_s)"
+  },
+  {
+   "offset": "0x4483f",
+   "length": 6,
+   "old": "81fb2048bb00",
+   "new": "81fb00f24c01",
+   "why": "rva 0x4543f: Download /info JSON: player list over 18 clients -> 32"
+  },
+  {
+   "offset": "0x81ff5",
+   "length": 2,
+   "old": "6a12",
+   "new": "6a20",
+   "why": "rva 0x82bf5: ServerInfo: bot count min(n, 18) -> 32"
+  },
+  {
+   "offset": "0x93e26",
+   "length": 6,
+   "old": "81fe2048bb00",
+   "new": "81fe00f24c01",
+   "why": "rva 0x94a26: ServerInfo getstatus: player list over 18 clients -> 32"
+  },
+  {
+   "offset": "0x98040",
+   "length": 7,
+   "old": "83bd68ffffff12",
+   "new": "83bd68ffffff20",
+   "why": "rva 0x98c40: ServerList: drop servers with clients > 18 -> 32 (browser)"
+  },
+  {
+   "offset": "0x98055",
+   "length": 7,
+   "old": "83bd70ffffff12",
+   "new": "83bd70ffffff20",
+   "why": "rva 0x98c55: ServerList: drop servers with sv_maxclients > 18 -> 32 (browser)"
+  },
+  {
+   "offset": "0xaa5af",
+   "length": 2,
+   "old": "7511",
+   "new": "eb11",
+   "why": "rva 0xab1af: Updater: do not set cl_updateAvailable from the HTTP thread (va() TLS crash 0x4EC749)"
+  },
+  {
+   "offset": "0xab063",
+   "length": 4,
+   "old": "c0924010",
+   "new": "40b56710",
+   "why": "relocate IW4x array Voice_PacketCount [18] -> [32] at 0x1067b540: address operand"
+  },
+  {
+   "offset": "0xab074",
+   "length": 4,
+   "old": "c0924010",
+   "new": "40b56710",
+   "why": "relocate IW4x array Voice_PacketCount [18] -> [32] at 0x1067b540: address operand"
+  },
+  {
+   "offset": "0xab083",
+   "length": 4,
+   "old": "24944010",
+   "new": "e4b66710",
+   "why": "relocate IW4x array Voice_Packets [18] -> [32] at 0x1067b5e0: address operand"
+  },
+  {
+   "offset": "0xab0c5",
+   "length": 4,
+   "old": "c0924010",
+   "new": "40b56710",
+   "why": "relocate IW4x array Voice_PacketCount [18] -> [32] at 0x1067b540: address operand"
+  },
+  {
+   "offset": "0xab131",
+   "length": 4,
+   "old": "c0924010",
+   "new": "40b56710",
+   "why": "relocate IW4x array Voice_PacketCount [18] -> [32] at 0x1067b540: address operand"
+  },
+  {
+   "offset": "0xab1b7",
+   "length": 4,
+   "old": "c0924010",
+   "new": "40b56710",
+   "why": "relocate IW4x array Voice_PacketCount [18] -> [32] at 0x1067b540: address operand"
+  },
+  {
+   "offset": "0xab23a",
+   "length": 3,
+   "old": "83f812",
+   "new": "83f820",
+   "why": "rva 0xabe3a: Voice::SV_UnmuteClient bounds check 18 -> 32 (runs on every disconnect)"
+  },
+  {
+   "offset": "0xab241",
+   "length": 4,
+   "old": "08934010",
+   "new": "c0b56710",
+   "why": "relocate IW4x array Voice_mute_b [18] -> [32] at 0x1067b5c0: address operand"
+  },
+  {
+   "offset": "0xab25a",
+   "length": 4,
+   "old": "c0924010",
+   "new": "40b56710",
+   "why": "relocate IW4x array Voice_PacketCount [18] -> [32] at 0x1067b540: address operand"
+  },
+  {
+   "offset": "0xab27b",
+   "length": 4,
+   "old": "24944010",
+   "new": "e4b66710",
+   "why": "relocate IW4x array Voice_Packets [18] -> [32] at 0x1067b5e0: address operand"
+  },
+  {
+   "offset": "0xab28b",
+   "length": 4,
+   "old": "21934010",
+   "new": "e1b56710",
+   "why": "relocate IW4x array Voice_Packets [18] -> [32] at 0x1067b5e0: address operand"
+  },
+  {
+   "offset": "0xab29e",
+   "length": 4,
+   "old": "c0924010",
+   "new": "40b56710",
+   "why": "relocate IW4x array Voice_PacketCount [18] -> [32] at 0x1067b540: address operand"
+  },
+  {
+   "offset": "0xab2a4",
+   "length": 4,
+   "old": "20934010",
+   "new": "e0b56710",
+   "why": "relocate IW4x array Voice_Packets [18] -> [32] at 0x1067b5e0: address operand"
+  },
+  {
+   "offset": "0xab35a",
+   "length": 4,
+   "old": "08934010",
+   "new": "c0b56710",
+   "why": "relocate IW4x array Voice_mute_b [18] -> [32] at 0x1067b5c0: address operand"
+  },
+  {
+   "offset": "0xab5a3",
+   "length": 4,
+   "old": "08934010",
+   "new": "c0b56710",
+   "why": "relocate IW4x array Voice_mute_b [18] -> [32] at 0x1067b5c0: address operand"
+  },
+  {
+   "offset": "0xab805",
+   "length": 4,
+   "old": "9c924010",
+   "new": "20b56710",
+   "why": "relocate IW4x array Voice_mute_a [18] -> [32] at 0x1067b520: address operand"
+  },
+  {
+   "offset": "0xab809",
+   "length": 8,
+   "old": "abababab66ab5fc3",
+   "new": "6a0859f3ab5fc390",
+   "why": "rva 0xac409: Voice mute reset: clear 32 entries (push 8; pop ecx; rep stosd)"
+  },
+  {
+   "offset": "0xab829",
+   "length": 4,
+   "old": "9c924010",
+   "new": "20b56710",
+   "why": "relocate IW4x array Voice_mute_a [18] -> [32] at 0x1067b520: address operand"
+  },
+  {
+   "offset": "0xab837",
+   "length": 4,
+   "old": "9c924010",
+   "new": "20b56710",
+   "why": "relocate IW4x array Voice_mute_a [18] -> [32] at 0x1067b520: address operand"
+  },
+  {
+   "offset": "0xab844",
+   "length": 3,
+   "old": "83f812",
+   "new": "83f820",
+   "why": "rva 0xac444: Voice_UnmuteMember_Hk bounds check 18 -> 32"
+  },
+  {
+   "offset": "0xab84b",
+   "length": 4,
+   "old": "9c924010",
+   "new": "20b56710",
+   "why": "relocate IW4x array Voice_mute_a [18] -> [32] at 0x1067b520: address operand"
+  },
+  {
+   "offset": "0xab931",
+   "length": 2,
+   "old": "3c12",
+   "new": "3c20",
+   "why": "rva 0xac531: CL_VoicePacket: talker < 18 -> 32 (engine talkTime/decoders are 32 since r15)"
+  },
+  {
+   "offset": "0xab93a",
+   "length": 4,
+   "old": "9c924010",
+   "new": "20b56710",
+   "why": "relocate IW4x array Voice_mute_a [18] -> [32] at 0x1067b520: address operand"
+  },
+  {
+   "offset": "0xab9f1",
+   "length": 4,
+   "old": "54502e06",
+   "new": "00206d08",
+   "why": "engine address 0x62e5054 -> 0x86d2000 (array moved/grown in our iw4x.exe): .text  voice mute UI: sharedUiInfo.playerClientNums[i]"
+  },
+  {
+   "offset": "0xab9f7",
+   "length": 4,
+   "old": "9c924010",
+   "new": "20b56710",
+   "why": "relocate IW4x array Voice_mute_a [18] -> [32] at 0x1067b520: address operand"
+  },
+  {
+   "offset": "0xaba0c",
+   "length": 4,
+   "old": "9c924010",
+   "new": "20b56710",
+   "why": "relocate IW4x array Voice_mute_a [18] -> [32] at 0x1067b520: address operand"
+  },
+  {
+   "offset": "0xaba3e",
+   "length": 4,
+   "old": "20934010",
+   "new": "e0b56710",
+   "why": "relocate IW4x array Voice_Packets [18] -> [32] at 0x1067b5e0: address operand"
+  },
+  {
+   "offset": "0xaba52",
+   "length": 4,
+   "old": "c0924010",
+   "new": "40b56710",
+   "why": "relocate IW4x array Voice_PacketCount [18] -> [32] at 0x1067b540: address operand"
+  },
+  {
+   "offset": "0xaba68",
+   "length": 4,
+   "old": "08934010",
+   "new": "c0b56710",
+   "why": "relocate IW4x array Voice_mute_b [18] -> [32] at 0x1067b5c0: address operand"
+  },
+  {
+   "offset": "0xaba7f",
+   "length": 4,
+   "old": "9c924010",
+   "new": "20b56710",
+   "why": "relocate IW4x array Voice_mute_a [18] -> [32] at 0x1067b520: address operand"
+  },
+  {
+   "offset": "0xac069",
+   "length": 4,
+   "old": "08934010",
+   "new": "c0b56710",
+   "why": "relocate IW4x array Voice_mute_b [18] -> [32] at 0x1067b5c0: address operand"
+  },
+  {
+   "offset": "0xad2e6",
+   "length": 4,
+   "old": "d44b2e06",
+   "new": "00106d08",
+   "why": "engine address 0x62e4bd4 -> 0x86d1000 (array moved/grown in our iw4x.exe): .text  sharedUiInfo.playerNames[i]"
+  },
+  {
+   "offset": "0xad33a",
+   "length": 4,
+   "old": "d44b2e06",
+   "new": "00106d08",
+   "why": "engine address 0x62e4bd4 -> 0x86d1000 (array moved/grown in our iw4x.exe): .text  sharedUiInfo.playerNames[i]"
+  },
+  {
+   "offset": "0x22d1f4",
+   "length": 4,
+   "old": "12000000",
+   "new": "20000000",
+   "why": "rva 0x22ebf4: const int MAX_CLIENTS (only user: spawnBot clamp @+0x32FB2)"
+  },
+  {
+   "offset": "0x29f12c",
+   "length": 4,
+   "old": "80d69b01",
+   "new": "00005d08",
+   "why": "engine address 0x19bd680 -> 0x85d0000 (array moved/grown in our iw4x.exe): .rdata engine address table: level_bgs"
+  },
+  {
+   "offset": "0x368430",
+   "length": 4,
+   "old": "90931d03",
+   "new": "00001007",
+   "why": "engine address 0x31d9390 -> 0x7100000 (array moved/grown in our iw4x.exe): .data  Game::svs_clients"
+  }
+ ]
+}

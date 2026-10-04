@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# IW4x-32 install for Linux (Steam Proton / Wine). Put this IW4x-32 folder INSIDE your MW2 / IW4x game folder
+# (the folder with iw4x.exe), then run:  bash install-linux.sh
+# Same steps as "Install IW4x-32.bat": check the official IW4x r5154 files (SHA-256), back them up to
+# IW4x-32/backup/, install ours, check them. Nothing is downloaded and nothing else is touched.
+set -euo pipefail
+OFFICIAL_EXE=49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009
+OFFICIAL_DLL=82819f1a0c8e3758af8acb8773dc2e2f5cc069202b995e79772a23c9551236cd
+OURS_EXE=2609c2687dd2ffb3f32c7687ed04f57b38ef6879c14b1c546faf8bfd8f35ea6b
+OURS_DLL=57f1189ebfcb6a6acc7338311e862a7fa0974a5242c5991e6f1267a17afb3cef
+KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+GAME="$(dirname "$KIT")"
+sha() { [ -f "$1" ] && sha256sum "$1" | cut -d' ' -f1 || echo none; }
+echo "IW4x-32 install"
+echo "  game folder: $GAME"
+[ -f "$GAME/iw4x.exe" ] || { echo "ERROR: no iw4x.exe in $GAME - put the IW4x-32 folder inside your game folder."; exit 1; }
+[ -f "$KIT/files/iw4x.exe" ] && [ -f "$KIT/files/iw4x.dll" ] || { echo "ERROR: IW4x-32/files is incomplete - extract the zip again."; exit 1; }
+if pgrep -x "iw4x.exe" >/dev/null 2>&1; then echo "ERROR: IW4x is running. Close the game first."; exit 1; fi
+if [ "$(sha "$GAME/iw4x.exe")" = "$OURS_EXE" ] && [ "$(sha "$GAME/iw4x.dll")" = "$OURS_DLL" ]; then
+    echo "IW4x-32 is already installed. Start the game with: bash play-linux.sh"; exit 0
+fi
+echo "[1/3] Checking your current IW4x files ..."
+if [ "$(sha "$GAME/iw4x.exe")" != "$OFFICIAL_EXE" ] || [ "$(sha "$GAME/iw4x.dll")" != "$OFFICIAL_DLL" ]; then
+    echo
+    echo " STOPPED: your iw4x.exe / iw4x.dll are not the official IW4x r5154 files."
+    echo "  - If IW4x was updated since this release, wait for a matching IW4x-32 update."
+    echo "  - If you modded them yourself, run the IW4x launcher once to repair, then try again."
+    echo " Nothing was changed."
+    exit 1
+fi
+echo "       OK - official IW4x r5154 iw4x.exe and iw4x.dll"
+echo "[2/3] Backing up to IW4x-32/backup/ ..."
+mkdir -p "$KIT/backup"
+cp -f "$GAME/iw4x.exe" "$GAME/iw4x.dll" "$KIT/backup/"
+echo "[3/3] Installing IW4x-32 ..."
+cp -f "$KIT/files/iw4x.exe" "$KIT/files/iw4x.dll" "$GAME/"
+if [ "$(sha "$GAME/iw4x.exe")" != "$OURS_EXE" ] || [ "$(sha "$GAME/iw4x.dll")" != "$OURS_DLL" ]; then
+    echo "ERROR: the installed files do not match IW4x-32/files. Run uninstall-linux.sh to restore."; exit 1
+fi
+echo
+echo " Done. IW4x-32 is installed."
+case "$GAME" in
+    */steamapps/common/*)
+        echo "  Steam (Proton): set this ONCE in Steam -> Modern Warfare 2 - Multiplayer -> Properties -> Launch Options:"
+        echo
+        echo "      bash -c 'exec \"\${@/iw4mp.exe/iw4x.exe}\"' -- %command%"
+        echo
+        echo "  then press Play in Steam: it runs IW4x-32 with the game's own Proton and prefix."
+        echo "  (bash play-linux.sh checks the launch option and starts the game through Steam.)" ;;
+    *)
+        echo "  Start the game with: bash play-linux.sh   (Wine; set WINEPREFIX if the game has its own prefix)" ;;
+esac
+echo "  Do NOT start it through the IW4x launcher/updater: it puts the official 18-player files back."
+echo "  Undo any time: bash uninstall-linux.sh"

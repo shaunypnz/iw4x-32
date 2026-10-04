@@ -1,0 +1,45 @@
+IW4x-32 - who did what (people and AI models)
+================================================
+
+This mod was built by one person with AI assistants. Nothing an AI model produced was used unchecked: every
+address, patch site and claim was verified against the disassembly and in live tests before it went into a
+build, and the build scripts abort if any expected reference count or original byte does not match.
+
+PROJECT OWNER (human)
+  - Idea, goals and decisions; play-testing on real PCs; hosting (Proxmox, router, DNS); release.
+
+CLAUDE (Anthropic, run in Claude Code) - lead engineer
+  - Reverse engineering of MW2 / IW4x: found the 18-player limits in iw4x.exe and iw4x.dll (per-player arrays,
+    loop bounds, "entity number < 18 = player" checks, snapshot and voice limits, minimap, scoreboard).
+  - Wrote the build tools that patch the official files (patch_engine.py, patch_dll.py) and the injected C/asm
+    code (engine32c), including the layout switch that lets one client play on normal and 32-player servers.
+  - Split the public player build from the server build; wrote the manifests, iw4x32_check.py, installers.
+  - Built the automated test rig (dedicated server + bots + a real client on a laptop under Wine) and ran the
+    tests: killstreaks (AC-130, chopper gunner, predator), minimap, scoreboard, calling cards, soak tests,
+    compatibility with normal IW4x servers; analysed crashes and fixed them.
+  - Reviewed and corrected everything the local models below produced. A few Claude sub-agents were used
+    once, to map the game's session/party tables.
+
+QWEN (Alibaba Qwen, run locally in LM Studio: qwen3.8-27b, qwen3.6-35b-a3b) - analysis assistant
+  - Minidump analyser tool (Q1); engine symbol map and cross-reference tool (M3).
+  - First-pass triage of per-player array candidates (Q2) and of every "18" constant in the exe (M2, Q7).
+  - Mapped the minimap/compass actor table sites (Q8/Q12).
+  - Ported the DLL patch sites from IW4x r5121 to r5154 by byte signatures (Q9, Q9a, Q15).
+  - Investigated invisible player models (renderer skinned-vertex cache too small, Q10).
+  - Audited relocated references for hidden index biases (Q11); classified the sites that must switch
+    between the normal and 32-player layout (Q14) and the new r5154 sites (Q16).
+  - Found remaining 18-player limits in the r5154 DLL: server browser, admin and status paths (Q18).
+  - Web research: live public IW4x servers to test against (Q17), Proxmox/LXC hosting (Q19).
+
+GEMMA (Google gemma-4-e2b, run locally) - documentation assistant
+  - Run-summary tool for test logs (G1); stale-claim finder for the project notes (G2).
+  - First drafts of documentation: release readme drafts, compatibility notes, hosting guide, live-match
+    checklist, public-server operator guide, this release's README and the announcement posts.
+  - Summaries of third-party documentation (e.g. the Dragnet anti-cheat plugin).
+  All gemma drafts were checked and rewritten by Claude where needed.
+
+OFFICIAL SOFTWARE THIS IS BASED ON
+  - Call of Duty: Modern Warfare 2 (Activision / Infinity Ward).
+  - IW4x r5154 (https://github.com/iw4x/iw4x-client, GPL-3.0). iw4x.dll here is IW4x's DLL with binary patches;
+    the manifests in source\ are the complete source of those changes.
+  This project is not affiliated with Activision, Infinity Ward or the IW4x team.
