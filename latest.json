@@ -1,25 +1,25 @@
 {
- "version": "v1.1",
+ "version": "v1.2",
  "iw4x": "r5154",
  "official": {
   "iw4x.dll": "82819f1a0c8e3758af8acb8773dc2e2f5cc069202b995e79772a23c9551236cd",
   "iw4x.exe": "49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009"
  },
- "base_url": "https://raw.githubusercontent.com/shaunypnz/iw4x-32/v1.1/",
+ "base_url": "https://raw.githubusercontent.com/shaunypnz/iw4x-32/v1.2/",
  "files": {
   "AI_CREDITS.txt": "51b430ed2f27284c7cb5fb0742387dfb688e7d3278b339f889fa9cf46ae8fe91",
-  "CHANGES.txt": "8bee92dd9112f055aeb50913ec56dcdf4d6d86d77af1eba198ef9e33d90afa9c",
+  "CHANGES.txt": "e448ac695316a106e5beb0574f113159ea20c0a1ceb70cf46c20bbeca8234636",
   "files/iw4x.dll": "57f1189ebfcb6a6acc7338311e862a7fa0974a5242c5991e6f1267a17afb3cef",
   "files/iw4x.exe": "2609c2687dd2ffb3f32c7687ed04f57b38ef6879c14b1c546faf8bfd8f35ea6b",
   "Install IW4x-32.bat": "ed98a67df764fa19ae2244b066393c14f6e59e4e1956625046510523edbb7c04",
   "install-linux.sh": "db299c5a0e78094b097c023217d3d377e6ec4dfc26d0dea5d72c04009ada8e2b",
-  "iw4x32_update.ps1": "bae90a3b07a3bc3e82aae05a23f2368c51f87569caedf9884ebaef00e0540803",
-  "iw4x32_update.py": "a7a2d4546632d81268cf41e947d07b1da926f0a3694691666b0832b608f99bac",
-  "Play IW4x-32.bat": "abc5a35f317189a88bf1d4f52698d56950cf8c5f1aaca43569959176a773cca5",
+  "iw4x32_update.ps1": "2feb46ae0c1df520babd2d36e01a9bf730ae18f50b049e6dd94314d6b0175522",
+  "iw4x32_update.py": "58e59c2e051ddbc33533f7e9eb22630705350e19217f26957e9dac39623b4dcb",
+  "Play IW4x-32.bat": "b7f7353c0ab730e4300a8890f96b484e1f47b1849f47107bc60284e0dde0118b",
   "Play IW4x-32 (IW4x launcher, no file check).bat": "b4d12ad29719713b2951644a29399af69794c12c28ede6486fbdc6b648da3463",
   "Play IW4x-32 (no update).bat": "47e2be15b230d537ebe265c29b4722a77995220a9e60c07bbde0e3393a988805",
-  "play-linux.sh": "17e1e697cb8a8e8ea74634d868707c45aaf7ab234c8996550b8d573480031db5",
-  "README.txt": "941d74f455c212db90599dfac158813b783e767277c8a5d8b2930a53650d57e3",
+  "play-linux.sh": "925adb144363f7f225b68921774f39011acbbb6607e21c5f8984ad0365549b5c",
+  "README.txt": "03bf9659be5c5eaf655bbf09dab5dc4d6182c4010205abec3b083a91e6143852",
   "source/engine32c/compat.c": "58c6091dcffe074ae42d41fa640f994cbbf03dfd352f096cbb2e638d644b7013",
   "source/engine32c/engine.h": "a5cd2ab832b4b242c17102ec5571bd35b5b94fe88ffc6613db1267506f1d0086",
   "source/engine32c/stubs.S": "45a6c05ea26b64e3b5d557e880ad9d3fcba56a01a30dc3ac242d7dae67a1c897",
@@ -29,6 +29,6 @@
   "source/manifest_iw4x_exe.json": "068df22d13259976b880a80f77c3e687ffbe1c72a95ee432b383b13148c027a1",
   "Uninstall IW4x-32.bat": "b1d2674dc4633cfa6759f72a1d539aaa97aed61ff94d6bc6b56761e7e55b752f",
   "uninstall-linux.sh": "6d543d1ed3970d4c87595a1dc23c8e8ce16dccc172e45cc48edc0106d3bec7c0",
-  "SHA256SUMS.txt": "29bb1e5fd85a745574f32776469dbf2394650a0b8f589881dd9f10b9d8e831a7"
+  "SHA256SUMS.txt": "fdd56861ce6790df0918427f422b6d88f9400ce63553a1a3215c38a247459068"
  }
 }

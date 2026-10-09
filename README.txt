@@ -1,4 +1,4 @@
-IW4x-32 v1.1 - play IW4x (MW2 2009 PC) on 32-player servers
+IW4x-32 v1.2 - play IW4x (MW2 2009 PC) on 32-player servers
 ==============================================================
 
 WHAT IT IS
@@ -40,6 +40,16 @@ PLAY
     working pair until the matching IW4x-32 update is out. It also puts IW4x-32 back if the
     IW4x launcher restored the official files. Skip it: "Play IW4x-32 (no update).bat",
     play-linux.sh --no-update, or set IW4X32_NO_UPDATE=1. What changed: UPDATES.md on GitHub.
+  - Then it asks which game to start:
+        [1] IW4x-32 - 32-player servers (and normal ones)
+        [2] Vanilla IW4x - the official IW4x, always the latest version
+    Enter takes the default (what you started last time, IW4x-32 the first time) and it starts after 5 s. The
+    choice is remembered in IW4x-32\mode.txt. To answer without being asked, add --vanilla or --iw4x32:
+    "Play IW4x-32.bat" --vanilla , or  bash IW4x-32/play-linux.sh --vanilla . Vanilla IW4x always starts through
+    the official IW4x launcher (downloaded into the game folder when it is missing): it updates IW4x to the
+    newest version and starts the game itself. Switching back to IW4x-32 puts the IW4x-32 files back by itself;
+    if vanilla updated IW4x past what IW4x-32 supports yet, vanilla starts that time and IW4x-32 comes back with
+    the matching IW4x-32 update.
   - Windows: start the game with "Play IW4x-32.bat". It prepares Steam the same way the
     IW4x launcher does (steam_appid.txt + Steam app id 10190, otherwise Steam starts normal
     MW2 instead) and starts iw4x.exe, without the launcher's file check.
