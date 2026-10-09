@@ -15,11 +15,12 @@ import patch_engine as pe   # noqa: E402
 import patch_dll as pd      # noqa: E402
 
 out = sys.argv[1]
+BASE = os.environ.get("IW4X32_BASE", "r5154")      # upstream IW4x release the tables describe
 os.makedirs(out, exist_ok=True)
-pd.apply_role("server", "r5154")            # = everything
+pd.apply_role("server", BASE)            # = everything
 SERVER_LABELS = {w for rva, o, n, w in pd.CONSTS if rva in pd.DLL_SERVER_CONSTS["r5121"]}
-SERVER_LABELS |= {w for rva, o, n, w in pd.BASE_EXTRA["r5154"]["consts"] if rva in pd.DLL_SERVER_CONSTS["r5154"]}
-pristine = open(os.path.join(HERE, "upstream", "r5154", "iw4x.exe"), "rb").read()
+SERVER_LABELS |= {w for rva, o, n, w in pd.BASE_EXTRA[BASE]["consts"] if rva in pd.DLL_SERVER_CONSTS[BASE]}
+pristine = open(os.path.join(HERE, "upstream", BASE, "iw4x.exe"), "rb").read()
 d = bytearray(pristine)
 vsize = pe.layout()
 relocs = {r["name"]: r for r in pe.RELOCS}
@@ -87,7 +88,7 @@ eng = dict(
 json.dump(eng, open(os.path.join(out, "engine_patches.json"), "w"), indent=1)
 
 dll = dict(
-    file="iw4x.dll", base="IW4x r5154", md5=pd.BASES["r5154"]["md5"],
+    file="iw4x.dll", base=f"IW4x {BASE}", md5=pd.BASES[BASE]["md5"],
     notes=["these are binary patches to the release DLL; in iw4x-client source most of them are simply "
            "Game::MAX_CLIENTS = 32 (arrays sized by it, loops/clamps/filters bounded by it) - see README",
            "engine_pointers: the DLL's hard-coded engine addresses of arrays that the engine patch moves"],
@@ -98,7 +99,7 @@ dll = dict(
     constants=[dict(rva=f"{rva:#x}", old=o, new=n, what=w) for rva, o, n, w in pd.CONSTS],
 )
 # note: pd tables above are the r5121 originals until translate_tables(); translate for r5154 RVAs
-pd.translate_tables("r5154")
+pd.translate_tables(BASE)
 dll["engine_pointers"] = [dict(file_offset=f"{fo:#x}", array=name, what=w) for fo, name, off, w in pd.ENGINE_PTRS]
 dll["arrays"] = [dict(name=r["name"], lo=f"{r['lo']:#x}", stride=f"{r['stride']:#x}", n_old=r["n_old"], n_new=32,
                       expect_operands=r["expect"], role="server" if r["name"] in pd.DLL_SERVER_RELOCS else "client")

@@ -7,16 +7,18 @@ sys.path.insert(0, HERE)
 import patch_engine as pe   # noqa: E402
 import patch_dll as pd      # noqa: E402
 ROLE = sys.argv[2] if len(sys.argv) > 2 else "client"
-REL = os.path.join(HERE, "release", "IW4x-32" if ROLE == "client" else "IW4x-32-server", "source")
+BASE = os.environ.get("IW4X32_BASE", "r5154")      # upstream IW4x release the build is made from
+VERSION = os.environ.get("IW4X32_VERSION", "v1.0")
+REL = os.environ.get("IW4X32_REL_SOURCE") or os.path.join(HERE, "release", "IW4x-32" if ROLE == "client" else "IW4x-32-server", "source")
 me = json.load(open(os.path.join(REL, "manifest_iw4x_exe.json")))
 md = json.load(open(os.path.join(REL, "manifest_iw4x_dll.json")))
-pd.apply_role(ROLE, "r5154")
+pd.apply_role(ROLE, BASE)
 pe.layout()
 dual = {va for va, _ in pe.DUAL_SITES}
 cnt = collections.Counter(e["why"].split(": address operand")[0] for e in me["entries"] if "relocate array" in e["why"])
 W = []
 w = W.append
-w("IW4x-32 v1.0 - complete list of changes (" + ("player build" if ROLE == "client" else "SERVER build: everything, [srv] = server-side only") + ")")
+w(f"IW4x-32 {VERSION} - complete list of changes (" + ("player build" if ROLE == "client" else "SERVER build: everything, [srv] = server-side only") + ")")
 w("=" * 60)
 w("Plain text on purpose, for people and for AI assistants. Every changed byte is in source/manifest_iw4x_exe.json")
 w("and source/manifest_iw4x_dll.json; source/iw4x32_check.py verifies both against your own official IW4x files.")
@@ -37,7 +39,7 @@ w("FILES")
 for m in (me, md):
     w(f"  {m['file']}: built from the official file sha256 {m['official_sha256']} (md5 {m['official_md5']})")
     w(f"  {' ' * len(m['file'])}  ours: sha256 {m['ours_sha256']}, {m['changed_bytes']} bytes changed in {len(m['entries'])} places")
-w("  Official files = IW4x r5154 (protocol 153). The official iw4x.exe of r5154 is the same file IW4x has shipped since r5121.")
+w(f"  Official files = IW4x {BASE} (protocol 153). The official iw4x.exe of {BASE} is the same file IW4x has shipped since r5121.")
 w("")
 w("SAFETY FACTS (checked by source/iw4x32_check.py)")
 w("  - The import tables (Windows functions each file can call) are byte-identical to the official files.")
@@ -87,7 +89,7 @@ w("    - Session_* guards: player slots >= 18 are kept out of the 18-entry party
 w("    - if you start a (max 18-slot) server yourself it always uses the normal layout.")
 w("")
 w("=" * 60)
-w("iw4x.dll  (IW4x r5154, GPL-3.0 - https://github.com/iw4x/iw4x-client)")
+w(f"iw4x.dll  (IW4x {BASE}, GPL-3.0 - https://github.com/iw4x/iw4x-client)")
 w("=" * 60)
 w("D1  Engine addresses of the moved client arrays (E2)")
 for fo, name, off, what in pd.ENGINE_PTRS:
@@ -98,7 +100,7 @@ for r in pd.DLL_RELOCS:
     w(f"    {r['name']:22s} [{r['n_old']}] x {r['stride']:#x} bytes -> [32]   expected references: {r['expect']}")
 w("    ClanTags_ClientState = clan tags per player; Voice_mute_a = S_PlayerMute (your client-side mute list);")
 w("    r5154_CustomTitles = calling-card titles per player.")
-w("D3  Constants (r5154 RVAs)")
+w(f"D3  Constants ({BASE} RVAs)")
 for e in md["entries"]:
     if e["why"].startswith("rva "):
         w(f"    {e['why']}   ({e['old']} -> {e['new']})")

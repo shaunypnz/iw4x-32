@@ -1,4 +1,4 @@
-# IW4x-32 v1.0
+# IW4x-32 v1.1
 
 Play **IW4x** (Call of Duty: Modern Warfare 2, 2009, PC) on **32-player servers**.
 
@@ -18,7 +18,7 @@ Normal 18-player IW4x servers keep working: the game detects the server type whe
 
 ## Download
 
-Grab `IW4x-32-v1.0.zip` from [Releases](../../releases), or use **Code → Download ZIP**. Either way you get one
+Grab `IW4x-32-v1.1.zip` from [Releases](../../releases), or use **Code → Download ZIP**. Either way you get one
 folder that goes inside your game folder.
 
 ## Install

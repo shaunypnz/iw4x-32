@@ -14,22 +14,31 @@
 #   bash play-linux.sh --direct   Steam install: run iw4x.exe with the game's Proton + prefix, without Steam's
 #                                 launcher (Steam should be running; may not work with Snap/Flatpak Steam)
 #   bash play-linux.sh --dry-run  only print what would be run
+#   bash play-linux.sh --no-update   skip the auto-update (also: IW4X32_NO_UPDATE=1)
+# Before the game starts, iw4x32_update.py brings IW4x + IW4x-32 to the newest tested pair (see that file).
 # Not a Steam install: runs iw4x.exe with Wine (set WINEPREFIX if the game has its own prefix).
 set -euo pipefail
 LAUNCH_OPTION='bash -c '"'"'exec "${@/iw4mp.exe/iw4x.exe}"'"'"' -- %command%'
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GAME="${IW4X32_GAME:-$(dirname "$KIT")}"
-DIRECT=0; DRY=0; ARGS=()
+DIRECT=0; DRY=0; NOUPD=0; ARGS=(); ORIG=("$@")
 for a in "$@"; do
     case "$a" in
         --direct) DIRECT=1 ;;
         --dry-run) DRY=1 ;;
+        --no-update) NOUPD=1 ;;
         *) ARGS+=("$a") ;;
     esac
 done
 run() { if [ "$DRY" = 1 ]; then printf '%q ' "$@"; echo; else "$@"; fi; }
 # what the official IW4x launcher does before it starts the game: without this Steam takes over and starts normal MW2
 steam_appid() { [ "$DRY" = 1 ] || [ -f "$GAME/steam_appid.txt" ] || printf '10190\r\n' > "$GAME/steam_appid.txt"; }
+# auto-update; exit 10 = this kit was updated -> run the new play-linux.sh (files are swapped by rename, so this
+# running copy is unaffected)
+if [ "$NOUPD" = 0 ] && [ "$DRY" = 0 ] && [ "${IW4X32_NO_UPDATE:-0}" != 1 ] && command -v python3 >/dev/null; then
+    rc=0; IW4X32_GAME="$GAME" python3 "$KIT/iw4x32_update.py" || rc=$?
+    [ "$rc" = 10 ] && exec bash "$KIT/play-linux.sh" --no-update "${ORIG[@]}"
+fi
 [ -f "$GAME/iw4x.exe" ] || { echo "iw4x.exe not found in $GAME - is the IW4x-32 folder inside your game folder?"; exit 1; }
 
 case "$GAME" in

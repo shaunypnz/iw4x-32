@@ -1,4 +1,4 @@
-IW4x-32 v1.0 - play IW4x (MW2 2009 PC) on 32-player servers
+IW4x-32 v1.1 - play IW4x (MW2 2009 PC) on 32-player servers
 ==============================================================
 
 WHAT IT IS
@@ -31,6 +31,15 @@ INSTALL
       bash -c 'exec "${@/iw4mp.exe/iw4x.exe}"' -- %command%
 
 PLAY
+  - IW4x-32 keeps itself up to date: every start through "Play IW4x-32.bat" or play-linux.sh
+    first checks for a new IW4x-32 release. If there is one, it updates IW4x (with the
+    official IW4x launcher, update only) to the version that release is made for, downloads
+    the new IW4x-32 files, checks every file's SHA-256 and installs them. Nothing is
+    downloaded when you are up to date, and without internet the game just starts. It never
+    updates IW4x past what IW4x-32 supports: when IW4x is newer, you keep playing the last
+    working pair until the matching IW4x-32 update is out. It also puts IW4x-32 back if the
+    IW4x launcher restored the official files. Skip it: "Play IW4x-32 (no update).bat",
+    play-linux.sh --no-update, or set IW4X32_NO_UPDATE=1. What changed: UPDATES.md on GitHub.
   - Windows: start the game with "Play IW4x-32.bat". It prepares Steam the same way the
     IW4x launcher does (steam_appid.txt + Steam app id 10190, otherwise Steam starts normal
     MW2 instead) and starts iw4x.exe, without the launcher's file check.
@@ -42,8 +51,8 @@ PLAY
     the game through Steam; --direct runs it with the game's Proton without Steam's launcher).
     Linux without Steam: bash IW4x-32/play-linux.sh uses Wine (set WINEPREFIX if needed).
     To go back to stock MW2 multiplayer in Steam, remove the launch option.
-  - Do NOT start it through the IW4x launcher normally (or let it update): that puts the
-    official 18-player files back (handy as an uninstall, though).
+  - Do NOT start it through the IW4x launcher normally: that puts the official 18-player
+    files back (the next start through "Play IW4x-32" puts IW4x-32 back).
   - 32-player servers now appear in the in-game server browser.
     Normal IW4x hides servers with more than 18 slots, so players without
     IW4x-32 will not see them (and get an install message if they try to join).
@@ -78,7 +87,8 @@ IS IT SAFE?
 KNOWN LIMITS
   - A server started with these files is limited to 18 players, like normal IW4x.
   - End-of-match stats are recorded for players 1-18 only.
-  - Made for IW4x r5154. When IW4x updates, wait for a matching IW4x-32 update.
+  - Made for IW4x r5154. When IW4x updates, the matching IW4x-32 update arrives by itself
+    the next time you start through "Play IW4x-32" (after it has passed its tests).
 
 TROUBLESHOOTING
   - "STOPPED: your iw4x.exe / iw4x.dll are not the official IW4x r5154 files":
@@ -87,8 +97,8 @@ TROUBLESHOOTING
   - Steam opens normal MW2, or nothing happens: start with "Play IW4x-32.bat" (not by
     double-clicking iw4x.exe), or use the "(IW4x launcher, no file check)" script.
   - The 32-player servers are missing from the browser: you started the game
-    through the IW4x launcher, which restored the official files. Install again
-    and use "Play IW4x-32.bat".
+    through the IW4x launcher, which restored the official files. Start with
+    "Play IW4x-32.bat" (it puts IW4x-32 back).
   - "IW4x is running": close the game before installing or uninstalling.
 
 CREDITS AND LICENCE
