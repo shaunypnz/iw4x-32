@@ -155,3 +155,6 @@ user*.bat
 ### Generated headers
 version.h
 version.hpp
+
+__pycache__/
+*.pyc

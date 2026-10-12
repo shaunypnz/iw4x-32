@@ -389,11 +389,15 @@ namespace Game
 
   int* g_waitingForKey = reinterpret_cast<int*>(0x63A50FC);
 
-  Game::cgMedia_t* cgMedia = reinterpret_cast<Game::cgMedia_t*>(0x8EE4B8);
+  // IW4x-32: re-pointed by the IW4x32 component (first global after cg_s) - see the note in Server.cpp.
+  static volatile DWORD s_cgMedia_stock = 0x8EE4B8;
+  Game::cgMedia_t* cgMedia = reinterpret_cast<Game::cgMedia_t*>(s_cgMedia_stock);
 
   unsigned long* g_dwTlsIndex = reinterpret_cast<unsigned long*>(0x66D94A8);
 
-  bgs_t* level_bgs = reinterpret_cast<bgs_t*>(0x19BD680);
+  // IW4x-32: re-pointed by the IW4x32 component - see the note in Server.cpp.
+  static volatile DWORD s_level_bgs_stock = 0x19BD680;
+  bgs_t* level_bgs = reinterpret_cast<bgs_t*>(s_level_bgs_stock);
 
   unsigned int* playerCardUIStringIndex = reinterpret_cast<unsigned int*>(0x62CD7A8);
   char (*playerCardUIStringBuf)[PLAYER_CARD_UI_STRING_COUNT][38] = reinterpret_cast<char(*)[PLAYER_CARD_UI_STRING_COUNT][38]>(0x62CB4F8);

@@ -1,6 +1,7 @@
 #include "Voice.hpp"
 #include "Chat.hpp"
 #include "Events.hpp"
+#include "IW4x32.hpp" // IW4x-32
 
 namespace Components
 {
@@ -400,7 +401,7 @@ namespace Components
 
   void Voice::UI_Mute_player(const int clientNum, const int localClientNum)
   {
-    CL_TogglePlayerMute(localClientNum, Game::sharedUiInfo->playerClientNums[clientNum]);
+    CL_TogglePlayerMute(localClientNum, IW4x32::PlayerClientNums()[clientNum]); // IW4x-32: this array moves once the engine is patched for 32 players
   }
 
   __declspec(naked) void Voice::UI_Mute_Player_Stub()
