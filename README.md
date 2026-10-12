@@ -1,3 +1,28 @@
+# IW4x-32 — 32-player IW4x
+
+**IW4x-32 is a fork of [iw4x/iw4x-client](https://github.com/iw4x/iw4x-client) remixed with the original
+[IW4x-32 mod](https://github.com/shaunypnz/iw4x-32-old): 32 players on Modern Warfare 2 multiplayer instead of 18.**
+
+| | |
+|---|---|
+| **What it is** | The real IW4x client source, with the IW4x-32 changes applied on top as ordinary commits (search the code for `IW4x-32:`), so it stays easy to follow and to rebase on new IW4x releases. |
+| **What's different** | Up to **32 players** per server (bots included); the scoreboard, minimap, voice, clan tags, card titles and server browser all handle 32. Joining normal 18-player IW4x servers keeps working. |
+| **Goal of v2.0** | **One `iw4x.dll` does everything**: no patched `iw4x.exe`. The engine's 18-player limits are lifted in memory at start-up by the `IW4x32` component - drop the DLL into a normal IW4x install and you have 32-player IW4x. *(in progress)* |
+| **Where v1.x lives** | The original binary-patched releases (v1.0-v1.2), installers and the IW4x integration kit: **[shaunypnz/iw4x-32-old](https://github.com/shaunypnz/iw4x-32-old)**. Installed players keep auto-updating; nothing to do. |
+| **Branches** | `iw4x-32` (default) = upstream IW4x + IW4x-32. `main` = the updater channel (`latest.json` only). |
+| **Releases** | Built by GitHub Actions from version tags (`v2.0`, ...): `IW4x-32-<version>.zip` + `iw4x.dll`. |
+
+### For the IW4x team
+Every change is tagged `IW4x-32:` in the source; the engine changes are described entry by entry in
+[`iw4x32/reference/`](iw4x32/reference/README.md) (the patch tables, each tagged `role: client` or `role: server`).
+Everything here is GPL-3.0, like IW4x - take whatever is useful.
+
+Credits: the IW4x team for IW4x; IW4x-32 by shaunypnz (see the original repo's AI_CREDITS.txt).
+
+---
+
+*Upstream IW4x README follows.*
+
 ![license](https://img.shields.io/github/license/iw4x/iw4x-client.svg)
 [![build](https://github.com/iw4x/iw4x-client/actions/workflows/build.yml/badge.svg?branch=develop)](https://github.com/iw4x/iw4x-client/actions)
 
