@@ -2,3 +2,7 @@
 *.cpp eol=crlf
 *.lua eol=crlf
 *.proto eol=crlf
+
+# IW4x-32 player kit: the bytes in the tree are the bytes GitHub raw serves and the updater hashes
+# (latest.json + SHA256SUMS.txt) - no line-ending conversion, ever.
+iw4x32/release/** -text

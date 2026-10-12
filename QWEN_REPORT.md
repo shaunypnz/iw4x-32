@@ -115,3 +115,112 @@ wrong count each makes it exit 1.
   behind it — it needs a deliberately wrong exe to try.
 * The first-chance exception reporter is new behaviour in a shipped DLL; keep it if the team likes the extra
   line, drop `AddVectoredExceptionHandler(1, &CrashReport)` if not.
+
+---
+
+# QWEN_REPORT — round 2: the IW4x-32 player kit, `latest.json`, the release workflow
+
+**Result: `iw4x32/release/` is a complete v2.0 kit whose only installed file is `files/iw4x.dll`; `latest.json`
+carries its version and the SHA-256 of all 15 kit files; `iw4x32-release.yml` builds and publishes it on a `v*`
+tag; `check_kit.py` passes and is sensitive to every rule it claims.** The installers were *run* — the Linux
+ones directly, the Windows ones under Wine cmd with real SHA-256 hashing — against fake game folders. That run
+found a real bug in `Install IW4x-32.bat` (below). The dll that ships in the kit is the one that passed round 1's
+240 s / 31-bot server smoke. A Windows client with it has still not been played.
+
+Branch `feat/iw4x32-kit` (worktree of `feat/iw4x32-engine`). Nothing pushed. Round 1 (the engine component
+itself) is reported above.
+
+---
+
+## 1. Deliverables
+
+| file | what it is |
+|---|---|
+| `iw4x32/release/` | the kit players download: `Install IW4x-32.bat`, `Uninstall IW4x-32.bat`, `Play IW4x-32.bat`, `Play IW4x-32 (no update).bat`, `Play IW4x-32 (IW4x launcher, no file check).bat`, `install-linux.sh`, `uninstall-linux.sh`, `play-linux.sh`, `iw4x32_update.py` + `iw4x32_update.ps1` (auto-update before the game starts), `README.txt`, `CHANGES.txt`, `AI_CREDITS.txt`, `SHA256SUMS.txt`, `files/iw4x.dll` |
+| `latest.json` (repo root) | `version: v2.0`, `iw4x: r5154`, the official r5154 `iw4x.exe`/`iw4x.dll` hashes, `base_url` pointing at this tag's `iw4x32/release/` on raw.githubusercontent, and the SHA-256 of every kit file |
+| `.github/workflows/iw4x32-release.yml` | `v*` tag → build Release/Win32 on windows-2022 (same steps as `build.yml`) → `make_latest.py --dll <built>` → `check_kit.py` → zip the kit as `IW4x-32-<tag>.zip` → draft GitHub Release with the zip, `iw4x.dll` and `SHA256SUMS.txt` |
+| `iw4x32/tools/make_latest.py` | puts the built dll in the kit, syncs the `OURS_DLL` constant the installers verify against, writes `SHA256SUMS.txt` and `latest.json` |
+| `iw4x32/tools/check_kit.py` | nine checks over the kit, the manifest, the line endings and the workflow (see 4) |
+| `iw4x32/tools/make_version_h.py` | `src/version.h` / `version.hpp` for the Wine build, with the same revision rule as `premake5.lua` |
+| `iw4x32/tools/{sh_test,bat_test,upd_test}.sh`, `mini_certutil.c` | the tests in section 5 |
+
+## 2. What changed against the v1.x kit
+
+The old kit patched `iw4x.exe` (a loader that started the game with the 32-player arrays already in place) and
+shipped `iw4x.exe` + `iw4x.dll`. **v2.0 installs one file.** The exe stays the official IW4x one, because the
+engine work now happens inside `iw4x.dll` at start-up (round 1). Consequences the kit has to handle:
+
+* Installers verify the game's `iw4x.dll` is the official r5154 file (SHA-256) before touching anything, back
+  it up to `IW4x-32/backup/`, install ours, then re-hash what landed.
+* A player arriving from v1.x has a patched `iw4x.exe`. Both installers and the updater detect it (hash
+  `2609c268…`) and put the official exe back from `backup/` — the only way the kit writes `iw4x.exe` at all.
+* The IW4x launcher's own file check puts the official dll back, so the kit ships launchers that avoid it, and
+  the updater repairs the dll on every start.
+* Uninstall restores both files from `backup/`.
+
+## 3. Invariants, and how they are checked
+
+| invariant | how it is enforced |
+|---|---|
+| nothing but `files/iw4x.dll` is installed into the game folder | `check_kit.py` fails on any `files/iw4x.exe`, and on any line in an installer/updater that copies *to* the game's `iw4x.exe` unless the same line mentions `backup` — the restore path is the only legal one |
+| the kit's bytes are the bytes players download | `.gitattributes` marks `iw4x32/release/**` as `-text`: git stores them verbatim, `.bat`/`.ps1`/`.txt` stay CRLF, `.sh`/`.py` stay LF, and raw.githubusercontent serves exactly what `latest.json` hashed |
+| the installers' `OURS_DLL` matches the kit dll | it is a `PENDING` placeholder in the sources; `make_latest.py` fills it in, `check_kit.py` re-checks it |
+| every download is what the manifest says | the updater stages downloads, hashes each one against `latest.json`, and swaps nothing if one is off (proved in 5) |
+| the DLL must not nag players about updates | `REVISION_STR` has to read `r5154`, see 6 |
+
+## 4. `check_kit.py`
+
+Passes on the real kit. Its sensitivity was shown on a scratch tree — each of these makes it exit 1: a file
+whose bytes no longer match its hash in `latest.json`; a hash missing from the manifest; a `files/iw4x.exe`; an
+installer line copying to `iw4x.exe` without `backup`; a stale `OURS_DLL`; a README/CHANGES version that
+disagrees with the manifest; a kit file whose CRLF/LF ending is wrong; a workflow that does not trigger on
+`v*`.
+
+## 5. Tests actually run
+
+| test | what it does | result |
+|---|---|---|
+| `sh_test.sh` | `install-linux.sh` / `uninstall-linux.sh` against a fake game folder whose official/v1.x hashes are patched into the scripts | ok — official dll checked and backed up, ours installed, v1.x exe restored from `backup/`, re-run says "already installed", modded dll refused with nothing changed, missing v1.x backup stops, a folder with no game stops |
+| `bat_test.sh` | the same cases for the Windows `.bat` files, under **Wine cmd**, with `mini_certutil.exe` compiled by the project's own MSVC standing in for Wine's no-op `certutil` | ok — same results; **this is where the `goto :end` bug surfaced** |
+| `upd_test.sh` | `iw4x32_update.py` against a fake game folder and a `latest.json` served from a local directory: v2.0 → v2.1 update, then a no-op run, then the launcher putting the official dll back, then a tampered download | ok — installs only the dll, restores the v1.x exe, backs up the official dll, repairs, and refuses the tampered download without changing a byte |
+| `check_kit.py` / `git-privacy-check work` | the kit and the whole tree | ok / clean |
+| `smoke32.py` (round 1's) | the 240 s / 31-bot dedicated-server smoke, run with **the dll that ships in the kit** | ok — map up, 31 clients in `status`, no crash |
+
+## 6. Two things worth the team's attention
+
+* **`REVISION_STR` was wrong for a fork.** premake's `getRevisionNumber()` used `git rev-list --count HEAD`:
+  56 on this shallow worktree, 5163 on a full clone. IW4x's `Updater.cpp` compares that against the newest
+  release tag, so every player of our kit would have seen "an update is available" forever. It now takes the
+  nearest `r*` tag (`git describe --tags --abbrev=0 --match r[0-9]*`) → **r5154**, the release the DLL is built
+  against. Upstream's own releases are unaffected: their tag *is* the commit count.
+* **A called batch routine must not `goto :end`.** `Install IW4x-32.bat` printed "STOPPED: nothing was changed"
+  for a v1.x exe without a usable backup and then — because `goto` inside a `call`ed label returns to the
+  caller — carried straight on and installed `iw4x.dll`. Now `exit /b 1` + `call :restore_v1_exe || goto :end`.
+  Worth remembering for every other `.bat` in this repo.
+
+## 7. Not covered
+
+* **No Windows client has been played with this kit.** The `.bat` files ran under Wine cmd with real hashing and
+  stock cmd semantics; the DLL itself was smoke-tested as a dedicated-server module in round 1. The client path
+  (joining a 32-player server, HUD, scoreboard, voice) has no run behind it yet.
+* The updater's IW4x self-update step only ran against a fake launcher script.
+* The release workflow has never executed — no `v*` tag exists and nothing is pushed. Its steps mirror
+  `build.yml`/`release.yml` and `check_kit.py` checks the trigger, but the first tag push is the first real test.
+* The `Play …` launchers and the Steam Proton launch option were not exercised against a real install; the text
+  is carried over from the v1.x kit, where players reported it working.
+* The zip CI publishes contains the CI-built dll, the tag's raw kit contains the committed one. Both are
+  self-consistent (each has its own `SHA256SUMS.txt`/`OURS_DLL`), and the updater is hash-driven, so a player
+  who installs from the zip simply moves to the tag's dll on the next update — but it is a difference to know
+  about before cutting `v2.0`.
+* **Flipping `main/latest.json` to a v2.0 kit breaks the first update for installed v1.x players.** Their
+  updater (the v1.x `iw4x32_update.py`, still running on their machine) swaps the kit files in and then copies
+  `files/iw4x.exe` *and* `files/iw4x.dll` into the game folder unconditionally: with no `files/iw4x.exe` in the
+  kit it dies with a `FileNotFoundError` **after** the kit was replaced, leaving a v2.0 kit next to a v1.x dll
+  and exe. Two ways out, and both are a release-time decision, not a kit change:
+  * a **bridge release** on `main` whose kit still carries `files/iw4x.exe` — the *official* r5154 exe — plus our
+    dll: the old updater then installs official exe + our dll, which *is* the v2.0 state, and the kit it leaves
+    behind is the v2.0 one, so the next update is clean;
+  * or leave `main/latest.json` at v1.x and announce v2.0 as a download (the release zip), letting old players
+    stay where they are.
+  `check_kit.py` fails any kit that contains `files/iw4x.exe`, so a bridge kit has to be built outside the kit
+  directory (or the check waived for it, deliberately).

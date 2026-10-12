@@ -1,0 +1,98 @@
+name: IW4x-32 release
+
+# IW4x-32 player kit: cut a v* tag (v2.0, v2.1, ...) and this builds the Release DLL, drops it into
+# iw4x32/release/, and publishes the kit as a GitHub Release. The tag's own iw4x32/release/ is what the
+# installed players' auto-update downloads (latest.json's base_url), so the kit in the tag must be complete.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-release:
+    name: Build release binary
+    runs-on: windows-2022
+    steps:
+      - name: Check out files
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          fetch-depth: 0
+          # NOTE - If LFS ever starts getting used during builds, switch this to true!
+          lfs: false
+
+      - name: Add msbuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Generate project files
+        run: tools/premake5 vs2022
+
+      - name: Set up problem matching
+        uses: ammaraskar/msvc-problem-matcher@master
+
+      - name: Build Release binaries
+        run: msbuild /m /v:minimal /p:Configuration=Release /p:Platform=Win32 build/iw4x.sln
+
+      - name: Upload Release binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: iw4x32-release
+          path: |
+            build/bin/Win32/Release/iw4x.dll
+
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: ncipollo/release-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          draft: true
+          allowUpdates: true
+          omitBodyDuringUpdate: true
+
+  release:
+    needs:
+      - create-release
+      - build-release
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: iw4x32-release
+          path: iw4x32-build
+
+      - name: Put the built DLL in the kit and write its hashes
+        run: |
+          python3 iw4x32/tools/make_latest.py --dll iw4x32-build/iw4x.dll
+          python3 iw4x32/tools/check_kit.py
+
+      - name: Pack the player kit
+        run: |
+          mkdir -p stage/IW4x-32
+          cp -a iw4x32/release/. stage/IW4x-32/
+          find stage -name __pycache__ -prune -exec rm -rf {} +
+          (cd stage && zip -qr "../IW4x-32-${GITHUB_REF_NAME}.zip" IW4x-32)
+          ls -l "IW4x-32-${GITHUB_REF_NAME}.zip"
+
+      - name: Publish the release
+        uses: ncipollo/release-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          artifacts: "IW4x-32-*.zip,iw4x32-build/iw4x.dll,iw4x32/release/SHA256SUMS.txt"
+          artifactErrorsFailBuild: true
+          allowUpdates: true
+          draft: true
+          omitBodyDuringUpdate: true
+          omitDraftDuringUpdate: true
