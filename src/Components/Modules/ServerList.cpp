@@ -939,7 +939,7 @@ namespace Components
       // Remove server from queue
       i = RefreshContainer.servers.erase(i);
 
-      // Servers with more than 18 players or less than 0 players are faking for sure
+      // Servers with more than MAX_CLIENTS players or less than 0 players are faking for sure
       // So lets ignore those
       if (static_cast<std::size_t>(server.clients) > Game::MAX_CLIENTS || static_cast<std::size_t>(server.maxClients) > Game::MAX_CLIENTS)
       {

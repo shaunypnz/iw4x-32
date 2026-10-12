@@ -7,7 +7,7 @@ namespace Components
   public:
     Dedicated();
 
-    static SteamID PlayerGuids[18][2];
+    static SteamID PlayerGuids[Game::MAX_CLIENTS][2]; // IW4x-32: was [18]
     static Dvar::Var SVLanOnly;
     static Dvar::Var SVMOTD;
     static Dvar::Var COMLogFilter;

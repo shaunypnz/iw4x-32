@@ -1,0 +1,330 @@
+{
+ "file": "iw4x.dll",
+ "base": "IW4x r5154",
+ "md5": "c5d73b3ec5e4b36e284a4ae0cfc7fb13",
+ "notes": [
+  "these are binary patches to the release DLL; in iw4x-client source most of them are simply Game::MAX_CLIENTS = 32 (arrays sized by it, loops/clamps/filters bounded by it) - see README",
+  "engine_pointers: the DLL's hard-coded engine addresses of arrays that the engine patch moves"
+ ],
+ "engine_pointers": [
+  {
+   "file_offset": "0x368430",
+   "array": "svs_clients",
+   "what": ".data  Game::svs_clients"
+  },
+  {
+   "file_offset": "0x39cb3",
+   "array": "level_bgs",
+   "what": ".text  mov [esi+0xC], level_bgs (TLS bgs)"
+  },
+  {
+   "file_offset": "0x29f12c",
+   "array": "level_bgs",
+   "what": ".rdata engine address table: level_bgs"
+  },
+  {
+   "file_offset": "0x340d5",
+   "array": "cg_tail",
+   "what": ".text  cmp eax,&cg.clientinfo[18] (find client by name) -> &clientinfo[32]"
+  },
+  {
+   "file_offset": "0x4087f",
+   "array": "post_cg_globals",
+   "what": ".text  push [0x8EE4B8] (first global after cg_s)"
+  },
+  {
+   "file_offset": "0x408e6",
+   "array": "post_cg_globals",
+   "what": ".text  push [0x8EE4B8] (first global after cg_s)"
+  },
+  {
+   "file_offset": "0xab9f1",
+   "array": "ui_playerClientNums",
+   "what": ".text  voice mute UI: sharedUiInfo.playerClientNums[i]"
+  },
+  {
+   "file_offset": "0xad2e6",
+   "array": "ui_playerNames",
+   "what": ".text  sharedUiInfo.playerNames[i]"
+  },
+  {
+   "file_offset": "0xad33a",
+   "array": "ui_playerNames",
+   "what": ".text  sharedUiInfo.playerNames[i]"
+  }
+ ],
+ "arrays": [
+  {
+   "name": "g_botai",
+   "lo": "0x104664e0",
+   "stride": "0x24",
+   "n_old": 18,
+   "n_new": 32,
+   "expect_operands": 45,
+   "role": "server"
+  },
+  {
+   "name": "ClanTags_ClientState",
+   "lo": "0x103e2f90",
+   "stride": "0x5",
+   "n_old": 18,
+   "n_new": 32,
+   "expect_operands": 6,
+   "role": "client"
+  },
+  {
+   "name": "Voice_mute_a",
+   "lo": "0x1040929c",
+   "stride": "0x1",
+   "n_old": 18,
+   "n_new": 32,
+   "expect_operands": 9,
+   "role": "client"
+  },
+  {
+   "name": "Voice_PacketCount",
+   "lo": "0x104092c0",
+   "stride": "0x4",
+   "n_old": 18,
+   "n_new": 32,
+   "expect_operands": 8,
+   "role": "server"
+  },
+  {
+   "name": "Voice_mute_b",
+   "lo": "0x10409308",
+   "stride": "0x1",
+   "n_old": 18,
+   "n_new": 32,
+   "expect_operands": 6,
+   "role": "server"
+  },
+  {
+   "name": "Voice_Packets",
+   "lo": "0x10409320",
+   "stride": "0x2940",
+   "n_old": 18,
+   "n_new": 32,
+   "expect_operands": 5,
+   "role": "server"
+  },
+  {
+   "name": "r5154_client_flag",
+   "lo": "0x103e3040",
+   "stride": "0x1",
+   "n_old": 18,
+   "n_new": 32,
+   "expect_operands": 6,
+   "role": "server"
+  },
+  {
+   "name": "r5154_CustomTitles",
+   "lo": "0x103e2e40",
+   "stride": "0x12",
+   "n_old": 18,
+   "n_new": 32,
+   "expect_operands": 3,
+   "role": "client"
+  }
+ ],
+ "constants": [
+  {
+   "rva": "0x33120",
+   "old": "6a12",
+   "new": "6a20",
+   "what": "spawnBot all: count = MAX_CLIENTS 18 -> 32",
+   "role": "server"
+  },
+  {
+   "rva": "0x33155",
+   "old": "83fb12",
+   "new": "83fb20",
+   "what": "spawnBot: std::min(count, MAX_CLIENTS) compare 18 -> 32",
+   "role": "server"
+  },
+  {
+   "rva": "0x383cf",
+   "old": "c745a812000000",
+   "new": "c745a820000000",
+   "what": "ClanTags::SendClanTagsToClients loop count 18 -> 32",
+   "role": "server"
+  },
+  {
+   "rva": "0x384c5",
+   "old": "6a12",
+   "new": "6a20",
+   "what": "ClanTags::ParseClanTags loop count 18 -> 32",
+   "role": "client"
+  },
+  {
+   "rva": "0xac409",
+   "old": "abababab66ab5fc3",
+   "new": "6a0859f3ab5fc390",
+   "what": "Voice mute reset: clear 32 entries (push 8; pop ecx; rep stosd)",
+   "role": "client"
+  },
+  {
+   "rva": "0xabe3a",
+   "old": "83f812",
+   "new": "83f820",
+   "what": "Voice::SV_UnmuteClient bounds check 18 -> 32 (runs on every disconnect)",
+   "role": "server"
+  },
+  {
+   "rva": "0xac444",
+   "old": "83f812",
+   "new": "83f820",
+   "what": "Voice_UnmuteMember_Hk bounds check 18 -> 32",
+   "role": "client"
+  },
+  {
+   "rva": "0xac531",
+   "old": "3c12",
+   "new": "3c20",
+   "what": "CL_VoicePacket: talker < 18 -> 32 (engine talkTime/decoders are 32 since r15)",
+   "role": "client"
+  },
+  {
+   "rva": "0xab1af",
+   "old": "7511",
+   "new": "eb11",
+   "what": "Updater: do not set cl_updateAvailable from the HTTP thread (va() TLS crash 0x4EC749)",
+   "role": "client"
+  },
+  {
+   "rva": "0x39642",
+   "old": "83f812",
+   "new": "83f820",
+   "what": "r5154: clientNum parsed from a command argument < 18 -> 32",
+   "role": "server"
+  },
+  {
+   "rva": "0x39998",
+   "old": "83f812",
+   "new": "83f820",
+   "what": "r5154: client flag test: clientNum < 18 -> 32",
+   "role": "server"
+  },
+  {
+   "rva": "0x3a79b",
+   "old": "83f812",
+   "new": "83f820",
+   "what": "r5154: client flag clear: clientNum < 18 -> 32",
+   "role": "server"
+  },
+  {
+   "rva": "0x3a7e3",
+   "old": "83ff12",
+   "new": "83ff20",
+   "what": "r5154: client flag set: clientNum < 18 -> 32",
+   "role": "server"
+  },
+  {
+   "rva": "0x3a74d",
+   "old": "abababab66ab",
+   "new": "6a0859f3ab90",
+   "what": "r5154: client flags reset: 18 bytes -> 32 (push 8; pop ecx; rep stosd)",
+   "role": "server"
+  },
+  {
+   "rva": "0x3a775",
+   "old": "abababab66ab",
+   "new": "6a0859f3ab90",
+   "what": "r5154: client flags reset: 18 bytes -> 32 (push 8; pop ecx; rep stosd)",
+   "role": "server"
+  },
+  {
+   "rva": "0x98c40",
+   "old": "83bd68ffffff12",
+   "new": "83bd68ffffff20",
+   "what": "ServerList: drop servers with clients > 18 -> 32 (browser)",
+   "role": "client"
+  },
+  {
+   "rva": "0x98c55",
+   "old": "83bd70ffffff12",
+   "new": "83bd70ffffff20",
+   "what": "ServerList: drop servers with sv_maxclients > 18 -> 32 (browser)",
+   "role": "client"
+  },
+  {
+   "rva": "0x2f806",
+   "old": "83f812",
+   "new": "83f820",
+   "what": "Bans: client slot < 18 -> 32 (ban by slot number)",
+   "role": "server"
+  },
+  {
+   "rva": "0x36c11",
+   "old": "6a12",
+   "new": "6a20",
+   "what": "Chat sayTo: clientNum = min(arg, 18) -> 32",
+   "role": "server"
+  },
+  {
+   "rva": "0x36e05",
+   "old": "6a12",
+   "new": "6a20",
+   "what": "Chat tellTo: clientNum = min(arg, 18) -> 32",
+   "role": "server"
+  },
+  {
+   "rva": "0x4543f",
+   "old": "81fb2048bb00",
+   "new": "81fb00f24c01",
+   "what": "Download /info JSON: player list over 18 clients -> 32",
+   "role": "server"
+  },
+  {
+   "rva": "0x94a26",
+   "old": "81fe2048bb00",
+   "new": "81fe00f24c01",
+   "what": "ServerInfo getstatus: player list over 18 clients -> 32",
+   "role": "server"
+  },
+  {
+   "rva": "0x82bf5",
+   "old": "6a12",
+   "new": "6a20",
+   "what": "ServerInfo: bot count min(n, 18) -> 32",
+   "role": "server"
+  },
+  {
+   "rva": "0x34f03",
+   "old": "81fe2048bb00",
+   "new": "81fe00f24c01",
+   "what": "CardTitles: send custom titles for 18 clients -> 32",
+   "role": "server"
+  },
+  {
+   "rva": "0x34f90",
+   "old": "6a12",
+   "new": "6a20",
+   "what": "CardTitles: parse 18 custom titles -> 32",
+   "role": "client"
+  },
+  {
+   "rva": "0x3503c",
+   "old": "6844010000",
+   "new": "6840020000",
+   "what": "CardTitles: memset(CustomTitles) 18*18 -> 32*18 bytes",
+   "role": "client"
+  },
+  {
+   "rva": "0x34d35",
+   "old": "80f912",
+   "new": "80f920",
+   "what": "CardTitles: TableLookupByRow client index < 18 -> 32",
+   "role": "client"
+  }
+ ],
+ "rdata_constants": [
+  {
+   "rva": "0x22ebf4",
+   "old": 18,
+   "new": 32,
+   "what": "const int MAX_CLIENTS (only user: spawnBot clamp @+0x32FB2)",
+   "role": "server"
+  }
+ ]
+}

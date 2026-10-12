@@ -10,7 +10,7 @@
 
 namespace Components
 {
-  SteamID Dedicated::PlayerGuids[18][2];
+  SteamID Dedicated::PlayerGuids[Game::MAX_CLIENTS][2];
 
   Dvar::Var Dedicated::SVLanOnly;
   Dvar::Var Dedicated::SVMOTD;
@@ -295,7 +295,8 @@ namespace Components
       // Intercept server commands
       ServerCommands::OnCommand(20, [](const Command::Params* params)
       {
-        for (int client = 0; client < 18; client++)
+        // IW4x-32: all MAX_CLIENTS slots; a stock server sends 18 - the rest read as "" -> 0
+        for (int client = 0; client < static_cast<int>(Game::MAX_CLIENTS); client++)
         {
           PlayerGuids[client][0].bits = std::strtoull(params->get(2 * client + 1), nullptr, 16);
           PlayerGuids[client][1].bits = std::strtoull(params->get(2 * client + 2), nullptr, 16);

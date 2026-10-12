@@ -44,8 +44,12 @@ namespace Components
       const std::string tag = doc["tag_name"].GetString();
       if (REVISION_STR != tag)
       {
-        // A new version came out!
-        Game::Dvar_SetBool(cl_updateAvailable, true);
+        // A new version came out! IW4x-32: set the dvar on the main thread - this check runs on the ASYNC pipeline,
+        // and Dvar_SetBool from there crashed in va()'s thread-local buffers (0x4EC749)
+        Scheduler::Once([]
+        {
+          Game::Dvar_SetBool(cl_updateAvailable, true);
+        }, Scheduler::Pipeline::MAIN);
       }
     }
 
