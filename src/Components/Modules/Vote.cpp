@@ -1,6 +1,7 @@
 #include "Vote.hpp"
 
 #include "ClientCommand.hpp"
+#include "IW4x32.hpp" // IW4x-32
 #include "MapRotation.hpp"
 #include "Events.hpp"
 
@@ -407,7 +408,7 @@ namespace Components
     {
       if (info->playerIndex >= 0 && info->playerIndex < Game::sharedUiInfo->playerCount)
       {
-        Game::Cbuf_AddText(0, VA("callvote kick \"%s\"\n", Game::sharedUiInfo->playerNames[info->playerIndex]));
+        Game::Cbuf_AddText(0, VA("callvote kick \"%s\"\n", IW4x32::PlayerNames()[info->playerIndex])); // IW4x-32: playerNames moves once the engine is patched for 32 players
       }
     });
 
@@ -415,7 +416,7 @@ namespace Components
     {
       if (info->playerIndex >= 0 && info->playerIndex < Game::sharedUiInfo->playerCount)
       {
-        Game::Cbuf_AddText(0, VA("callvote tempBanUser \"%s\"\n", Game::sharedUiInfo->playerNames[info->playerIndex]));
+        Game::Cbuf_AddText(0, VA("callvote tempBanUser \"%s\"\n", IW4x32::PlayerNames()[info->playerIndex])); // IW4x-32
       }
     });
 

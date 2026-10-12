@@ -30,6 +30,7 @@
 #include "Modules/Friends.hpp"
 #include "Modules/Huffman.hpp"
 #include "Modules/IPCPipe.hpp"
+#include "Modules/IW4x32.hpp" // IW4x-32
 #include "Modules/Lean.hpp"
 #include "Modules/MapDump.hpp"
 #include "Modules/MapRotation.hpp"
@@ -107,6 +108,7 @@ namespace Components
     Register(new IPCPipe());
     Register(new Network());
     Register(new Logger());
+    Register(new IW4x32()); // IW4x-32: rewrites the stock iw4x.exe for 32 players - before anything uses the engine arrays
     Register(new UIScript());
     Register(new ZoneBuilder());
 

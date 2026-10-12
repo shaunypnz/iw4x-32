@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""
+gen_tables.py - engine_patches.json -> src/Components/Modules/IW4x32Tables.hpp
+
+    python3 iw4x32/tools/gen_tables.py [--json FILE] [--out FILE]
+
+engine_patches.json is every change IW4x-32 makes to a pristine r5154 iw4x.exe (image base
+0x400000): arrays to enlarge, the operands that address them, byte patches, size constants and
+hooks. The component (src/Components/Modules/IW4x32.cpp) applies them to the running exe.
+
+The 'new' values in the JSON are the addresses of the reference build's fixed layout. The
+component allocates each array wherever VirtualAlloc gives it, so the header stores the offset
+inside the array instead: operand = base(array) + offset. Absolute (fixed) operands address cg_s,
+which grew in place - they all shift by one constant (CgTailShift).
+"""
+import argparse
+import json
+import os
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))          # the worktree root
+DEFAULT_JSON = os.path.join(ROOT, "iw4x32", "reference", "engine_patches.json")
+DEFAULT_OUT = os.path.join(ROOT, "src", "Components", "Modules", "IW4x32Tables.hpp")
+
+ROLE = {"client": 0, "server": 1}
+
+
+def num(v):
+    """JSON numbers are hex strings; signed ones (sentinel offsets) carry a minus sign."""
+    return int(v, 16) if isinstance(v, str) else int(v)
+
+
+def hx(v):
+    return "0x%x" % (v & 0xFFFFFFFF)
+
+
+def bytehex(s):
+    return bytes.fromhex(s)
+
+
+def emit_bytes(out, name, data):
+    out.append("static const unsigned char %s[%d] = {" % (name, len(data)))
+    for i in range(0, len(data), 24):
+        out.append("  " + ",".join("0x%02x" % b for b in data[i:i + 24]) +
+                   ("," if i + 24 < len(data) else ""))
+    out.append("};")
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--json", default=DEFAULT_JSON)
+    ap.add_argument("--out", default=DEFAULT_OUT)
+    a = ap.parse_args()
+
+    src = json.load(open(a.json))
+    base = num(src["image_base"])
+    arrays = src["arrays"]
+    by_name = {arr["name"]: i for i, arr in enumerate(arrays)}
+
+    # ---- operands: keep the offset inside the new array, not the reference build's address ----
+    operands = []
+    for o in src["relocation_operands"]:
+        fixed = bool(o.get("fixed"))
+        if fixed:
+            offset = num(o["new"]) - num(o["old"])
+        else:
+            offset = num(o["new_array_offset"])
+        operands.append(dict(insn=num(o["insn_va"]), operand=num(o["operand_va"]),
+                             old=num(o["old"]), offset=offset, array=by_name[o["array"]],
+                             fixed=fixed))
+    operands.sort(key=lambda o: (o["array"], o["operand"]))
+
+    # every array's operands go in one block so the component can walk them per array
+    first = {}
+    for i, o in enumerate(operands):
+        first.setdefault(o["array"], i)
+
+    # ---- byte patches (code patches + cvar domains + the bytes a hook overwrites) ----
+    pool = bytearray()
+
+    def pool_add(data):
+        at = len(pool)
+        pool.extend(data)
+        return at
+
+    cvars = []
+    for c in src["cvar_domains"]:
+        old, new = bytehex(c["old"]), bytehex(c["new"])
+        assert len(old) == len(new)
+        cvars.append(dict(va=num(c["va"]), old=pool_add(old), new=pool_add(new), len=len(old),
+                          role=ROLE[c["role"]]))
+
+    patches = []
+    for p in src["code_patches"]:
+        old, new = bytehex(p["old"]), bytehex(p["new"])
+        assert len(old) == len(new) and old != new
+        patches.append(dict(va=num(p["va"]), old=pool_add(old), new=pool_add(new), len=len(old),
+                            role=ROLE[p["role"]], dual=bool(p.get("dual"))))
+
+    hooks = []
+    for h in src["hooks"]:
+        rep = bytehex(h["replaced"])
+        hooks.append(dict(va=num(h["va"]), rep=pool_add(rep), len=len(rep),
+                          role=ROLE[h["role"]], stub=h["stub"], what=h["what"]))
+
+    # ---- size constants: 4-byte operands, from the operand table (it knows the operand VA) ----
+    what = {(num(s["va"]), num(s["old"])): s for s in src["size_constants"]}
+    sizes = []
+    for o in src["size_constant_operands"]:
+        key = (num(o["insn_va"]), num(o["old"]))
+        s = what.pop(key, None) or what[(num(o["operand_va"]), num(o["old"]))]
+        sizes.append(dict(insn=num(o["insn_va"]), operand=num(o["operand_va"]),
+                          old=num(o["old"]), new=num(o["new"]), role=ROLE[s["role"]]))
+    assert not what, "size_constants without an operand entry: %r" % (what,)
+
+    # ---- cg_tail grows inside cg_s: every absolute operand shifts by one constant ----
+    shifts = {o["offset"] for o in operands if o["fixed"]}
+    assert len(shifts) == 1, "fixed operands do not share one shift: %r" % (shifts,)
+    shift = shifts.pop()
+
+    dual = sum(1 for p in patches if p["dual"])
+
+    o = []
+    o.append("/* generated by iw4x32/tools/gen_tables.py from iw4x32/reference/engine_patches.json - do not edit */")
+    o.append("/* %s: %d arrays, %d operands, %d cvar domains, %d size constants, %d code patches (%d dual), %d hooks */" %
+             (src["file"], len(arrays), len(operands), len(cvars), len(sizes), len(patches), dual, len(hooks)))
+    o.append("#pragma once")
+    o.append("")
+    o.append("namespace Components")
+    o.append("{")
+    o.append("  // the pristine engine these tables were built for - the component refuses to patch anything else")
+    o.append('  inline constexpr const char* IW4x32_ExeMd5 = "%s";' % src["pristine_md5"])
+    o.append("  inline constexpr unsigned int IW4x32_ImageBase = %s;" % hx(base))
+    o.append("  inline constexpr unsigned int IW4x32_CgTailShift = %s;  // cg_s grew: absolute cg_tail operands" % hx(shift))
+    o.append("")
+    o.append("  enum IW4x32Role")
+    o.append("  {")
+    o.append("    IW4X32_CLIENT = 0,   // needed by players")
+    o.append("    IW4X32_SERVER = 1,   // only to host more than 18 slots")
+    o.append("  };")
+    o.append("")
+    o.append("  struct IW4x32Array")
+    o.append("  {")
+    o.append("    const char* name;")
+    o.append("    unsigned int oldLo, oldHi;      // the stock array in the exe image")
+    o.append("    unsigned int newSize;           // allocate this many zeroed bytes")
+    o.append("    unsigned int operandFirst, operandCount;")
+    o.append("    unsigned char role, grownInPlace;")
+    o.append("  };")
+    o.append("")
+    o.append("  struct IW4x32Operand")
+    o.append("  {")
+    o.append("    unsigned int insnVa, operandVa;")
+    o.append("    unsigned int old;               // the value the stock exe holds there")
+    o.append("    unsigned int offset;            // new value = array base + offset")
+    o.append("    unsigned short array;           // index into IW4x32_Arrays")
+    o.append("    unsigned char fixed;            // absolute: cg_s grew in place, new = old + CgTailShift")
+    o.append("  };")
+    o.append("")
+    o.append("  struct IW4x32BytePatch")
+    o.append("  {")
+    o.append("    unsigned int va;")
+    o.append("    unsigned int oldFirst, newFirst;    // index into IW4x32_Bytes")
+    o.append("    unsigned char len, role, dual;")
+    o.append("  };")
+    o.append("")
+    o.append("  struct IW4x32SizeConstant")
+    o.append("  {")
+    o.append("    unsigned int insnVa, operandVa;")
+    o.append("    unsigned int oldValue, newValue;")
+    o.append("    unsigned char role;")
+    o.append("  };")
+    o.append("")
+    o.append("  struct IW4x32Hook")
+    o.append("  {")
+    o.append("    unsigned int va;")
+    o.append("    unsigned int replacedFirst;     // index into IW4x32_Bytes: the bytes the jmp overwrites")
+    o.append("    unsigned char replacedLen, role;")
+    o.append("    const char* stub;               // IW4x32::HookStub name")
+    o.append("  };")
+    o.append("")
+    for name, count in (("Arrays", len(arrays)), ("Operands", len(operands)), ("CvarDomains", len(cvars)),
+                        ("SizeConstants", len(sizes)), ("CodePatches", len(patches)), ("Hooks", len(hooks))):
+        o.append("  inline constexpr unsigned int IW4x32_%sCount = %d;" % (name, count))
+    o.append("  inline constexpr unsigned int IW4x32_DualCount = %d;" % dual)
+    o.append("")
+    o.append("  static const IW4x32Array IW4x32_Arrays[] = {")
+    for i, arr in enumerate(arrays):
+        n = len([x for x in operands if x["array"] == i])
+        o.append("    {%s,%s,%s,%s,%d,%d,%d,%d}," %
+                 (json.dumps(arr["name"]), hx(num(arr["old_lo"])), hx(num(arr["old_hi"])), hx(num(arr["new_size"])),
+                  first.get(i, len(operands)), n, ROLE[arr["role"]], 1 if arr["grown_in_place"] else 0))
+    o.append("  };")
+    o.append("")
+    o.append("  static const IW4x32Operand IW4x32_Operands[] = {")
+    for x in operands:
+        o.append("    {%s,%s,%s,%s,%d,%d}," %
+                 (hx(x["insn"]), hx(x["operand"]), hx(x["old"]), hx(x["offset"]), x["array"], 1 if x["fixed"] else 0))
+    o.append("  };")
+    o.append("")
+    emit_bytes(o, "IW4x32_Bytes", bytes(pool))
+    o.append("")
+    o.append("  static const IW4x32BytePatch IW4x32_CvarDomains[] = {")
+    for x in cvars:
+        o.append("    {%s,%d,%d,%d,%d,0}," % (hx(x["va"]), x["old"], x["new"], x["len"], x["role"]))
+    o.append("  };")
+    o.append("")
+    o.append("  static const IW4x32SizeConstant IW4x32_SizeConstants[] = {")
+    for x in sizes:
+        o.append("    {%s,%s,%s,%s,%d}," % (hx(x["insn"]), hx(x["operand"]), hx(x["old"]), hx(x["new"]), x["role"]))
+    o.append("  };")
+    o.append("")
+    o.append("  static const IW4x32BytePatch IW4x32_CodePatches[] = {")
+    for x in patches:
+        o.append("    {%s,%d,%d,%d,%d,%d}," % (hx(x["va"]), x["old"], x["new"], x["len"], x["role"], 1 if x["dual"] else 0))
+    o.append("  };")
+    o.append("")
+    o.append("  static const IW4x32Hook IW4x32_Hooks[] = {")
+    for x in hooks:
+        o.append("    {%s,%d,%d,%d,%s}," % (hx(x["va"]), x["rep"], x["len"], x["role"], json.dumps(x["stub"])))
+    o.append("  };")
+    o.append("}")
+    o.append("")
+
+    os.makedirs(os.path.dirname(a.out), exist_ok=True)
+    with open(a.out, "w", newline="\n") as f:
+        f.write("\n".join(o))
+    print("wrote %s: %d arrays, %d operands, %d cvar domains, %d size constants, "
+          "%d code patches (%d dual), %d hooks, %d bytes" %
+          (a.out, len(arrays), len(operands), len(cvars), len(sizes), len(patches), dual, len(hooks), len(pool)))
+
+
+if __name__ == "__main__":
+    main()

@@ -30,7 +30,10 @@ namespace Game
   int* sv_timeResidual = reinterpret_cast<int*>(0x2089E14);
   int* sv_serverId_value = reinterpret_cast<int*>(0x2089DC0);
   int* svs_clientCount = reinterpret_cast<int*>(0x31D938C);
-  client_s* svs_clients = reinterpret_cast<client_s*>(0x31D9390);
+  // IW4x-32: the IW4x32 component re-points this at the enlarged array it allocates. The volatile seed
+  // keeps the stock address out of the compiler's reach so no use of it gets constant-folded (/LTCG).
+  static volatile DWORD s_svs_clients_stock = 0x31D9390;
+  client_s* svs_clients = reinterpret_cast<client_s*>(s_svs_clients_stock);
 
   unsigned short* sv_sconfigstrings = reinterpret_cast<unsigned short*>(0x208A632);
   unsigned short* sv_emptyConfigString = reinterpret_cast<unsigned short*>(0x208A630);
