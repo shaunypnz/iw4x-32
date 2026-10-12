@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "main"
+      - "iw4x-32"  # IW4x-32: our fork's branch
   pull_request:
 
 concurrency:
