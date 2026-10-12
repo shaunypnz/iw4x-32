@@ -100,7 +100,21 @@ function getBranchName()
 end
 
 function getRevisionNumber()
-  local proc = assert(io.popen("git rev-list --count HEAD", "r"))
+  -- IW4x-32: REVISION_STR is what the game shows in its UI, what a server advertises (ServerInfo/ServerList/
+  -- Party) and what Updater.cpp compares against the latest IW4x release tag. Our own commit count on top of
+  -- upstream would name a version that does not exist (and make every player see "update available"), so the
+  -- revision is the upstream IW4x release this fork is based on - the newest r<number> tag. No such tag: the
+  -- old behaviour (commit count).
+  local proc = io.popen("git describe --tags --abbrev=0 --match r[0-9]*", "r")
+  local tag = proc and assert(proc:read('*a')) or ""
+  if proc then
+    proc:close()
+  end
+  local rev = string.match(tag:gsub("%s+", ""), "^r(%d+)$")
+  if rev then
+    return rev
+  end
+  proc = assert(io.popen("git rev-list --count HEAD", "r"))
   return assert(proc:read('*a')):gsub("%s+", "")
 end
 

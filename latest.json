@@ -1,0 +1,26 @@
+{
+ "version": "v2.0",
+ "iw4x": "r5154",
+ "official": {
+  "iw4x.dll": "82819f1a0c8e3758af8acb8773dc2e2f5cc069202b995e79772a23c9551236cd",
+  "iw4x.exe": "49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009"
+ },
+ "base_url": "https://raw.githubusercontent.com/shaunypnz/iw4x-32/v2.0/iw4x32/release/",
+ "files": {
+  "AI_CREDITS.txt": "442018a8201b3e7ca9f2da4a3bbf60bc3f8ac4a3b6e5601e7ce415f545e0bde8",
+  "CHANGES.txt": "1e4c00bcecc9bd5c0100959bf00176a1d2ed08477bfb07d1fee05e8ba6385ee9",
+  "Install IW4x-32.bat": "7d88f57445f11bc039cb8909146d4f37061a5b623b88116106fe756820968484",
+  "Play IW4x-32 (IW4x launcher, no file check).bat": "55b32e2f49e1227ca2431fc429c3991102104999a39133438cb9907b8ac71a08",
+  "Play IW4x-32 (no update).bat": "8c49f87a9bb84982ce9205404bca749ac3299880da1b4f00b5b55fa1dbdd9236",
+  "Play IW4x-32.bat": "6b98f7c4680217b3193ce90a1edf50ae7a555d1c6ac71a16be3bf6c534fe4ba9",
+  "README.txt": "cb69da1a1fad56ba82cc0df6fbc18bbfe93ba998041e86c513a624bb4822a1a8",
+  "Uninstall IW4x-32.bat": "02c46f750b420a0bb7c3dea036fcf036188b181e7989fab1809c34a755919008",
+  "files/iw4x.dll": "0d8a8f630df43d25babb847b08f74c9a416a2e05c9336dd40ad0a15460ad9c7c",
+  "install-linux.sh": "438301317082d896ac3232ec74575d027b019208b84e014ceaa7cff4f82c21f1",
+  "iw4x32_update.ps1": "8019ee785549b45a5d65552dfb76ffd0304a28c19d104ef559fd86ab4204319e",
+  "iw4x32_update.py": "0d2ada8c139b508d1bfe977709fe26608e22742fb56574e89e8d49a64f2015d8",
+  "play-linux.sh": "925adb144363f7f225b68921774f39011acbbb6607e21c5f8984ad0365549b5c",
+  "uninstall-linux.sh": "d7026117543aadbbd500b4f9e03a25584ab6594e953b6fe43bfdcc546dee23d2",
+  "SHA256SUMS.txt": "dd64f8b1d8a00ac5ff3632a4147758840b9e982cb39e7872a4aea6f4eb8df194"
+ }
+}

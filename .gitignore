@@ -158,3 +158,6 @@ version.hpp
 
 __pycache__/
 *.pyc
+
+# working scratch: build logs, kit/updater test trees (they hold machine paths - never commit)
+.scratch/
