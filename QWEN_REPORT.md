@@ -50,6 +50,49 @@ Next: force a real level change (`rcon map mp_broadcast`) and read both consoles
   installed and hashed OK it calls the engine's rotate-map routine (0x487C50) on the client, otherwise it
   disconnects and re-`reconnect`s through the IW4x container/party path.
 
+## 2. What actually reproduces: the client leaves on its own, `@XBOXLIVE_PARTYENDED`
+
+The live report's client console (`userraw/console_mp.log` from the v2.0 test box) ends with
+
+```
+[    665018] Disconnecting from 00000000.000000000000:0 (@XBOXLIVE_PARTYENDED) at time 665018
+```
+
+- nothing before it, no error, no crash dump - the client walks out of the game by itself and goes back to the
+  menu (`CL_Live_StartPrivateParty` right after). From the server's side the client then goes quiet and is
+  dropped `GAME_DROPPEDFORINACTIVITY`, which is what the server log shows.
+- the host address is `00000000.000000000000:0`: the client's own party has no host address recorded.
+
+Reproduced with our own runner (`.scratch/live_repro.py`: stock `iw4x.exe` + this branch's `iw4x.dll`, 32 slots,
+`+map_rotate`, 28 bots, one human, `-stdout` on both):
+
+| run | bots | human slot | scorelimit | level restart | result |
+|---|---|---|---|---|---|
+| live1 | 28 | 28 | 200 | none seen | `@XBOXLIVE_PARTYENDED` at client time **479 s** |
+| live2 | 28 | 28 | 200 | `map_restart` at 2 min | `@XBOXLIVE_PARTYENDED` at **427 s** |
+| expE  | 28 | 28 | 999999 | none | **clean at 643 s** |
+| expF  | 28 | 28 | 200 | none | `@XBOXLIVE_PARTYENDED` at **720 s** |
+| expA  | 8  | **0**  | 200 | none | **clean at 714 s** |
+
+So the trigger is **the human sitting in a slot >= 18**, not the map change: with 8 bots the human is in slot 0
+and survives 12 minutes, with 28 bots the human is in slot 28 and walks out after 7-12 minutes (the time
+varies; a level restart seems to bring it sooner). The map change in the live report is when the box *noticed*
+the client was gone.
+
+Why: the stock engine sizes the XLive session/party layer for 18 (`ClientInfo users[18]` at `sessionState+0x230`,
+`RegisteredUser internalRegisteredUsers[18]`, `PartyMember partyMembers[18]` at `party+0x1D8`, and the member
+loops are hard-bounded `i < 0x12`). IW4x-32 does not enlarge those - it keeps slots >= 18 out of them with five
+hooks (`SV_UserinfoChanged` 0x401AAD, `SV_DropClient` 0x4C17DC, `Session_GetXuidForSlot` 0x487C10,
+`Session_SetClientAddress` 0x49ABB0, PartyHost member teardown 0x4D3D00). The client's own party bookkeeping
+indexes those tables with the *game* clientNum, so for a client in slot 28 its own entry is never written -
+`Session_SetClientAddress` (0x49ABB0, called from the party frame code at 0x5B03AC and 0x5B1C31/0x5B1C4A) is
+where its address would land. The party host address stays zero, the host goes "gone", and the engine's
+host-timeout handler at **0x5028B0** takes its silent branch
+(`systemlink != 0 || *(cl + 0x1848 /*partyId*/) == 1` -> `CL_Drop("@XBOXLIVE_PARTYENDED")`, no console print).
+
+Probe: a temporary hook on 0x5028B0 (enabled by an `iw4x32-probe` file next to `iw4x.exe`) prints the caller of
+that handler - see below.
+
 ---
 
 # Previous round report — IW4x-32 engine component

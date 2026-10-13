@@ -207,16 +207,10 @@ namespace Components
       }
     }
 
-    bool ProbeFile(const char* name);
-    void __declspec(naked) PartyDropProbe_Stub();
-
     void InstallHooks()
     {
       for (const auto& h : IW4x32_Hooks)
         Utils::Hook(h.va, StubFor(h.stub), HOOK_JUMP).install()->quick(); // every name was checked by VerifyEngine
-
-      if (ProbeFile("iw4x32-probe")) // TEMP DIAGNOSTIC: who ends the party on a 32-slot server?
-        Utils::Hook(0x5028B0, PartyDropProbe_Stub, HOOK_JUMP).install()->quick();
     }
 
     // The DLL itself reaches some of these arrays through Game:: pointers - re-point them (dll_patches.json).
@@ -838,6 +832,8 @@ namespace Components
 
     ApplyToEngine();
     InstallHooks();
+    if (ProbeFile("iw4x32-probe")) // TEMP DIAGNOSTIC: who ends the party on a 32-slot server?
+      Utils::Hook(0x5028B0, PartyDropProbe_Stub, HOOK_JUMP).install()->quick();
     PointDllGlobals();
     AddVectoredExceptionHandler(1, &CrashReport); // IW4x-32: see CrashReport
     FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
