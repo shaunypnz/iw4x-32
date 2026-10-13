@@ -578,14 +578,25 @@ namespace Components
     volatile DWORD s_back_46056A = 0x46056A; // SV_DirectConnect: the protocol check
     volatile DWORD s_back_4CCF49 = 0x4CCF49; // CG_ParseServerinfo
   volatile DWORD s_back_5028B5 = 0x5028B5; // TEMP probe: party host timeout handler, after the stolen mov
+  volatile DWORD s_back_4A7CA5 = 0x4A7CA5; // TEMP probe: "party host gone", after the stolen mov
 
   // TEMP DIAGNOSTIC: print who calls the party host-timeout handler (0x5028B0), the one that ends the
   // game with @XBOXLIVE_PARTYENDED. Enabled by an "iw4x32-probe" file next to iw4x.exe.
-  void __cdecl PartyDropProbe(void* cl, void* retAddr)
+  void __cdecl DumpParty(const char* tag, void* cl, void* retAddr)
   {
-    Game::Com_Printf(0x10, "iw4x32-probe: party-timeout from %p partyId %d\n", retAddr,
-                     cl ? *reinterpret_cast<int*>(static_cast<char*>(cl) + 0x1848) : -1);
+    auto c = static_cast<char*>(cl);
+    const auto syslink = *reinterpret_cast<unsigned char*>(*reinterpret_cast<DWORD*>(0x649E714) + 0x10);
+    const auto net = reinterpret_cast<unsigned char*>(c + 0x23C4); // cl->serverAddress (netadr_t)
+    Game::Com_Printf(0x10,
+                     "iw4x32-probe: %s from %p syslink %u f1848 %u f0C %u sessIdx %u f18 %u "
+                     "adr %u %d.%d.%d.%d:%u\n",
+                     tag, retAddr, syslink, *reinterpret_cast<int*>(c + 0x1848), *reinterpret_cast<int*>(c + 0xC),
+                     *reinterpret_cast<int*>(c + 0x1750), *reinterpret_cast<int*>(c + 0x18), net[0], net[6],
+                     net[7], net[8], net[9], *reinterpret_cast<unsigned short*>(net + 2));
   }
+
+  void __cdecl PartyDropProbe(void* cl, void* retAddr) { DumpParty("party-timeout", cl, retAddr); }
+  void __cdecl PartyGoneProbe(void* cl, void* retAddr) { DumpParty("party-gone", cl, retAddr); }
 
   void __declspec(naked) PartyDropProbe_Stub()
   {
@@ -600,6 +611,22 @@ namespace Components
       popad
       mov eax, dword ptr ds:[0x649E714]
       jmp dword ptr [s_back_5028B5]
+    }
+  }
+
+  void __declspec(naked) PartyGoneProbe_Stub()
+  {
+    __asm
+    {
+      pushad
+      mov eax, dword ptr [esp + 0x24]
+      push dword ptr [esp + 0x20]
+      push eax
+      call PartyGoneProbe
+      add esp, 8
+      popad
+      mov eax, dword ptr ds:[0x649E714]
+      jmp dword ptr [s_back_4A7CA5]
     }
   }
 
@@ -833,7 +860,10 @@ namespace Components
     ApplyToEngine();
     InstallHooks();
     if (ProbeFile("iw4x32-probe")) // TEMP DIAGNOSTIC: who ends the party on a 32-slot server?
+    {
       Utils::Hook(0x5028B0, PartyDropProbe_Stub, HOOK_JUMP).install()->quick();
+      Utils::Hook(0x4A7CA0, PartyGoneProbe_Stub, HOOK_JUMP).install()->quick();
+    }
     PointDllGlobals();
     AddVectoredExceptionHandler(1, &CrashReport); // IW4x-32: see CrashReport
     FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
