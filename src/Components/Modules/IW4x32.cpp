@@ -8,6 +8,7 @@
 #include "IW4x32.hpp"
 #include "IW4x32Tables.hpp"
 #include "Logger.hpp"
+#include <cstring> // IW4x-32: strcmp in DisconnectReasonSkip
 
 namespace Components
 {
@@ -565,6 +566,75 @@ namespace Components
     volatile DWORD s_back_4D9576 = 0x4D9576; // CL_Init
     volatile DWORD s_back_46056A = 0x46056A; // SV_DirectConnect: the protocol check
     volatile DWORD s_back_4CCF49 = 0x4CCF49; // CG_ParseServerinfo
+    volatile DWORD s_back_5028B5 = 0x5028B5; // party host timeout handler, after the stolen mov
+    volatile DWORD s_back_4B6015 = 0x4B6015; // disconnect-reason handler, after push esi / mov esi,[esp+8]
+
+  // IW4x-32: a client in a slot >= 18 is never registered with the party/session layer (it is 18 members
+  // wide, see the 0x12 guards above), so once the level restarts it stops hearing from the party host and
+  // the engine walks it out of the game: the end-of-match broadcast reaches it with the fallback reason
+  // "EXE_SERVERKILLED", the disconnect-reason handler (0x4B6010) does not know that reason, its unknown
+  // path runs the party-gone helper (0x4A7CA0), and that ends in the party host timeout handler (0x5028B0),
+  // which for a systemlink client is nothing but "@XBOXLIVE_PARTYENDED" - back to the lobby, with no error
+  // and no crash. The client does follow the map change and comes back; it is gone a few minutes later,
+  // which is what the live report saw. The game connection itself is plain UDP with its own timeout
+  // ("Server timed out", 0x5A8DF0), so for a LAN client that is in the game a party failure means nothing:
+  // both handlers are ignored for it, and a server that really goes away still drops it the normal way.
+  constexpr unsigned int XLIVE_DVAR_PTR = 0x649E714; // dvar block, +0x10 = the systemlink flag
+  constexpr unsigned int CL_CONNECTION_STATE = 0xB2C540; // IW4x reads the same global (see Menus.cpp)
+
+  // A systemlink (LAN) client that is in, or is on its way into, a game: connstate CA_CONNECTING .. CA_ACTIVE.
+  // An IW4x-32 server runs party_enable 0 and sv_lanonly 1, and a slot >= 18 player is never in the session
+  // layer at all - but a signed-in client, or one that is back at the menus, keeps the stock behaviour.
+  bool LanClientInGame()
+  {
+    const auto dvars = *reinterpret_cast<volatile DWORD*>(XLIVE_DVAR_PTR);
+    return dvars != 0 && *reinterpret_cast<unsigned char*>(dvars + 0x10) != 0 &&
+           *reinterpret_cast<volatile int*>(CL_CONNECTION_STATE) >= Game::CA_CONNECTING;
+  }
+
+  // The end-of-match broadcast can reach a client that has already reloaded the next map, and the level
+  // restart wipes the pending end-game reason, so the server falls back to "EXE_SERVERKILLED". "hostquit"
+  // and "roundsdone" - the other ways a match ends on a server that stays up - the handler ignores outright,
+  // so a lost reason is ignored the same way for a LAN client that is in the game.
+  bool __cdecl DisconnectReasonSkip(const char* reason)
+  {
+    return reason && strcmp(reason, "EXE_SERVERKILLED") == 0 && LanClientInGame();
+  }
+
+  // 0x4B6010 disconnect-reason handler: return without running it (what its own "roundsdone" path does).
+  void __declspec(naked) DisconnectReason_Stub()
+  {
+    __asm
+    {
+      push dword ptr [esp + 0x4] // param_1 = reason string
+      call DisconnectReasonSkip
+      add esp, 4
+      test al, al
+      jnz disconnectReasonIgnored
+      push esi                       // the stolen prologue
+      mov esi, dword ptr [esp + 0x8] // esi = reason
+      jmp dword ptr [s_back_4B6015]
+    disconnectReasonIgnored:
+      retn
+    }
+  }
+
+  // 0x5028B0 party host timeout handler: return without running it. For a systemlink client that handler
+  // only ends the game with @XBOXLIVE_PARTYENDED; the callers (the keepalive at 0x4973A0, the party-gone
+  // helper) carry on with their per-frame work afterwards.
+  void __declspec(naked) PartyTimeout_Stub()
+  {
+    __asm
+    {
+      call LanClientInGame
+      test al, al
+      jnz partyTimeoutIgnored
+      mov eax, dword ptr ds:[0x649E714] // the stolen first instruction
+      jmp dword ptr [s_back_5028B5]
+    partyTimeoutIgnored:
+      retn
+    }
+  }
 
   // SV_SendClientMessages 0x45181D: memset(needsSnapshot, 0, 18) -> our 32-byte global
   void __declspec(naked) SscmClear_Stub()
@@ -795,6 +865,8 @@ namespace Components
 
     ApplyToEngine();
     InstallHooks();
+    Utils::Hook(0x5028B0, PartyTimeout_Stub, HOOK_JUMP).install()->quick();     // IW4x-32: see PartyTimeout_Stub
+    Utils::Hook(0x4B6010, DisconnectReason_Stub, HOOK_JUMP).install()->quick(); // IW4x-32: see DisconnectReason_Stub
     PointDllGlobals();
     AddVectoredExceptionHandler(1, &CrashReport); // IW4x-32: see CrashReport
     FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
