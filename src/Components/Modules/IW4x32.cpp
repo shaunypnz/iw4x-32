@@ -589,6 +589,7 @@ namespace Components
   volatile DWORD s_back_407C85 = 0x407C85; // TEMP probe: per-client end-game disconnect
 
   bool g_Probe = false; // set when the iw4x32-probe file is next to iw4x.exe
+  bool g_NoFix = false; // TEMP DIAGNOSTIC: iw4x32-probe-nofix turns the two fixes off, probes stay on
 
   // IW4x-32: the engine's party-host timeout handler (0x5028B0) is how a v2.0 client leaves a 32-slot game
   // after a map change. The party/session layer is 18 members wide (see the 0x12 guards above), so a client
@@ -609,6 +610,8 @@ namespace Components
   // but a signed-in client, or one that is back at the menus, keeps the stock behaviour.
   bool LanClientInGame()
   {
+    if (g_NoFix)
+      return false;
     return *reinterpret_cast<unsigned char*>(*reinterpret_cast<DWORD*>(XLIVE_DVAR_PTR) + 0x10) != 0 &&
            *reinterpret_cast<int*>(CL_CONNECTION_STATE) >= 3; // CA_CONNECTING .. CA_ACTIVE
   }
@@ -1054,6 +1057,7 @@ namespace Components
     InstallHooks();
     Utils::Hook(0x5028B0, PartyTimeout_Stub, HOOK_JUMP).install()->quick();      // see PartyTimeoutSkip
     Utils::Hook(0x4B6010, DisconnectReason_Stub, HOOK_JUMP).install()->quick();  // see DisconnectReasonSkip
+    g_NoFix = ProbeFile("iw4x32-probe-nofix"); // TEMP DIAGNOSTIC
     if (ProbeFile("iw4x32-probe")) // TEMP DIAGNOSTIC: who ends the party on a 32-slot server?
     {
       g_Probe = true;
