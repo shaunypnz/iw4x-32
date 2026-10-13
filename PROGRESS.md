@@ -183,3 +183,5 @@ exe an older IW4x-32 replaced is put back from `backup/` instead.
   bridge kit carrying the *official* exe, or leaving `main/latest.json` at v1.x and announcing v2.0 as a
   download — are written out in `QWEN_REPORT.md` §7.
 
+
+PROGRESS: 5% - done: baseline read of IW4x32.cpp + test script, report skeleton / next: reproduce map-change failure with client console captured

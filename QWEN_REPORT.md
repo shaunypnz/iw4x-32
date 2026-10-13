@@ -1,4 +1,32 @@
-# QWEN_REPORT — IW4x-32 engine component
+# QWEN_REPORT — v2.0 client does not come back after a map change
+
+Task: `iw4x32/tasks/map_change_rejoin.md`. Branch `fix/iw4x32-map-change`. Round 1.
+
+## 0. Plan / state
+
+- Reproduce with the live test (`--bots 8 --client --minutes 5 --map-change-at 2`), read the **client** console
+  (the test only prints the server's) before changing code.
+- The CHECK commands are the build and the live test; both exist, so the deliverable is in place from the start.
+- Client console capture: the test script lives outside this worktree and the round rules forbid editing files
+  outside it, so the diagnosis runs use a scratch copy of it (`.scratch/aiboi_cli.py`) that does the same thing
+  plus dumps the client's `main/console_mp.log` and greps the server log for the IW4x-32 reject line. The CHECK
+  command itself is run unchanged.
+
+### What the code does today (client side, map change)
+
+- `iw4x.dll` registers the `iw4x32` userinfo dvar from the `CL_Init` hook (`_e32_cl_init_hook`, 0x4D9571) - once
+  per process, not per connect.
+- `CG_ParseServerinfo` hook (`_e32_cg_si_hook`, 0x4CCF44) reads `sv_iw4x32` and calls `SetLayout()`; `SetLayout`
+  returns early when the layout is already what is asked for, so a reconnect re-parsing serverinfo is a no-op.
+- `SV_DirectConnect` hook (`_e32_dc_check`) rejects any remote client whose userinfo lacks `iw4x32\1`, printing
+  `rejected connect: client without the iw4x32 (32-player) build` in the server console.
+- IW4x itself follows a server map change through `Maps::RotateCheckStub` (hook at 0x5AA91C): if the new map is
+  installed and hashed OK it calls the engine's rotate-map routine (0x487C50) on the client, otherwise it
+  disconnects and re-`reconnect`s through the IW4x container/party path.
+
+---
+
+# Previous round report — IW4x-32 engine component
 
 **Result: a stock `iw4x.exe` (r5154, MD5 `9c42ffa4f7aefd08fd501b40f5e41eab`, untouched on disk) plus our
 `iw4x.dll` runs a 32-player dedicated server with 31 bots, no crash.** The DLL rewrites the closed-source
