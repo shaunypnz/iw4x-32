@@ -1,5 +1,122 @@
-# QWEN_REPORT — v2.0 client does not come back after a map change
+BROKEN CHECK: `python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 8 --client --minutes 5 --map-change-at 2`
 
+- The pass rule needs `client_slot >= 18`. The test spawns the `--bots` bots **before** the client and the
+  engine gives a connecting client the lowest free slot, so with `--bots 8` the client is in **slot 8** - in
+  every build, whatever the code does. Re-measured this round against the fixed build:
+  `FAIL {'map_changed': True, 'players_after_map_change': 9, 'server_alive': True, 'players_max': 9, 'players_wanted': 9, 'new_crash_dumps': 0, 'client_slot': 8}`
+  - every criterion passes except the slot rule. Nothing in this worktree can move that slot.
+- The bug itself only exists for a client in a slot >= 18 (the stock party/session layer is 18 members wide),
+  so the test also needs enough bots to push the client out of that layer. **Working form:**
+  `python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 28 --client --minutes 5 --map-change-at 2`
+  -> `PASS {'map_changed': True, 'players_after_map_change': 29, 'server_alive': True, 'players_max': 29, 'players_wanted': 29, 'new_crash_dumps': 0, 'client_slot': 28}`
+- Second problem with the CHECK, not fixable from inside this worktree: its 5-minute window is shorter than
+  the failure. In the runs that reproduced it the client followed the change, came back, and only then walked
+  out - 427 s, 479 s and 720 s later. `iw4x32/tools/mapchange_rejoin.py` (added this round) is the 12-minute
+  form of the same scenario.
+
+---
+
+# Round 4 (2026-10-14) - the fix, and what is and is not proven
+
+**What changed: two client-side hooks in `src/Components/Modules/IW4x32.cpp` (+71 lines) stop the engine's
+party/session layer from ending the game for a LAN client that is sitting in a slot >= 18. That layer is 18
+members wide, so such a client is never registered with it, and the handler that notices ends the whole game
+with `@XBOXLIVE_PARTYENDED` - the exact line the live report's client console dies on.**
+
+## 1. The chain (read out of the stock exe with `gdec`)
+
+```
+0x4B6010  client disconnect-reason handler   <- "disconnect <reason>" from the server
+  |        it knows hostquit / roundsdone / EXE_MATCHENDED / EXE_SERVERQUIT / EXE_PLAYERKICKED /
+  |        XBOXLIVE_SIGNINCHANGED / ... ; hostquit and roundsdone are simply ignored (0x4B6160)
+  v        an unknown reason falls through to
+0x4A7CA0  "the party host is gone" helper (call at 0x4B60F7)
+  v
+0x5028B0  party host timeout handler. First bytes: mov eax,[0x649E714]; cmp byte [eax+0x10],0
+          -> systemlink set: branch 0x5029B7 -> 0x40FF00(cl, reason, "@XBOXLIVE_PARTYENDED", 1) -> ret
+  v
+the client leaves the game and goes back to the menu. No Com_Error text, no crash dump. The server keeps the
+slot until it drops the now-silent client with GAME_DROPPEDFORINACTIVITY - which is why the report reads as
+"nobody reconnected".
+```
+
+`0x5028B0` has a second caller: the party keepalive at `0x4973A0`, which runs it once the client has gone quiet
+towards the party host for 12 s. A slot >= 18 client is never registered with the session host at all (the five
+0x12-bounded hooks from the previous round keep slots >= 18 out of the 18-wide session layer), so it is on that
+timeout path from the moment it joins. Both paths end in the same handler, and for a systemlink client that
+handler does nothing except end the game.
+
+## 2. The fix (`src/Components/Modules/IW4x32.cpp`, marked `// IW4x-32:`)
+
+One predicate, two hooks, same `__declspec(naked)` + `s_back_*` pattern as the rest of the component:
+
+- `LanClientInGame()` - the `systemlink` dvar is on (`[0x649E714]+0x10`) **and** the local connection state is
+  `CA_CONNECTING .. CA_ACTIVE` (`0xB2C540`, the global IW4x itself reads in `Menus.cpp`). A signed-in client,
+  or one that is back at the menus, keeps the stock behaviour.
+- `DisconnectReason_Stub` at `0x4B6010` - for such a client, ignore `EXE_SERVERKILLED` and return, which is
+  what the handler's own `hostquit` / `roundsdone` path does. The game connection is plain UDP with its own
+  timeout ("Server timed out", 0x5A8DF0), so a server that really goes away still drops the client normally.
+- `PartyTimeout_Stub` at `0x5028B0` - for such a client, return without running the handler; its callers
+  (keepalive 0x4973A0, party-gone 0x4A7CA0) carry on with their per-frame work.
+
+## 3. What is proven, and what is not
+
+Proven:
+- The mechanism, from the disassembly above, and the fact that it is slot-dependent: round 1 ran the same
+  scenario with 8 bots (human in slot **0**) and the client was clean at 714 s, while with 28 bots (human in
+  slot 28) it walked out at 427 s / 479 s / 720 s in three runs.
+- The hooks do what they say: with temporary probe hooks on the client, the chain
+  `disconnect reason 'EXE_SERVERKILLED' -> party-gone from 004B60FC -> party-timeout from 004A7CE4 ->
+  @XBOXLIVE_PARTYENDED` prints in full with the fix off (client time 537 s) and stops at the first line with
+  the fix on, with the human still in slot 28 at 660 s.
+
+**Not proven, and this is the honest part: we have not reproduced the field failure without the probes on.**
+Two probe-free controls with the fix compiled out (`.scratch/iw4x-nofix.dll`, `mapchange_rejoin.py`, 28 bots,
+human in slot 28) both stayed in the game for the whole window - 13 min with the match left to end by itself,
+and 12 min with `rcon map_rotate` at 2 min. Worse, one reason the probe runs walked out is that the probe itself
+was wrong: `SvEndGameProbe_Stub` at 0x4CA1E0 pushed `[esp+0x20]` after `pushad`, which is the **return address**,
+not the reason argument (`[esp+0x24]`) - so probe builds corrupted the end-game reason and manufactured the
+`EXE_SERVERKILLED` the client then choked on. The probe hooks are gone from the shipped code; the A/B above is
+therefore a proof about the handler, not a reproduction of the report.
+
+So the fix is aimed at the handler that printed the reported line, on a mechanism that is fully explained and
+slot-dependent, but the next round still owes a clean before/after on the real symptom.
+
+## 4. Test evidence (this round)
+
+| run | build | probes | recipe | result |
+|---|---|---|---|---|
+| AB1 | fix off | yes | 28 bots, slot 28, match forced to end at 42 s | full chain -> `@XBOXLIVE_PARTYENDED` at client time 537 s |
+| AB2 | fix on | yes | same | chain stops at the reason line, human in slot 28 at 660 s |
+| MCR2 | fix off | no | 28 bots, slot 28, 13 min, match left alone | clean (the match never ended) |
+| MCR3 | fix off | no | 28 bots, slot 28, 12 min, `rcon map_rotate` at 2 min | clean - no probe-free reproduction |
+| CHECK live, working form | fix on | no | `--bots 28 --client --minutes 5 --map-change-at 2` | **PASS**, slot 28, 29 players before and after, 0 dumps |
+| CHECK live, as given | fix on | no | `--bots 8 ...` | FAIL on `client_slot: 8` only (see BROKEN CHECK) |
+
+Build CHECK: `bash $HOME/Projects/IW4x-32/tools-re/build_iw4x_fork.sh . Release` -> rc 0.
+New tool: `iw4x32/tools/mapchange_rejoin.py` - the 12-minute version of the scenario, PASS/FAIL, shares the
+GPU box's test lock with `tools-re/aiboi_test.py`.
+
+## 5. Still open
+
+- Get a probe-free reproduction of the field failure (longer runs, several real clients, or the reporter's box),
+  then redo the A/B. Until then the fix is mechanism-justified, not symptom-verified.
+- The server console still prints `Error: Unable to set last round results for client num: N` for every slot
+  >= 18 at match end - the same 18-wide session layer, server side. Noise today; silencing it like the five
+  session hooks do would be a clean follow-up.
+- A slot >= 18 client still has no session layer at all (no party, no session-host-backed stats/titles). This
+  fix stops that from kicking the player out; it cannot give those clients session features, which the
+  closed-source 18-wide arrays make impossible.
+- `aiboi_test.py` (outside this worktree): only require `client_slot >= 18` when `--bots >= 18`, and give the
+  map-change case a longer window.
+
+NEXT ROUND: hunt a probe-free reproduction of the walk-out (start from `iw4x32/tools/mapchange_rejoin.py`,
+28 bots, `--rotate-at 2`, and push `--minutes` to 20 or add a second client), then re-run the A/B against it;
+run the two CHECK commands - the `--bots 28` form is the one that can pass.
+
+---
+
+# Previous rounds (1-3)
 Task: `iw4x32/tasks/map_change_rejoin.md`. Branch `fix/iw4x32-map-change`. Round 1.
 
 ## 0. Plan / state
