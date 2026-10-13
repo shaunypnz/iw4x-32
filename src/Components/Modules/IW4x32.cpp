@@ -581,6 +581,12 @@ namespace Components
   volatile DWORD s_back_4A7CA5 = 0x4A7CA5; // TEMP probe: "party host gone", after the stolen mov
   volatile DWORD s_back_4B6015 = 0x4B6015; // TEMP probe: disconnect-reason handler, after push esi / mov esi,[esp+8]
 
+  volatile DWORD s_back_4BAA6E = 0x4BAA6E; // TEMP probe: end-game pending processor
+  volatile DWORD s_back_4CA1E5 = 0x4CA1E5; // TEMP probe: SV_EndGame
+  volatile DWORD s_back_474055 = 0x474055; // TEMP probe: end-game flag setter (no reason)
+  volatile DWORD s_back_6260A5 = 0x6260A5; // TEMP probe: end-game disconnect broadcast
+  volatile DWORD s_back_407C85 = 0x407C85; // TEMP probe: per-client end-game disconnect
+
   bool g_Probe = false; // set when the iw4x32-probe file is next to iw4x.exe
 
   // IW4x-32: the engine's party-host timeout handler (0x5028B0) is how a v2.0 client leaves a 32-slot game
@@ -597,7 +603,7 @@ namespace Components
 
   void __cdecl DumpParty(const char* tag, void* cl, void* retAddr); // below, diagnostic only
 
-  bool __cdecl PartyTimeoutSkip(void* party, void* localClientNum, void* retAddr)
+  bool __cdecl PartyTimeoutSkip(void* party, void*, void* retAddr)
   {
     if (g_Probe)
       DumpParty("party-timeout", party, retAddr);
@@ -708,6 +714,115 @@ namespace Components
     {
       cmp byte ptr [edx + g_NeedSnapshot], 0
       jmp dword ptr [s_back_451968]
+    }
+  }
+
+  // TEMP DIAGNOSTICS (iw4x32-probe file): who ends the game on the server and who gets disconnected.
+  const char aSvEndGame[] = "sv-endgame";
+  const char aFlagNoReason[] = "endgame-flag-no-reason";
+
+  void __cdecl EndGameProbe(int flag, const char* reason, void* retAddr)
+  {
+    Game::Com_Printf(0x10, "iw4x32-probe: endgame flag %d reason '%s' from %p\n", flag,
+                     reason && *reason ? reason : "(empty)", retAddr);
+  }
+
+  // 0x4BAA69: inside the "end game pending" processor, right where it loads the reason string.
+  void __declspec(naked) EndGameProbe_Stub()
+  {
+    __asm
+    {
+      pushad
+      push dword ptr ds:[0x20987A8]              // pending reason string
+      push dword ptr ds:[0x20987A4]              // pending flag
+      push dword ptr [esp + 0x28]                // return address
+      call EndGameProbe
+      add esp, 0xC
+      popad
+      mov eax, dword ptr ds:[0x20987A8]
+      jmp dword ptr [s_back_4BAA6E]
+    }
+  }
+
+  void __cdecl FlagProbe(const char* what, void* retAddr)
+  {
+    Game::Com_Printf(0x10, "iw4x32-probe: %s from %p\n", what, retAddr);
+  }
+
+  // 0x4CA1E0: SV_EndGame - the stolen bytes are its call to the reason setter, so run it first.
+  void __declspec(naked) SvEndGameProbe_Stub()
+  {
+    __asm
+    {
+      pushad
+      mov eax, 0x627500 // SV_EndGame's own call to the reason setter - run it before probing
+      call eax
+      push dword ptr [esp + 0x20]
+      push offset aSvEndGame
+      call FlagProbe
+      add esp, 8
+      popad
+      jmp dword ptr [s_back_4CA1E5]
+    }
+  }
+
+  // 0x474050: the setter that raises the end-game flag with no reason -> EXE_SERVERKILLED.
+  void __declspec(naked) FlagNoReasonProbe_Stub()
+  {
+    __asm
+    {
+      pushad
+      push dword ptr [esp + 0x20]
+      push offset aFlagNoReason
+      call FlagProbe
+      add esp, 8
+      popad
+      mov eax, dword ptr ds:[0x1AD7934]
+      jmp dword ptr [s_back_474055]
+    }
+  }
+
+  void __cdecl BroadcastProbe(const char* reason)
+  {
+    Game::Com_Printf(0x10, "iw4x32-probe: endgame-broadcast reason '%s'\n",
+                     reason && *reason ? reason : "(empty)");
+  }
+
+  // 0x6260A0: the end-game disconnect broadcast (server side).
+  void __declspec(naked) BroadcastProbe_Stub()
+  {
+    __asm
+    {
+      pushad
+      push dword ptr [esp + 0x24] // reason
+      call BroadcastProbe
+      add esp, 4
+      popad
+      sub esp, 0x38
+      push ebx
+      push ebp
+      jmp dword ptr [s_back_6260A5]
+    }
+  }
+
+  void __cdecl DropOneProbe(char* client)
+  {
+    Game::Com_Printf(0x10, "iw4x32-probe: endgame-disconnect slot %d\n",
+                     *reinterpret_cast<int*>(client + 0x28));
+  }
+
+  // 0x407C80: the per-client end-game disconnect.
+  void __declspec(naked) DropOneProbe_Stub()
+  {
+    __asm
+    {
+      pushad
+      push dword ptr [esp + 0x24] // svs.clients[i]
+      call DropOneProbe
+      add esp, 4
+      popad
+      cmp dword ptr [esp + 8], 5
+      jmp dword ptr [s_back_407C85]
     }
   }
 
@@ -915,6 +1030,11 @@ namespace Components
       g_Probe = true;
       Utils::Hook(0x4A7CA0, PartyGoneProbe_Stub, HOOK_JUMP).install()->quick();
       Utils::Hook(0x4B6010, ReasonProbe_Stub, HOOK_JUMP).install()->quick();
+      Utils::Hook(0x4BAA69, EndGameProbe_Stub, HOOK_JUMP).install()->quick();
+      Utils::Hook(0x4CA1E0, SvEndGameProbe_Stub, HOOK_JUMP).install()->quick();
+      Utils::Hook(0x474050, FlagNoReasonProbe_Stub, HOOK_JUMP).install()->quick();
+      Utils::Hook(0x6260A0, BroadcastProbe_Stub, HOOK_JUMP).install()->quick();
+      Utils::Hook(0x407C80, DropOneProbe_Stub, HOOK_JUMP).install()->quick();
     }
     PointDllGlobals();
     AddVectoredExceptionHandler(1, &CrashReport); // IW4x-32: see CrashReport
