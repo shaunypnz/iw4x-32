@@ -579,6 +579,7 @@ namespace Components
     volatile DWORD s_back_4CCF49 = 0x4CCF49; // CG_ParseServerinfo
   volatile DWORD s_back_5028B5 = 0x5028B5; // TEMP probe: party host timeout handler, after the stolen mov
   volatile DWORD s_back_4A7CA5 = 0x4A7CA5; // TEMP probe: "party host gone", after the stolen mov
+  volatile DWORD s_back_4B6015 = 0x4B6015; // TEMP probe: disconnect-reason handler, after push esi / mov esi,[esp+8]
 
   // TEMP DIAGNOSTIC: print who calls the party host-timeout handler (0x5028B0), the one that ends the
   // game with @XBOXLIVE_PARTYENDED. Enabled by an "iw4x32-probe" file next to iw4x.exe.
@@ -597,6 +598,26 @@ namespace Components
 
   void __cdecl PartyDropProbe(void* cl, void* retAddr) { DumpParty("party-timeout", cl, retAddr); }
   void __cdecl PartyGoneProbe(void* cl, void* retAddr) { DumpParty("party-gone", cl, retAddr); }
+
+  // TEMP DIAGNOSTIC: the engine's disconnect-reason handler (0x4B6010) - print the reason the server sent.
+  void __cdecl ReasonProbe(const char* reason)
+  {
+    Game::Com_Printf(0x10, "iw4x32-probe: disconnect reason '%s'\n", reason ? reason : "(null)");
+  }
+
+  void __declspec(naked) ReasonProbe_Stub()
+  {
+    __asm
+    {
+      push esi
+      mov esi, dword ptr [esp + 0x8] // param_1 = reason string
+      push esi
+      call ReasonProbe
+      add esp, 4
+      add esp, 4
+      jmp dword ptr [s_back_4B6015]
+    }
+  }
 
   void __declspec(naked) PartyDropProbe_Stub()
   {
@@ -863,6 +884,7 @@ namespace Components
     {
       Utils::Hook(0x5028B0, PartyDropProbe_Stub, HOOK_JUMP).install()->quick();
       Utils::Hook(0x4A7CA0, PartyGoneProbe_Stub, HOOK_JUMP).install()->quick();
+      Utils::Hook(0x4B6010, ReasonProbe_Stub, HOOK_JUMP).install()->quick();
     }
     PointDllGlobals();
     AddVectoredExceptionHandler(1, &CrashReport); // IW4x-32: see CrashReport
