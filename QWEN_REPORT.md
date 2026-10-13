@@ -90,7 +90,7 @@ slot-dependent, but the next round still owes a clean before/after on the real s
 | AB2 | fix on | yes | same | chain stops at the reason line, human in slot 28 at 660 s |
 | MCR2 | fix off | no | 28 bots, slot 28, 13 min, match left alone | clean (the match never ended) |
 | MCR3 | fix off | no | 28 bots, slot 28, 12 min, `rcon map_rotate` at 2 min | clean - no probe-free reproduction |
-| CHECK live, working form | fix on | no | `--bots 28 --client --minutes 5 --map-change-at 2` | **PASS**, slot 28, 29 players before and after, 0 dumps |
+| CHECK live, working form | fix on | no | `--bots 28 --client --minutes 5 --map-change-at 2` | **PASS** (run twice against the shipped DLL), slot 28, 29 players before and after, 0 dumps |
 | CHECK live, as given | fix on | no | `--bots 8 ...` | FAIL on `client_slot: 8` only (see BROKEN CHECK) |
 
 Build CHECK: `bash $HOME/Projects/IW4x-32/tools-re/build_iw4x_fork.sh . Release` -> rc 0.
