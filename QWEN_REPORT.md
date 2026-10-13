@@ -99,6 +99,29 @@ live failure; the shipped guard rests on the static path, not on a reproduction.
 
 No game-path behaviour change: same hooks, same conditions.
 
+And the new line paid for itself in the first run after it: `rcon map mp_broadcast` at 2 min, client console
+(`.scratch/r7print-1791932546/client.log`) -
+
+```
+335: iw4x32: server is 32-slot - using the 32 player/body layout      <- the connect
+397: Server changing map mp_broadcast, gametype dom
+479: iw4x32: server is 32-slot - using the 32 player/body layout      <- re-read after the level restart
+```
+
+so the client re-parsed the serverinfo across a real level change and kept the 32-player layout: the task's
+first suspect, readable straight off the console.
+
+## 4. `iw4x32/tools/mapchange_rejoin.py`: the restart counter was reading a log that loses its tail
+
+The 6-minute run above came back `FAIL {'server_alive': True, 'new_crash_dumps': 0, 'walkouts_in_client_log': 0,
+'client_in_game_last_min': True, 'client_slot_max': 28, 'level_restarts': 0, 'maps_seen': ['mp_rust',
+'mp_broadcast'], 'client_followed_change': True}` - it failed only on `level_restarts`, while the map really
+did change. The counter grepped `-slot server` in `server.log`, which is the server's **stdout**: Wine
+block-buffers it and the teardown kills the process, so the tail - including the restart line - never reaches
+the file (the saved log holds the initial spawn only). Fixed to count in the engine's own line-by-line
+logfile (`+set logfile 1` -> `server-v2.log`) as well and keep the larger, through one `restart_count()` used
+by both the baseline and the final count. Re-run: `<numbers>`.
+
 `NEXT ROUND: no` - the CHECK cannot pass as written, and the live failure is not reproducible in the harness.
 A next round is only worth running if the CHECK becomes `--bots 28` and/or the field client's
 `main/console_mp.log` from the failing server turns up.

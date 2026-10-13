@@ -53,6 +53,18 @@ def num(out):
     return int(t[-1]) if t and t[-1].lstrip("-").isdigit() else 0
 
 
+def restart_count(d):
+    # IW4x-32: how many times the server has brought a level up - our DLL prints "iw4x32: <n>-slot server"
+    # from SV_SpawnServer, so counting that line counts level restarts. server.log is the server's stdout,
+    # which Wine block-buffers and the teardown kills, so its tail (often including the restart we are
+    # looking for) is lost; the engine's own logfile (+set logfile 1 -> server-v2.log) is written line by
+    # line. Count in both and keep the larger.
+    _, out = ssh("cd %s && grep -a -c -- '-slot server' server.log 2>/dev/null; "
+                 "grep -a -c -- '-slot server' server-v2.log 2>/dev/null" % d)
+    vals = [num(l) for l in out.splitlines() if l.strip()]
+    return max(vals) if vals else 0
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dll", default=os.path.join(ROOT, "build", "bin", "Win32", "Release", "iw4x.dll"))
@@ -111,8 +123,7 @@ def main():
                 break
         if not map_now:
             sys.exit("server never came up: %s" % st[-400:])
-        _, restarts0 = ssh("cd %s && grep -a -c -- '-slot server' server.log" % d)
-        restarts0 = num(restarts0)
+        restarts0 = restart_count(d)
         print(stamp(), "server up, map %s, level restarts so far %d" % (map_now, restarts0), flush=True)
 
         ssh("cd %s && %s 'spawnBot %d'" % (d, rcpy, a.bots))
@@ -163,15 +174,18 @@ def main():
         walkouts = num(walk)
         _, tail = ssh("cd %s && grep -a -E '%s' client.log | tail -4" % (d, WALKOUT))
         _, follow = ssh("cd %s && grep -a -c -E '%s' client.log" % (d, FOLLOW))
-        _, restarts = ssh("cd %s && grep -a -c -- '-slot server' server.log" % d)
+        restarts = restart_count(d)
         _, st = ssh("cd %s && %s status" % (d, rcpy))
         alive = "map:" in st
         in_game = sum(humans[-4:]) >= 3          # still in the game over the last minute
         maps = list(seen)
-
+        # IW4x-32: neither server log can be trusted for the restart count - server.log is block-buffered
+        # stdout that the teardown kills, and server-v2.log lost its tail the same way in the run that found
+        # this out. A map name that comes back different from rcon status is just as hard evidence that the
+        # level really restarted, and it is measured live, so take the larger of the two.
         report = {"server_alive": alive, "new_crash_dumps": new_dumps, "walkouts_in_client_log": walkouts,
                   "client_in_game_last_min": in_game, "client_slot_max": max(slots) if slots else -1,
-                  "level_restarts": num(restarts) - restarts0, "maps_seen": maps,
+                  "level_restarts": max(restarts - restarts0, len(maps) - 1), "maps_seen": maps,
                   "client_followed_change": num(follow) > 0}
         if a.kill_client_at > 0:
             ok = alive and not in_game and report["level_restarts"] >= 0
