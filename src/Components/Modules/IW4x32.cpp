@@ -8,6 +8,7 @@
 #include "IW4x32.hpp"
 #include "IW4x32Tables.hpp"
 #include "Logger.hpp"
+#include <cstring> // IW4x-32: strcmp in DisconnectReasonSkip
 
 namespace Components
 {
@@ -631,13 +632,28 @@ namespace Components
 
   void __cdecl PartyGoneProbe(void* cl, void* retAddr) { DumpParty("party-gone", cl, retAddr); }
 
-  // TEMP DIAGNOSTIC: the engine's disconnect-reason handler (0x4B6010) - print the reason the server sent.
-  void __cdecl ReasonProbe(const char* reason)
+  // The engine's disconnect-reason handler (0x4B6010). The server's end-of-match broadcast can reach a
+  // client that has already reloaded the next map, and when the level restart wipes the pending end-game
+  // reason the server falls back to "EXE_SERVERKILLED", which this handler does not know: it then runs the
+  // party-gone path and raises Com_Error(2, EXE_DISCONNECTED), which throws the client out of the game.
+  // "hostquit" and "roundsdone" - the other ways a match ends - are simply ignored by the handler, so we
+  // treat a lost end-game reason the same way for a systemlink (LAN) client that is in the game.
+  bool __cdecl DisconnectReasonSkip(const char* reason)
   {
-    Game::Com_Printf(0x10, "iw4x32-probe: disconnect reason '%s'\n", reason ? reason : "(null)");
+    if (!reason || strcmp(reason, "EXE_SERVERKILLED") != 0)
+      return false;
+    if (!*reinterpret_cast<unsigned char*>(*reinterpret_cast<DWORD*>(XLIVE_DVAR_PTR) + 0x10))
+      return false; // signed-in / online client: the reason is real, leave it alone
+    return *reinterpret_cast<int*>(CL_CONNECTION_STATE) >= 5; // CA_CONNECTED .. CA_ACTIVE: still in the game
   }
 
-  void __declspec(naked) ReasonProbe_Stub()
+  void __cdecl ReasonProbe(const char* reason)
+  {
+    if (g_Probe)
+      Game::Com_Printf(0x10, "iw4x32-probe: disconnect reason '%s'\n", reason ? reason : "(null)");
+  }
+
+  void __declspec(naked) DisconnectReason_Stub() // 0x4B6010: push esi / mov esi,[esp+8]
   {
     __asm
     {
@@ -646,8 +662,16 @@ namespace Components
       push esi
       call ReasonProbe
       add esp, 4
+      push esi
+      call DisconnectReasonSkip
       add esp, 4
+      test al, al
+      jnz disconnectReasonIgnored
+      pop esi
       jmp dword ptr [s_back_4B6015]
+    disconnectReasonIgnored:
+      pop esi
+      retn
     }
   }
 
@@ -1024,12 +1048,12 @@ namespace Components
 
     ApplyToEngine();
     InstallHooks();
-    Utils::Hook(0x5028B0, PartyTimeout_Stub, HOOK_JUMP).install()->quick(); // see PartyTimeoutSkip
+    Utils::Hook(0x5028B0, PartyTimeout_Stub, HOOK_JUMP).install()->quick();      // see PartyTimeoutSkip
+    Utils::Hook(0x4B6010, DisconnectReason_Stub, HOOK_JUMP).install()->quick();  // see DisconnectReasonSkip
     if (ProbeFile("iw4x32-probe")) // TEMP DIAGNOSTIC: who ends the party on a 32-slot server?
     {
       g_Probe = true;
       Utils::Hook(0x4A7CA0, PartyGoneProbe_Stub, HOOK_JUMP).install()->quick();
-      Utils::Hook(0x4B6010, ReasonProbe_Stub, HOOK_JUMP).install()->quick();
       Utils::Hook(0x4BAA69, EndGameProbe_Stub, HOOK_JUMP).install()->quick();
       Utils::Hook(0x4CA1E0, SvEndGameProbe_Stub, HOOK_JUMP).install()->quick();
       Utils::Hook(0x474050, FlagNoReasonProbe_Stub, HOOK_JUMP).install()->quick();
