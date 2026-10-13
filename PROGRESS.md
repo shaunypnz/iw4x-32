@@ -187,3 +187,5 @@ exe an older IW4x-32 replaced is put back from `backup/` instead.
 PROGRESS: 5% - done: baseline read of IW4x32.cpp + test script, report skeleton / next: reproduce map-change failure with client console captured
 
 PROGRESS: 10% - done: 8-bot run (client came back, slot 8 - bug needs slot >=18), found client console path / next: reproduce with 28 bots + client in slot 28
+
+PROGRESS: 20% - done: map_rotate on the 1-map playlist is not a real level change (no SV_SpawnServer, nobody dropped); client follows map mp_broadcast fine; probing the server console for a real level restart
