@@ -2,7 +2,7 @@ BROKEN CHECK: `python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build
 
 - The pass rule needs `client_slot >= 18`. The test spawns the `--bots` bots **before** the client and the
   engine gives a connecting client the lowest free slot, so with `--bots 8` the client is in **slot 8** - in
-  every build, whatever the code does. Re-measured this round against the fixed build:
+  every build, whatever the code does. Re-measured against the round-5 build:
   `FAIL {'map_changed': True, 'players_after_map_change': 9, 'server_alive': True, 'players_max': 9, 'players_wanted': 9, 'new_crash_dumps': 0, 'client_slot': 8}`
   - every criterion passes except the slot rule. Nothing in this worktree can move that slot.
 - The bug itself only exists for a client in a slot >= 18 (the stock party/session layer is 18 members wide),
@@ -102,6 +102,22 @@ Error: Unable to set last round results for client num: 25 ... 28
 (`0x627500` -> `0x48CB10` returns -1 because the session member array is 18 wide, the same layer the five
 0x12-bounded hooks keep slots >= 18 out of). It is not fatal here, but it is the match-end path failing on
 exactly the slots this fork adds, and it is worth its own task.
+
+## 4. CHECK, run against the shipped build (md5 `debf8fe5165a39463af0b2c441f4730a`)
+
+```
+aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 28 --client --minutes 5 --map-change-at 2
+  PASS {'map_changed': True, 'players_after_map_change': 29, 'server_alive': True, 'players_max': 29,
+        'players_wanted': 29, 'new_crash_dumps': 0, 'client_slot': 28}
+
+aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 8 --client --minutes 5 --map-change-at 2   # as written
+  FAIL {'map_changed': True, 'players_after_map_change': 9, 'server_alive': True, 'players_max': 9,
+        'players_wanted': 9, 'new_crash_dumps': 0, 'client_slot': 8}
+```
+
+The `--bots 8` form fails on one criterion only, `client_slot 8 < 18`, in every build (the bots are spawned
+before the client and the engine hands out the lowest free slot). The bug is a slot >= 18 bug, so the test has
+to put the client past 18: that is what `--bots 28` does, and it passes.
 
 ---
 
