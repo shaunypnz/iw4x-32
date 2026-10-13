@@ -12,6 +12,32 @@ Task: `iw4x32/tasks/map_change_rejoin.md`. Branch `fix/iw4x32-map-change`. Round
   plus dumps the client's `main/console_mp.log` and greps the server log for the IW4x-32 reject line. The CHECK
   command itself is run unchanged.
 
+## 1. Evidence from the live test (baseline build, unmodified code)
+
+Run A - the CHECK form `--bots 8 --client --map-change-at 2` (scratch runner, 10 s polls):
+
+* 8 bots + the client: the client lands in **slot 8**, not >= 18, because the test spawns the bots first and the
+  client takes the first free slot. The CHECK's pass rule needs `client_slot >= 18`, so with `--bots 8` it can
+  never pass whatever the code does - see BROKEN CHECK at the top.
+* Nothing crashed, the server stayed up, the client was still in the server after the "map change".
+
+Run B/C - `--bots 28 --client --map-change-at 2` (client in slot 28, `-stdout` so its console is captured):
+
+* Before the change: 29 players, human in slot 28. `rcon map_rotate` -> the client console prints
+  `Server changing map mp_rust, gametype dom`, it reloads `mp_rust_load`/`mp_rust` and is back in the game;
+  status keeps showing 29 players with the human in slot 28.
+* **The server console shows no second level restart at all**: no second `------ Server Initialization ------`,
+  no second `iw4x32: 32-slot server - ...` line, no `Client N connecting`, no new
+  `Going from CS_FREE to CS_CONNECTED` for the human's guid. The bots are re-created (bot28..bot55 take slots
+  0..27) but the human's client slot 28 is never freed and never re-connected.
+* Reason: the test server's playlist (`userraw/server.cfg`: `addGametype dom`, `addMap mp_rust`) holds exactly
+  one map, so `map_rotate` rotates to the *same* map - the engine does not run `SV_SpawnServer`, nobody gets
+  disconnected, and the client only reloads the map locally. The live report's rotation (`ShutdownGame`, then
+  `Server Initialization`, then our `iw4x32: 32-slot server` line) is a real level change through
+  `SV_SpawnServer`, which drops every client. So the CHECK's `--map-change-at` step does not reproduce the bug.
+
+Next: force a real level change (`rcon map mp_broadcast`) and read both consoles.
+
 ### What the code does today (client side, map change)
 
 - `iw4x.dll` registers the `iw4x32` userinfo dvar from the `CL_Init` hook (`_e32_cl_init_hook`, 0x4D9571) - once
