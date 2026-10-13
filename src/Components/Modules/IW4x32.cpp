@@ -317,7 +317,14 @@ namespace Components
     void ServerInfo(const char* info)
     {
       const auto* value = Game::Info_ValueForKey(info, "sv_iw4x32");
-      SetLayout(value && value[0] == '1' && value[1] == '\0');
+      const bool is32 = value && value[0] == '1' && value[1] == '\0';
+      // IW4x-32: say which layout this connect picked, every time - not only when it changes. The client
+      // starts in the 32-player layout, so a client console used to be silent about iw4x32 for a whole
+      // session, and "did the client keep the 32-player layout across the map change?" - the first suspect
+      // in the live report - could not be read off it. One line per connect and per level restart.
+      Game::Com_Printf(0x10, "iw4x32: server is %s - using the %s player/body layout\n",
+                       is32 ? "32-slot" : "stock", is32 ? "32" : "stock 18");
+      SetLayout(is32);
     }
 
     // ---------------------------------------------------------------- anti-lag (engine32c/antilag.c)
