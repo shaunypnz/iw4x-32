@@ -39,6 +39,7 @@ HOST = site.get("gpu_ssh")
 BASE = "Games/MW2-IW4x32-v2"                    # on the box: stock exe + game files
 WALKOUT = "PARTYENDED|Disconnecting from|Com_Error|quit reading client log"
 FOLLOW = "Server changing map|loadingnewmap"
+LEAVE = "Disconnecting|Server timed out|EXE_|ERROR:|match ended|Match Ended"
 
 
 def ssh(cmd, timeout=600):
@@ -62,6 +63,11 @@ def main():
     ap.add_argument("--rotate-cmd", default="", metavar="RCMDCON",
                     help="use this rcon command instead of `map <map-to>` (e.g. map_rotate)")
     ap.add_argument("--map", default="mp_rust")
+    ap.add_argument("--scorelimit", type=int, default=0, metavar="N",
+                    help="rcon set scr_dom_scorelimit N at the start, so the match ENDS and the server rotates "
+                         "by itself (the reported scenario)")
+    ap.add_argument("--endgame-at", type=float, default=0.0, metavar="MIN",
+                    help="set the scorelimit this far in instead of at the start")
     ap.add_argument("--kill-client-at", type=float, default=0.0, metavar="MIN",
                     help="bad-case probe: kill the client this far in (0 = don't)")
     ap.add_argument("--tag", default="rejoin")
@@ -111,6 +117,10 @@ def main():
 
         ssh("cd %s && %s 'spawnBot %d'" % (d, rcpy, a.bots))
         time.sleep(10)
+        if a.scorelimit and a.endgame_at <= 0:
+            ssh("cd %s && %s 'set scr_dom_scorelimit %d'" % (d, rcpy, a.scorelimit))
+            print(stamp(), "rcon set scr_dom_scorelimit %d - the match will end and the server will rotate"
+                  % a.scorelimit, flush=True)
         ssh("cd %s && export DISPLAY=:0 XAUTHORITY=\"$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* | head -1)\" "
             "__GLX_VENDOR_LIBRARY_NAME=mesa WINEPREFIX=$HOME/.wine-livetest-cli WINEDEBUG=-all && "
             "(setsid nohup wine iw4x.exe -stdout +set r_fullscreen 0 +set r_mode 1280x720 +set name live-test "
@@ -119,12 +129,17 @@ def main():
         end, humans, slots, seen = t0 + a.minutes * 60, [], [], {}
         changed = a.change_at <= 0
         killed = a.kill_client_at <= 0
+        ended = a.endgame_at <= 0
         while time.time() < end:
             if not changed and time.time() - t0 >= a.change_at * 60:
                 cmd = a.rotate_cmd or ("map " + a.map_to)
                 ssh("cd %s && %s '%s'" % (d, rcpy, cmd))
                 print(stamp(), "rcon %s - the level restarts, the client has to follow it" % cmd, flush=True)
                 changed = True
+            if a.scorelimit and a.endgame_at > 0 and not ended and time.time() - t0 >= a.endgame_at * 60:
+                ssh("cd %s && %s 'set scr_dom_scorelimit %d'" % (d, rcpy, a.scorelimit))
+                print(stamp(), "rcon set scr_dom_scorelimit %d" % a.scorelimit, flush=True)
+                ended = True
             if not killed and time.time() - t0 >= a.kill_client_at * 60:
                 ssh("cd %s && kill $(cat .clipid) 2>/dev/null" % d)
                 print(stamp(), "bad-case probe: killed the client (pid file .clipid)", flush=True)
@@ -169,10 +184,21 @@ def main():
         if tail:
             print("[rejoin] client walk-out lines:\n" + "\n".join("  " + l[:200] for l in tail.splitlines()),
                   flush=True)
+        _, why = ssh("cd %s && grep -a -E '%s' client.log | tail -12" % (d, LEAVE), timeout=60)
+        print("[rejoin] client console - why it left (last 12):\n"
+              + "\n".join("  " + l[:200] for l in why.splitlines()), flush=True)
+        logs = os.path.join(ROOT, ".scratch", run)
+        os.makedirs(logs, exist_ok=True)
+        for f in ("client.log", "server.log"):
+            try:
+                subprocess.run(["scp", "-q", "%s:%s/%s" % (HOST, d, f), os.path.join(logs, f)], timeout=120)
+                print("[rejoin] saved %s/%s" % (logs, f), flush=True)
+            except Exception as e:  # noqa: BLE001
+                print("[rejoin] could not save %s: %s" % (f, e), flush=True)
     finally:
         _, tail = ssh("cd %s && grep -a -E 'IW4x32:|rror|xception|Rotating map|ShutdownGame|Server "
-                      "Initialization|changing map' server.log | tail -8; echo --- client console tail:; "
-                      "tail -20 client.log" % d, timeout=60)
+                      "Initialization|changing map|Match|End Game|endgame|disconnect' server.log | tail -12; "
+                      "echo --- client console tail:; tail -20 client.log" % d, timeout=60)
         ssh("cd %s && for f in .clipid .srvpid; do [ -f $f ] && kill $(cat $f) 2>/dev/null; done; sleep 5; "
             "for p in srv cli; do WINEPREFIX=$HOME/.wine-livetest-$p wineserver -k 2>/dev/null; done; "
             "cd ~ && rm -rf %s" % (d, d), timeout=120)
