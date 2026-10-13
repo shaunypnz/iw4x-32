@@ -90,6 +90,7 @@ scp's `client.log` + `server.log` into `.scratch/<tag>/` so the tails stop being
 |---|---|---|
 | `rj-nofix` | `rcon map mp_broadcast` at 128 s | client followed, slot 28 on mp_broadcast, 13 min, no walk-out |
 | `rj-endnofix` | `rcon set scr_dom_scorelimit 40` at 36 s - the match ended by itself: `==== ShutdownGame (1) ====`, `------ Server Initialization ------`, `iw4x32: 32-slot server - 32-player layout, patched clients only` at ~560 s | client followed, slot 28, clean to 12 min; `client.log` has **zero** `Disconnecting` / `timed out` / `EXE_` / `ERROR:` lines |
+| `rj-end-fix` | same, with the shipped round-5 build | same: rotation at ~560 s, client in slot 28 in the last minute, 0 walk-outs, 0 crash dumps |
 
 So a level change and a real end-of-match rotation do not reproduce it on this box. The one thing at match end
 that does touch slots >= 18 and fails is the 18-wide session layer, and it is visible in the server log:
