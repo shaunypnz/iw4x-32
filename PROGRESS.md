@@ -192,3 +192,4 @@ PROGRESS: 20% - done: map_rotate on the 1-map playlist is not a real level chang
 
 PROGRESS: 30% - done: CHECK with --bots 8 FAILs (client_slot 8, top>=18 impossible = BROKEN CHECK, working form --bots 28); rcon map_rotate is a no-op on a +map mp_rust server; live run log shows the client spammed userinfo (flood protection) then GAME_DROPPEDFORINACTIVITY before the rotation; running live_repro with the live command lines
 PROGRESS: 35% - done: rebuilt with the two fix hooks (build ok), re-read engine 0x5028B0/0x4B6010 to confirm the stubs / next: A/B live run - same recipe with the fix off (walk-out) then on
+PROGRESS: 45% - done: control run with the fix OFF reproduces the walk-out (EXE_SERVERKILLED -> party-gone -> @XBOXLIVE_PARTYENDED at 537 s) / next: same recipe with the fix ON

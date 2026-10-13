@@ -233,18 +233,6 @@ namespace Components
                                      : &Game::sharedUiInfo->playerClientNums[0];
     }
 
-    bool ProbeFile(const char* name)
-    {
-      char path[MAX_PATH];
-      auto len = GetModuleFileNameA(nullptr, path, MAX_PATH - 16);
-      if (!len)
-        return false;
-      while (len && path[len - 1] != '\\' && path[len - 1] != '/')
-        len--;
-      strcpy_s(path + len, MAX_PATH - len, name);
-      return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
-    }
-
     bool DisabledByFile()
     {
       char path[MAX_PATH];
@@ -578,142 +566,73 @@ namespace Components
     volatile DWORD s_back_4D9576 = 0x4D9576; // CL_Init
     volatile DWORD s_back_46056A = 0x46056A; // SV_DirectConnect: the protocol check
     volatile DWORD s_back_4CCF49 = 0x4CCF49; // CG_ParseServerinfo
-  volatile DWORD s_back_5028B5 = 0x5028B5; // party host timeout handler, after the stolen mov
-  volatile DWORD s_back_4A7CA5 = 0x4A7CA5; // TEMP probe: "party host gone", after the stolen mov
-  volatile DWORD s_back_4B6015 = 0x4B6015; // TEMP probe: disconnect-reason handler, after push esi / mov esi,[esp+8]
+    volatile DWORD s_back_5028B5 = 0x5028B5; // party host timeout handler, after the stolen mov
+    volatile DWORD s_back_4B6015 = 0x4B6015; // disconnect-reason handler, after push esi / mov esi,[esp+8]
 
-  volatile DWORD s_back_4BAA6E = 0x4BAA6E; // TEMP probe: end-game pending processor
-  volatile DWORD s_back_4CA1E5 = 0x4CA1E5; // TEMP probe: SV_EndGame
-  volatile DWORD s_back_474055 = 0x474055; // TEMP probe: end-game flag setter (no reason)
-  volatile DWORD s_back_6260A5 = 0x6260A5; // TEMP probe: end-game disconnect broadcast
-  volatile DWORD s_back_407C85 = 0x407C85; // TEMP probe: per-client end-game disconnect
-
-  bool g_Probe = false; // set when the iw4x32-probe file is next to iw4x.exe
-  bool g_NoFix = false; // TEMP DIAGNOSTIC: iw4x32-probe-nofix turns the two fixes off, probes stay on
-
-  // IW4x-32: the engine's party-host timeout handler (0x5028B0) is how a v2.0 client leaves a 32-slot game
-  // after a map change. The party/session layer is 18 members wide (see the 0x12 guards above), so a client
-  // sitting in a slot >= 18 is never registered with the session host and stops hearing from it; the
-  // keepalive at 0x4973A0 then runs its 12 s timeout and this handler ends the whole game with
-  // @XBOXLIVE_PARTYENDED (0x40FF00) - on a systemlink client the handler does nothing else. The level
-  // restart is what breaks the party contact, so the client is gone ~15 s after the change and the server
-  // only notices when it drops the now-silent client for inactivity. The game connection itself is plain
-  // UDP and has its own timeout, so while the client is actually connected to the game we ignore the party
-  // timeout; a server that really goes away still drops the client the normal way.
+  // IW4x-32: a client in a slot >= 18 is never registered with the party/session layer (it is 18 members
+  // wide, see the 0x12 guards above), so once the level restarts it stops hearing from the party host and
+  // the engine walks it out of the game: the end-of-match broadcast reaches it with the fallback reason
+  // "EXE_SERVERKILLED", the disconnect-reason handler (0x4B6010) does not know that reason, its unknown
+  // path runs the party-gone helper (0x4A7CA0), and that ends in the party host timeout handler (0x5028B0),
+  // which for a systemlink client is nothing but "@XBOXLIVE_PARTYENDED" - back to the lobby, with no error
+  // and no crash. The client does follow the map change and comes back; it is gone a few minutes later,
+  // which is what the live report saw. The game connection itself is plain UDP with its own timeout
+  // ("Server timed out", 0x5A8DF0), so for a LAN client that is in the game a party failure means nothing:
+  // both handlers are ignored for it, and a server that really goes away still drops it the normal way.
   constexpr unsigned int XLIVE_DVAR_PTR = 0x649E714; // dvar block, +0x10 = the systemlink flag
   constexpr unsigned int CL_CONNECTION_STATE = 0xB2C540; // IW4x reads the same global (see Menus.cpp)
 
   // A systemlink (LAN) client that is in, or is on its way into, a game: connstate CA_CONNECTING .. CA_ACTIVE.
-  // The party/session layer means nothing for such a client (an IW4x-32 server runs party_enable 0 and
-  // sv_lanonly 1, and a slot >= 18 player is never registered with the session host at all), while the game
-  // connection itself is plain UDP with its own timeout. So a party failure must not end the game for it -
-  // but a signed-in client, or one that is back at the menus, keeps the stock behaviour.
+  // An IW4x-32 server runs party_enable 0 and sv_lanonly 1, and a slot >= 18 player is never in the session
+  // layer at all - but a signed-in client, or one that is back at the menus, keeps the stock behaviour.
   bool LanClientInGame()
   {
-    if (g_NoFix)
-      return false;
-    return *reinterpret_cast<unsigned char*>(*reinterpret_cast<DWORD*>(XLIVE_DVAR_PTR) + 0x10) != 0 &&
-           *reinterpret_cast<int*>(CL_CONNECTION_STATE) >= 3; // CA_CONNECTING .. CA_ACTIVE
+    const auto dvars = *reinterpret_cast<volatile DWORD*>(XLIVE_DVAR_PTR);
+    return dvars != 0 && *reinterpret_cast<unsigned char*>(dvars + 0x10) != 0 &&
+           *reinterpret_cast<volatile int*>(CL_CONNECTION_STATE) >= Game::CA_CONNECTING;
   }
 
-  void __cdecl DumpParty(const char* tag, void* cl, void* retAddr); // below, diagnostic only
-
-  bool __cdecl PartyTimeoutSkip(void* party, void*, void* retAddr)
-  {
-    if (g_Probe)
-      DumpParty("party-timeout", party, retAddr);
-
-    return LanClientInGame();
-  }
-
-  // TEMP DIAGNOSTIC: print who calls the party host-timeout handler (0x5028B0), the one that ends the
-  // game with @XBOXLIVE_PARTYENDED. Enabled by an "iw4x32-probe" file next to iw4x.exe.
-  void __cdecl DumpParty(const char* tag, void* cl, void* retAddr)
-  {
-    auto c = static_cast<char*>(cl);
-    const auto syslink = *reinterpret_cast<unsigned char*>(*reinterpret_cast<DWORD*>(0x649E714) + 0x10);
-    const auto net = reinterpret_cast<unsigned char*>(c + 0x23C4); // cl->serverAddress (netadr_t)
-    Game::Com_Printf(0x10,
-                     "iw4x32-probe: %s from %p syslink %u f1848 %u f0C %u sessIdx %u f18 %u "
-                     "adr %u %d.%d.%d.%d:%u\n",
-                     tag, retAddr, syslink, *reinterpret_cast<int*>(c + 0x1848), *reinterpret_cast<int*>(c + 0xC),
-                     *reinterpret_cast<int*>(c + 0x1750), *reinterpret_cast<int*>(c + 0x18), net[0], net[6],
-                     net[7], net[8], net[9], *reinterpret_cast<unsigned short*>(net + 2));
-  }
-
-  void __cdecl PartyGoneProbe(void* cl, void* retAddr) { DumpParty("party-gone", cl, retAddr); }
-
-  // The engine's disconnect-reason handler (0x4B6010). The server's end-of-match broadcast can reach a
-  // client that has already reloaded the next map, and when the level restart wipes the pending end-game
-  // reason the server falls back to "EXE_SERVERKILLED", which this handler does not know: it then runs the
-  // party-gone path and raises Com_Error(2, EXE_DISCONNECTED), which throws the client out of the game.
-  // "hostquit" and "roundsdone" - the other ways a match ends - are simply ignored by the handler, so we
-  // treat a lost end-game reason the same way for a systemlink (LAN) client that is in the game.
+  // The end-of-match broadcast can reach a client that has already reloaded the next map, and the level
+  // restart wipes the pending end-game reason, so the server falls back to "EXE_SERVERKILLED". "hostquit"
+  // and "roundsdone" - the other ways a match ends on a server that stays up - the handler ignores outright,
+  // so a lost reason is ignored the same way for a LAN client that is in the game.
   bool __cdecl DisconnectReasonSkip(const char* reason)
   {
     return reason && strcmp(reason, "EXE_SERVERKILLED") == 0 && LanClientInGame();
   }
 
-  void __cdecl ReasonProbe(const char* reason)
-  {
-    if (g_Probe)
-      Game::Com_Printf(0x10, "iw4x32-probe: disconnect reason '%s'\n", reason ? reason : "(null)");
-  }
-
-  void __declspec(naked) DisconnectReason_Stub() // 0x4B6010: push esi / mov esi,[esp+8]
+  // 0x4B6010 disconnect-reason handler: return without running it (what its own "roundsdone" path does).
+  void __declspec(naked) DisconnectReason_Stub()
   {
     __asm
     {
-      push esi
-      mov esi, dword ptr [esp + 0x8] // param_1 = reason string
-      push esi
-      call ReasonProbe
-      add esp, 4
-      push esi
+      push dword ptr [esp + 0x4] // param_1 = reason string
       call DisconnectReasonSkip
       add esp, 4
       test al, al
       jnz disconnectReasonIgnored
-      pop esi
+      push esi                       // the stolen prologue
+      mov esi, dword ptr [esp + 0x8] // esi = reason
       jmp dword ptr [s_back_4B6015]
     disconnectReasonIgnored:
-      pop esi
       retn
     }
   }
 
-  // 0x5028B0: skip the party-host timeout handler for a LAN client that is still connected to the game.
+  // 0x5028B0 party host timeout handler: return without running it. For a systemlink client that handler
+  // only ends the game with @XBOXLIVE_PARTYENDED; the callers (the keepalive at 0x4973A0, the party-gone
+  // helper) carry on with their per-frame work afterwards.
   void __declspec(naked) PartyTimeout_Stub()
   {
     __asm
     {
-      push dword ptr [esp]         // return address - who asked for the timeout
-      push dword ptr [esp + 0xC]   // param_2
-      push dword ptr [esp + 0xC]   // param_1
-      call PartyTimeoutSkip
-      add esp, 0xC
-      test eax, eax
+      call LanClientInGame
+      test al, al
       jnz partyTimeoutIgnored
-      mov eax, dword ptr ds:[0x649E714]
+      mov eax, dword ptr ds:[0x649E714] // the stolen first instruction
       jmp dword ptr [s_back_5028B5]
     partyTimeoutIgnored:
       retn
-    }
-  }
-
-  void __declspec(naked) PartyGoneProbe_Stub()
-  {
-    __asm
-    {
-      pushad
-      mov eax, dword ptr [esp + 0x24]
-      push dword ptr [esp + 0x20]
-      push eax
-      call PartyGoneProbe
-      add esp, 8
-      popad
-      mov eax, dword ptr ds:[0x649E714]
-      jmp dword ptr [s_back_4A7CA5]
     }
   }
 
@@ -745,115 +664,6 @@ namespace Components
     {
       cmp byte ptr [edx + g_NeedSnapshot], 0
       jmp dword ptr [s_back_451968]
-    }
-  }
-
-  // TEMP DIAGNOSTICS (iw4x32-probe file): who ends the game on the server and who gets disconnected.
-  const char aSvEndGame[] = "sv-endgame";
-  const char aFlagNoReason[] = "endgame-flag-no-reason";
-
-  void __cdecl EndGameProbe(int flag, const char* reason, void* retAddr)
-  {
-    Game::Com_Printf(0x10, "iw4x32-probe: endgame flag %d reason '%s' from %p\n", flag,
-                     reason && *reason ? reason : "(empty)", retAddr);
-  }
-
-  // 0x4BAA69: inside the "end game pending" processor, right where it loads the reason string.
-  void __declspec(naked) EndGameProbe_Stub()
-  {
-    __asm
-    {
-      pushad
-      push dword ptr ds:[0x20987A8]              // pending reason string
-      push dword ptr ds:[0x20987A4]              // pending flag
-      push dword ptr [esp + 0x28]                // return address
-      call EndGameProbe
-      add esp, 0xC
-      popad
-      mov eax, dword ptr ds:[0x20987A8]
-      jmp dword ptr [s_back_4BAA6E]
-    }
-  }
-
-  void __cdecl FlagProbe(const char* what, void* retAddr)
-  {
-    Game::Com_Printf(0x10, "iw4x32-probe: %s from %p\n", what, retAddr);
-  }
-
-  // 0x4CA1E0: SV_EndGame - the stolen bytes are its call to the reason setter, so run it first.
-  void __declspec(naked) SvEndGameProbe_Stub()
-  {
-    __asm
-    {
-      pushad
-      mov eax, 0x627500 // SV_EndGame's own call to the reason setter - run it before probing
-      call eax
-      push dword ptr [esp + 0x20]
-      push offset aSvEndGame
-      call FlagProbe
-      add esp, 8
-      popad
-      jmp dword ptr [s_back_4CA1E5]
-    }
-  }
-
-  // 0x474050: the setter that raises the end-game flag with no reason -> EXE_SERVERKILLED.
-  void __declspec(naked) FlagNoReasonProbe_Stub()
-  {
-    __asm
-    {
-      pushad
-      push dword ptr [esp + 0x20]
-      push offset aFlagNoReason
-      call FlagProbe
-      add esp, 8
-      popad
-      mov eax, dword ptr ds:[0x1AD7934]
-      jmp dword ptr [s_back_474055]
-    }
-  }
-
-  void __cdecl BroadcastProbe(const char* reason)
-  {
-    Game::Com_Printf(0x10, "iw4x32-probe: endgame-broadcast reason '%s'\n",
-                     reason && *reason ? reason : "(empty)");
-  }
-
-  // 0x6260A0: the end-game disconnect broadcast (server side).
-  void __declspec(naked) BroadcastProbe_Stub()
-  {
-    __asm
-    {
-      pushad
-      push dword ptr [esp + 0x24] // reason
-      call BroadcastProbe
-      add esp, 4
-      popad
-      sub esp, 0x38
-      push ebx
-      push ebp
-      jmp dword ptr [s_back_6260A5]
-    }
-  }
-
-  void __cdecl DropOneProbe(char* client)
-  {
-    Game::Com_Printf(0x10, "iw4x32-probe: endgame-disconnect slot %d\n",
-                     *reinterpret_cast<int*>(client + 0x28));
-  }
-
-  // 0x407C80: the per-client end-game disconnect.
-  void __declspec(naked) DropOneProbe_Stub()
-  {
-    __asm
-    {
-      pushad
-      push dword ptr [esp + 0x24] // svs.clients[i]
-      call DropOneProbe
-      add esp, 4
-      popad
-      cmp dword ptr [esp + 8], 5
-      jmp dword ptr [s_back_407C85]
     }
   }
 
@@ -1055,19 +865,8 @@ namespace Components
 
     ApplyToEngine();
     InstallHooks();
-    Utils::Hook(0x5028B0, PartyTimeout_Stub, HOOK_JUMP).install()->quick();      // see PartyTimeoutSkip
-    Utils::Hook(0x4B6010, DisconnectReason_Stub, HOOK_JUMP).install()->quick();  // see DisconnectReasonSkip
-    g_NoFix = ProbeFile("iw4x32-probe-nofix"); // TEMP DIAGNOSTIC
-    if (ProbeFile("iw4x32-probe")) // TEMP DIAGNOSTIC: who ends the party on a 32-slot server?
-    {
-      g_Probe = true;
-      Utils::Hook(0x4A7CA0, PartyGoneProbe_Stub, HOOK_JUMP).install()->quick();
-      Utils::Hook(0x4BAA69, EndGameProbe_Stub, HOOK_JUMP).install()->quick();
-      Utils::Hook(0x4CA1E0, SvEndGameProbe_Stub, HOOK_JUMP).install()->quick();
-      Utils::Hook(0x474050, FlagNoReasonProbe_Stub, HOOK_JUMP).install()->quick();
-      Utils::Hook(0x6260A0, BroadcastProbe_Stub, HOOK_JUMP).install()->quick();
-      Utils::Hook(0x407C80, DropOneProbe_Stub, HOOK_JUMP).install()->quick();
-    }
+    Utils::Hook(0x5028B0, PartyTimeout_Stub, HOOK_JUMP).install()->quick();     // IW4x-32: see PartyTimeout_Stub
+    Utils::Hook(0x4B6010, DisconnectReason_Stub, HOOK_JUMP).install()->quick(); // IW4x-32: see DisconnectReason_Stub
     PointDllGlobals();
     AddVectoredExceptionHandler(1, &CrashReport); // IW4x-32: see CrashReport
     FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
