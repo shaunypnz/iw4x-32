@@ -111,7 +111,7 @@ def main():
                 break
         if not map_now:
             sys.exit("server never came up: %s" % st[-400:])
-        _, restarts0 = ssh("cd %s && grep -a -c 'Server Initialization' server.log" % d)
+        _, restarts0 = ssh("cd %s && grep -a -c -- '-slot server' server.log" % d)
         restarts0 = num(restarts0)
         print(stamp(), "server up, map %s, level restarts so far %d" % (map_now, restarts0), flush=True)
 
@@ -163,7 +163,7 @@ def main():
         walkouts = num(walk)
         _, tail = ssh("cd %s && grep -a -E '%s' client.log | tail -4" % (d, WALKOUT))
         _, follow = ssh("cd %s && grep -a -c -E '%s' client.log" % (d, FOLLOW))
-        _, restarts = ssh("cd %s && grep -a -c 'Server Initialization' server.log" % d)
+        _, restarts = ssh("cd %s && grep -a -c -- '-slot server' server.log" % d)
         _, st = ssh("cd %s && %s status" % (d, rcpy))
         alive = "map:" in st
         in_game = sum(humans[-4:]) >= 3          # still in the game over the last minute
@@ -178,9 +178,10 @@ def main():
             print("[rejoin] bad-case probe: the run must show the human GONE - in_game_last_min=%s"
                   % in_game, flush=True)
         else:
+            forced_other = a.change_at > 0 and not a.rotate_cmd and a.map_to != a.map
             ok = (alive and new_dumps == 0 and walkouts == 0 and in_game
                   and report["client_slot_max"] >= 18 and report["level_restarts"] >= 1
-                  and (a.change_at <= 0 or len(maps) >= 2))
+                  and (not forced_other or len(maps) >= 2))
         if tail:
             print("[rejoin] client walk-out lines:\n" + "\n".join("  " + l[:200] for l in tail.splitlines()),
                   flush=True)
@@ -196,8 +197,8 @@ def main():
             except Exception as e:  # noqa: BLE001
                 print("[rejoin] could not save %s: %s" % (f, e), flush=True)
     finally:
-        _, tail = ssh("cd %s && grep -a -E 'IW4x32:|rror|xception|Rotating map|ShutdownGame|Server "
-                      "Initialization|changing map|Match|End Game|endgame|disconnect' server.log | tail -12; "
+        _, tail = ssh("cd %s && grep -a -E 'IW4x32:|iw4x32:|rror|xception|Rotating map|ShutdownGame|Server "
+                      "Initialization|changing map|Match|End Game|endgame|disconnect|EXE_' server.log | tail -14; "
                       "echo --- client console tail:; tail -20 client.log" % d, timeout=60)
         ssh("cd %s && for f in .clipid .srvpid; do [ -f $f ] && kill $(cat $f) 2>/dev/null; done; sleep 5; "
             "for p in srv cli; do WINEPREFIX=$HOME/.wine-livetest-$p wineserver -k 2>/dev/null; done; "
