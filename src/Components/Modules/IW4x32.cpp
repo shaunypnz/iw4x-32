@@ -602,6 +602,17 @@ namespace Components
   constexpr unsigned int XLIVE_DVAR_PTR = 0x649E714; // dvar block, +0x10 = the systemlink flag
   constexpr unsigned int CL_CONNECTION_STATE = 0xB2C540; // IW4x reads the same global (see Menus.cpp)
 
+  // A systemlink (LAN) client that is in, or is on its way into, a game: connstate CA_CONNECTING .. CA_ACTIVE.
+  // The party/session layer means nothing for such a client (an IW4x-32 server runs party_enable 0 and
+  // sv_lanonly 1, and a slot >= 18 player is never registered with the session host at all), while the game
+  // connection itself is plain UDP with its own timeout. So a party failure must not end the game for it -
+  // but a signed-in client, or one that is back at the menus, keeps the stock behaviour.
+  bool LanClientInGame()
+  {
+    return *reinterpret_cast<unsigned char*>(*reinterpret_cast<DWORD*>(XLIVE_DVAR_PTR) + 0x10) != 0 &&
+           *reinterpret_cast<int*>(CL_CONNECTION_STATE) >= 3; // CA_CONNECTING .. CA_ACTIVE
+  }
+
   void __cdecl DumpParty(const char* tag, void* cl, void* retAddr); // below, diagnostic only
 
   bool __cdecl PartyTimeoutSkip(void* party, void*, void* retAddr)
@@ -609,10 +620,7 @@ namespace Components
     if (g_Probe)
       DumpParty("party-timeout", party, retAddr);
 
-    if (!*reinterpret_cast<unsigned char*>(*reinterpret_cast<DWORD*>(XLIVE_DVAR_PTR) + 0x10))
-      return false; // signed-in / online client: the party layer is real, leave it alone
-
-    return *reinterpret_cast<int*>(CL_CONNECTION_STATE) >= 5; // CA_CONNECTED .. CA_ACTIVE: still in the game
+    return LanClientInGame();
   }
 
   // TEMP DIAGNOSTIC: print who calls the party host-timeout handler (0x5028B0), the one that ends the
@@ -640,11 +648,7 @@ namespace Components
   // treat a lost end-game reason the same way for a systemlink (LAN) client that is in the game.
   bool __cdecl DisconnectReasonSkip(const char* reason)
   {
-    if (!reason || strcmp(reason, "EXE_SERVERKILLED") != 0)
-      return false;
-    if (!*reinterpret_cast<unsigned char*>(*reinterpret_cast<DWORD*>(XLIVE_DVAR_PTR) + 0x10))
-      return false; // signed-in / online client: the reason is real, leave it alone
-    return *reinterpret_cast<int*>(CL_CONNECTION_STATE) >= 5; // CA_CONNECTED .. CA_ACTIVE: still in the game
+    return reason && strcmp(reason, "EXE_SERVERKILLED") == 0 && LanClientInGame();
   }
 
   void __cdecl ReasonProbe(const char* reason)
