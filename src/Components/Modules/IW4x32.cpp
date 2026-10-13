@@ -207,10 +207,16 @@ namespace Components
       }
     }
 
+    bool ProbeFile(const char* name);
+    void __declspec(naked) PartyDropProbe_Stub();
+
     void InstallHooks()
     {
       for (const auto& h : IW4x32_Hooks)
         Utils::Hook(h.va, StubFor(h.stub), HOOK_JUMP).install()->quick(); // every name was checked by VerifyEngine
+
+      if (ProbeFile("iw4x32-probe")) // TEMP DIAGNOSTIC: who ends the party on a 32-slot server?
+        Utils::Hook(0x5028B0, PartyDropProbe_Stub, HOOK_JUMP).install()->quick();
     }
 
     // The DLL itself reaches some of these arrays through Game:: pointers - re-point them (dll_patches.json).
@@ -230,6 +236,18 @@ namespace Components
                                  : &Game::sharedUiInfo->playerNames[0];
       g_PlayerClientNums = nums >= 0 ? reinterpret_cast<int*>(g_Arrays[nums])
                                      : &Game::sharedUiInfo->playerClientNums[0];
+    }
+
+    bool ProbeFile(const char* name)
+    {
+      char path[MAX_PATH];
+      auto len = GetModuleFileNameA(nullptr, path, MAX_PATH - 16);
+      if (!len)
+        return false;
+      while (len && path[len - 1] != '\\' && path[len - 1] != '/')
+        len--;
+      strcpy_s(path + len, MAX_PATH - len, name);
+      return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
     }
 
     bool DisabledByFile()
@@ -565,6 +583,31 @@ namespace Components
     volatile DWORD s_back_4D9576 = 0x4D9576; // CL_Init
     volatile DWORD s_back_46056A = 0x46056A; // SV_DirectConnect: the protocol check
     volatile DWORD s_back_4CCF49 = 0x4CCF49; // CG_ParseServerinfo
+  volatile DWORD s_back_5028B5 = 0x5028B5; // TEMP probe: party host timeout handler, after the stolen mov
+
+  // TEMP DIAGNOSTIC: print who calls the party host-timeout handler (0x5028B0), the one that ends the
+  // game with @XBOXLIVE_PARTYENDED. Enabled by an "iw4x32-probe" file next to iw4x.exe.
+  void __cdecl PartyDropProbe(void* cl, void* retAddr)
+  {
+    Game::Com_Printf(0x10, "iw4x32-probe: party-timeout from %p partyId %d\n", retAddr,
+                     cl ? *reinterpret_cast<int*>(static_cast<char*>(cl) + 0x1848) : -1);
+  }
+
+  void __declspec(naked) PartyDropProbe_Stub()
+  {
+    __asm
+    {
+      pushad
+      mov eax, dword ptr [esp + 0x24] // param_1 = client_t*
+      push dword ptr [esp + 0x20]     // return address
+      push eax
+      call PartyDropProbe
+      add esp, 8
+      popad
+      mov eax, dword ptr ds:[0x649E714]
+      jmp dword ptr [s_back_5028B5]
+    }
+  }
 
   // SV_SendClientMessages 0x45181D: memset(needsSnapshot, 0, 18) -> our 32-byte global
   void __declspec(naked) SscmClear_Stub()
