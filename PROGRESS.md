@@ -198,3 +198,35 @@ PROGRESS: 70% - done: clean build (no probes) + CHECK runs: bots 8 FAIL only on 
 PROGRESS: 78% - found a probe bug (SvEndGameProbe_Stub pushed the return address, not the reason: [esp+0x20] after pushad should be [esp+0x24]) so the AB1 EXE_SERVERKILLED was probe-made; now running probe-free controls: nofix + rcon map_rotate at 2 min / next: same with the fixed build
 PROGRESS: 95% - done: probe-free controls (nofix, 13 min natural / 12 min with rcon map_rotate at 2 min) did NOT walk out - the failure is intermittent and the AB1 reason was probe-made (stack offset bug, now documented); final build + CHECK: bots 28 PASS, bots 8 FAIL on client_slot only; new tool iw4x32/tools/mapchange_rejoin.py; report rewritten with BROKEN CHECK at the top / next: probe-free reproduction of the symptom
 PROGRESS: 100% - fix in (2 client-side hooks, +71 lines), shipped DLL passes the live CHECK in its working form (bots 28, slot 28, 29 players across the change, 0 dumps); the --bots 8 CHECK cannot pass (BROKEN CHECK at the top of QWEN_REPORT.md); probe-free reproduction of the symptom is still owed - see NEXT ROUND
+
+---
+
+# Round 3-5 (2026-10-13/14) - `iw4x32/tasks/map_change_rejoin.md`: a v2.0 client does not come back after a map change
+
+Branch `fix/iw4x32-map-change`. Nothing pushed. Full write-up in `QWEN_REPORT.md` (rounds 2-5 at the top).
+
+## Status: fix in, both CHECK forms run. The field failure itself is still not reproducible without probes.
+
+| # | Item | State |
+|---|---|---|
+| 1 | reproduce with the CHECK command | **no** - and the CHECK as written cannot pass: its pass rule needs `client_slot >= 18`, and `--bots 8` puts the client in slot 8 in every build. Working form: `--bots 28` |
+| 2 | find the cause | done, statically: the walk-out is `0x40FF00` (`Disconnecting from ... (@XBOXLIVE_PARTYENDED)`), and every session-layer path that can end a running game reaches it through the party host timeout handler `0x5028B0` (keepalive `0x4973A0`, in-game session frame `0x4E5090`, party-gone helper `0x4A7CA0`). The session layer is 18 members wide, so an IW4x-32 player in a slot >= 18 is never in it |
+| 3 | fix in `src/Components/Modules/IW4x32.cpp` | done - `LanClientInGame()` + `PartyTimeout_Stub` on `0x5028B0`, marked `// IW4x-32:`. Round 4's second hook on `0x4B6010` was removed in round 5: a map rotation never sends a disconnect reason (`SV_SpawnServer` sends `loadingnewmap` and drops the rest with `sendReason = 0`), so that hook only ever fired on the test's own `rcon quit`, and it was swallowing kicks and `EXE_MATCHENDED` |
+| 4 | probe-free reproduction | not achieved. A real level change and a real end-of-match rotation (scorelimit) both leave the client in slot 28 for the whole 12-13 min window with the fix compiled out, `client.log` clean - and the same with the shipped build |
+| 5 | `iw4x32/tools/mapchange_rejoin.py` | added round 4, extended round 5: `--map-to`, `--scorelimit`, `--endgame-at`, `--kill-client-at`, and it saves `client.log` + `server.log` to `.scratch/<tag>/` |
+
+## Commands
+
+```
+bash $HOME/Projects/IW4x-32/tools-re/build_iw4x_fork.sh . Release      # -> build/bin/Win32/Release/iw4x.dll, md5 debf8fe5165a39463af0b2c441f4730a
+python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 28 --client --minutes 5 --map-change-at 2   # PASS
+python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 8 --client --minutes 5 --map-change-at 2    # the CHECK as written - fails on client_slot only
+python3 iw4x32/tools/mapchange_rejoin.py --bots 28 --minutes 12 --scorelimit 40 --change-at 0   # the match-end form - PASS, rotation at ~560 s, client slot 28, 0 walk-outs
+```
+
+## Open, found on the way (not this task)
+
+- At match end the 32-slot server logs `Error: In call to SetClientMatchData( "players", "18".."28", ... )` and
+  `Error: Unable to set last round results for client num: 25..28` - the match-data / session member layer is 18
+  wide (`0x627500` -> `0x48CB10` returns -1). Not fatal, but it is the match-end path failing on exactly the
+  slots this fork adds.

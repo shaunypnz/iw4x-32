@@ -2,7 +2,7 @@ BROKEN CHECK: `python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build
 
 - The pass rule needs `client_slot >= 18`. The test spawns the `--bots` bots **before** the client and the
   engine gives a connecting client the lowest free slot, so with `--bots 8` the client is in **slot 8** - in
-  every build, whatever the code does. Re-measured this round against the fixed build:
+  every build, whatever the code does. Re-measured against the round-5 build:
   `FAIL {'map_changed': True, 'players_after_map_change': 9, 'server_alive': True, 'players_max': 9, 'players_wanted': 9, 'new_crash_dumps': 0, 'client_slot': 8}`
   - every criterion passes except the slot rule. Nothing in this worktree can move that slot.
 - The bug itself only exists for a client in a slot >= 18 (the stock party/session layer is 18 members wide),
@@ -13,6 +13,112 @@ BROKEN CHECK: `python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build
   the failure. In the runs that reproduced it the client followed the change, came back, and only then walked
   out - 427 s, 479 s and 720 s later. `iw4x32/tools/mapchange_rejoin.py` (added this round) is the 12-minute
   form of the same scenario.
+
+---
+
+# Round 5 (2026-10-14) - the fix narrowed to one hook, and every way to print that last console line
+
+**What changed: the `0x4B6010` disconnect-reason hook from round 4 is gone; the `0x5028B0` party host timeout
+hook stays. Same protection against the field failure, without swallowing a LAN client's real disconnect
+reasons.** New DLL md5 `debf8fe5165a39463af0b2c441f4730a`.
+
+## 1. Why the 0x4B6010 hook came out
+
+Round 4 assumed the end-of-match rotation reaches the client with the fallback reason `EXE_SERVERKILLED`. It
+does not - the senders were read this round:
+
+- `SV_KillServer` (0x4F5BC0) is the only thing that broadcasts a reason to every client (`SV_BroadcastDisconnect`
+  0x6260A0 -> `disconnect <reason>`). Its four callers are `SV_Cmd_quit_f` (0x4D4000, reason
+  `EXE_SERVERKILLED`), the deferred restart handler (0x4806C0) and Com_Error cleanup (0x60BFD0, twice). **A map
+  rotation is not one of them**, and neither is a match end: `SV_SetEndGameReason` (0x4CA1E0) only records
+  `roundsdone` / `EXE_MATCHENDED` / `hostquit` / `EXE_MIGRATIONLIMIT` for the host-migration state machine.
+- A level change runs `SV_SpawnServer` (0x4A7120): it sends `loadingnewmap\n<map>\n<gametype>` to every client
+  in a state > 3 and drops the rest with `sendReason = 0`, i.e. with **no reason packet at all**. Measured with
+  the round-4 fix compiled out: `rcon map mp_broadcast` at 2 min, the client reloaded mp_broadcast, came back in
+  slot 28 and was still there 11 minutes later.
+- So `EXE_SERVERKILLED` reaches a client only when the server process quits - which is what our own runner does
+  at the end of every run. That is what the round-4 A/B actually stopped: the test's own `rcon quit`, not the
+  field failure. (Same reason the "walk-out at 427 s / 479 s / 720 s" table in round 2 is an artifact.)
+- What keeping the hook cost: for a LAN client in a game it skipped the whole handler, so
+  `EXE_PLAYERKICKED...`, `EXE_MATCHENDED`, `EXE_SERVERQUIT` and the migration reasons stopped working too.
+
+## 2. Every way the engine can print the field's last line
+
+`0x40FF00` is the walk-out: `Disconnecting from %s (%s) at time %i`, live-session teardown,
+`menu_xboxlive_lobby` / `menu_xboxlive_lobbyended` with `partyend_reason`. Its seven callers:
+
+| caller | what it is | through 0x5028B0? |
+|---|---|---|
+| `0x5028B0` (3 sites) | the party host timeout handler | it *is* it |
+| `0x413A70` | "leave the live session" - Com_Error cleanup (0x60BFD0, ERR_DROP / ERR_DISCONNECT), `Party_ClosePartyUI` (0x4C3A40), the `EXE_PLAYERKICKED` branch of the disconnect handler | no, but only ever after a Com_Error has already ended the game |
+| `0x4B84D0` | party migration timeout (needs session+0x0C set) | no |
+| `0x446980` | party migration cannot start | no |
+
+Everything that can end a game that is **already running** out of the session layer reaches the walk-out
+through `0x5028B0`:
+
+| path | trigger |
+|---|---|
+| `0x4973A0` keepalive | `Host has timed out. Disconnecting from %s host` - 12 s without a party-host heartbeat, 4 consecutive checks (`0x46BC00` always returns 0, so nothing suppresses it). Reached from `0x407740` only when the session says the client is **not in a game** (session+0x17F0 == 0) while it is still in a live session (+0x17FC != 0). It prints nothing after the walk-out - the only path that leaves the walk-out as the last line of the client log, which is what the field log looks like. |
+| `0x4E5090` -> `0x4C28D0` | the in-game session frame, when the session state changes |
+| `0x4A7CA0` | the "party gone" helper: from the disconnect-reason handler (0x4B6010, for any reason the client does not know), from the client's own connection timeout (0x5A8DF0, `Server timed out. Connection state is %i. Migration state is %i.`), and from Com_Error cleanup (0x60BFD0) |
+
+For a systemlink client `0x4A7CA0` is *nothing but* `call 0x5028B0`, so the one hook on `0x5028B0` covers all
+three of its entry points as well as the keepalive and the in-game frame. That is the whole fix:
+
+- `LanClientInGame()` - the `systemlink` dvar is on (`[0x649E714]+0x10`) **and** the local connection state is
+  `CA_CONNECTING .. CA_ACTIVE` (`0xB2C540`, the same global IW4x reads in `Menus.cpp`).
+- `PartyTimeout_Stub` at `0x5028B0` - return without running it. A LAN client hears from its server over plain
+  UDP with its own timeout (`0x5A8E80` -> `0x5A8DF0`), so a party failure tells it nothing; a server that
+  really goes away still drops it the normal way, with the normal error text.
+
+Reasons a server can put in a `disconnect` packet, against what `0x4B6010` knows. Known: `EXE_MATCHENDED`,
+`EXE_SERVERQUIT`, `EXE_MIGRATIONABORTED`, `EXE_MIGRATION_IN_PROGRESS`, `hostquit`, `EXE_PLAYERKICKED*`,
+`roundsdone`, `XBOXLIVE_SIGNINCHANGED`. Unknown - they fall through to the party-gone helper and then to
+`Com_Error(ERR_SERVERDISCONNECT)`: `EXE_TIMEDOUT` (`SV_CheckTimeouts` 0x4F6E80), `EXE_TRANSMITERROR`,
+`EXE_LOSTRELIABLECOMMANDS`, `EXE_SERVERMESSAGEOVERFLOW`, `EXE_UNPURECLIENTDETECTED`,
+`EXE_CANNOTVALIDATEPURECLIENT`, `EXE_DISCONNECTED`, `Too many stats changed at once` (0x4A1340, the per-client
+stat flush overflowing its 1024-byte packet). None of them appears in any of our runs' logs.
+
+## 3. Still not reproducible without probes - two more controls this round
+
+Both with `.scratch/iw4x-nofix.dll` (round-4 fix compiled out), 28 bots, human in slot 28, 12 min,
+`iw4x32/tools/mapchange_rejoin.py` (updated this round: `--map-to`, `--scorelimit`, `--endgame-at`, and it now
+scp's `client.log` + `server.log` into `.scratch/<tag>/` so the tails stop being the only evidence):
+
+| run | how the map changed | result |
+|---|---|---|
+| `rj-nofix` | `rcon map mp_broadcast` at 128 s | client followed, slot 28 on mp_broadcast, 13 min, no walk-out |
+| `rj-endnofix` | `rcon set scr_dom_scorelimit 40` at 36 s - the match ended by itself: `==== ShutdownGame (1) ====`, `------ Server Initialization ------`, `iw4x32: 32-slot server - 32-player layout, patched clients only` at ~560 s | client followed, slot 28, clean to 12 min; `client.log` has **zero** `Disconnecting` / `timed out` / `EXE_` / `ERROR:` lines |
+| `rj-end-fix` | same, with the shipped round-5 build | same: rotation at ~560 s, client in slot 28 in the last minute, 0 walk-outs, 0 crash dumps |
+
+So a level change and a real end-of-match rotation do not reproduce it on this box. The one thing at match end
+that does touch slots >= 18 and fails is the 18-wide session layer, and it is visible in the server log:
+
+```
+Error: In call to SetClientMatchData( "players", "18", "xuid", ... )     <- slots 18..28
+Error: Unable to set last round results for client num: 25 ... 28
+```
+
+(`0x627500` -> `0x48CB10` returns -1 because the session member array is 18 wide, the same layer the five
+0x12-bounded hooks keep slots >= 18 out of). It is not fatal here, but it is the match-end path failing on
+exactly the slots this fork adds, and it is worth its own task.
+
+## 4. CHECK, run against the shipped build (md5 `debf8fe5165a39463af0b2c441f4730a`)
+
+```
+aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 28 --client --minutes 5 --map-change-at 2
+  PASS {'map_changed': True, 'players_after_map_change': 29, 'server_alive': True, 'players_max': 29,
+        'players_wanted': 29, 'new_crash_dumps': 0, 'client_slot': 28}
+
+aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 8 --client --minutes 5 --map-change-at 2   # as written
+  FAIL {'map_changed': True, 'players_after_map_change': 9, 'server_alive': True, 'players_max': 9,
+        'players_wanted': 9, 'new_crash_dumps': 0, 'client_slot': 8}
+```
+
+The `--bots 8` form fails on one criterion only, `client_slot 8 < 18`, in every build (the bots are spawned
+before the client and the engine hands out the lowest free slot). The bug is a slot >= 18 bug, so the test has
+to put the client past 18: that is what `--bots 28` does, and it passes.
 
 ---
 
