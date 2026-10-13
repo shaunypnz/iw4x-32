@@ -216,6 +216,7 @@ Branch `fix/iw4x32-map-change`. Nothing pushed. Full write-up in `QWEN_REPORT.md
 | 5 | `iw4x32/tools/mapchange_rejoin.py` | added round 4, extended round 5: `--map-to`, `--scorelimit`, `--endgame-at`, `--kill-client-at`, and it saves `client.log` + `server.log` to `.scratch/<tag>/` |
 | 6 | round 6: make the guard and the layout visible in a client console | done - `PartyTimeoutSkip()` counts and prints the first three skips, `ServerInfo()` prints the layout every connect. The client console used to be silent about `iw4x32` for a whole session, which is why "did the client keep the 32-player layout?" had to be answered from saved logs |
 | 7 | round 6: `aiboi_test.py` lock | hazard, not fixed here (it is not in this repo): the `.lock` is held only for the folder copy, so two overlapping runs share `net_port 28971` and both reports come out wrong |
+| 8 | round 6: `mapchange_rejoin.py` restart counter | fixed - it grepped `-slot server` in `server.log`, which is block-buffered stdout that the teardown kills, so the restart line was often lost and a good run reported `level_restarts: 0` and FAILED. Now `restart_count()` also reads `server-v2.log` (which loses its tail the same way) and the count takes `max(log, maps_seen - 1)`. `--bots 28 --minutes 6 --change-at 2` -> PASS, `level_restarts: 1`, client slot 28, 0 walk-outs |
 
 ## Commands
 
@@ -224,7 +225,12 @@ bash $HOME/Projects/IW4x-32/tools-re/build_iw4x_fork.sh . Release      # -> buil
 python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 28 --client --minutes 5 --map-change-at 2   # PASS, client_slot 28
 python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 8 --client --minutes 5 --map-change-at 2    # the CHECK as written - fails on client_slot only (8)
 python3 iw4x32/tools/mapchange_rejoin.py --bots 28 --minutes 12 --scorelimit 40 --change-at 0   # the match-end form - PASS, rotation at ~560 s, client slot 28, 0 walk-outs
+python3 iw4x32/tools/mapchange_rejoin.py --bots 28 --minutes 6 --change-at 2                     # a real level change (mp_rust -> mp_broadcast) - PASS, level_restarts 1, 0 walk-outs
 ```
+
+The client console now carries the layout: `iw4x32: server is 32-slot - using the 32 player/body layout` at the
+connect and again after the level restart, with `Server changing map mp_broadcast, gametype dom` between them -
+the task's first suspect, answered off the console.
 
 ## Open, found on the way (not this task)
 

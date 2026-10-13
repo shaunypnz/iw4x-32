@@ -120,7 +120,15 @@ did change. The counter grepped `-slot server` in `server.log`, which is the ser
 block-buffers it and the teardown kills the process, so the tail - including the restart line - never reaches
 the file (the saved log holds the initial spawn only). Fixed to count in the engine's own line-by-line
 logfile (`+set logfile 1` -> `server-v2.log`) as well and keep the larger, through one `restart_count()` used
-by both the baseline and the final count. Re-run: `<numbers>`.
+by both the baseline and the final count. That alone was not enough - `server-v2.log` loses its tail the same
+way (baseline 2, final 2, restart 0, with the map name plainly changed) - so the count now also takes
+`maps_seen - 1`, the map name coming back different from `rcon status`, which is measured live. Re-run:
+
+```
+python3 iw4x32/tools/mapchange_rejoin.py --bots 28 --minutes 6 --change-at 2 --tag r7print3
+PASS {'server_alive': True, 'new_crash_dumps': 0, 'walkouts_in_client_log': 0, 'client_in_game_last_min': True,
+      'client_slot_max': 28, 'level_restarts': 1, 'maps_seen': ['mp_rust', 'mp_broadcast'], 'client_followed_change': True}
+```
 
 `NEXT ROUND: no` - the CHECK cannot pass as written, and the live failure is not reproducible in the harness.
 A next round is only worth running if the CHECK becomes `--bots 28` and/or the field client's
