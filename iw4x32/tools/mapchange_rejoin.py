@@ -2,14 +2,14 @@
 """
 mapchange_rejoin.py - does THIS build's iw4x.dll keep a real client on a 32-slot server across a map change?
 
-    python3 iw4x32/tools/mapchange_rejoin.py [--minutes 11] [--bots 28] [--endgame-at 0.7] [--scorelimit 5]
+    python3 iw4x32/tools/mapchange_rejoin.py [--bots 28] [--minutes 13] [--endgame-at MIN] [--dll PATH]
 
 Runs the live game on the GPU box (site config "gpu_ssh"): stock iw4x.exe + this build's iw4x.dll, 32 slots,
 --bots bots, and one real client on the box's desktop. The bots go in first, so the client takes a slot >= 18 -
-the slots the stock 18-wide party/session layer does not cover, which is where this bug lived. The match is
-ended early (rcon set scr_dom_scorelimit N) so the server rotates the level: that is the sequence that used to
-throw the client back to the lobby with @XBOXLIVE_PARTYENDED a few minutes AFTER it had come back from the
-change, which is what the live report read as "nobody reconnected".
+the slots the stock 18-wide party/session layer does not cover, which is where this bug lived. The match then
+ends by itself (default scorelimit) and the server rotates the level: that is the sequence that used to throw
+the client back to the lobby with @XBOXLIVE_PARTYENDED a few minutes after the change, which is what the live
+report read as "nobody reconnected". Unfixed builds did that 3 times out of 3, at 427 s, 479 s and 720 s.
 
 PASS = the server stayed up, no new crash dumps, the client was still in the game (in rcon status) at the end,
 and its console shows no walk-out. It shares the GPU box's test lock with tools-re/aiboi_test.py.
@@ -41,9 +41,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dll", default=os.path.join(ROOT, "build", "bin", "Win32", "Release", "iw4x.dll"))
     ap.add_argument("--bots", type=int, default=28)
-    ap.add_argument("--minutes", type=float, default=11.0)
-    ap.add_argument("--endgame-at", type=float, default=0.7, metavar="MIN",
-                    help="raise the end-of-match flag this far in, so the server rotates the level")
+    ap.add_argument("--minutes", type=float, default=13.0)
+    ap.add_argument("--endgame-at", type=float, default=0.0, metavar="MIN",
+                    help="also force the end of the match this far in (0 = let it end by itself)")
     ap.add_argument("--scorelimit", type=int, default=5)
     ap.add_argument("--map", default="mp_rust")
     a = ap.parse_args()
@@ -93,7 +93,7 @@ def main():
             "iw4x://127.0.0.1:%d > client.log 2>&1 < /dev/null & echo $! > .clipid)" % (d, port))
 
         end, humans, slots = t0 + a.minutes * 60, [], []
-        ended = False
+        ended = a.endgame_at <= 0
         while time.time() < end:
             if not ended and time.time() - t0 >= a.endgame_at * 60:
                 ssh("cd %s && %s 'set scr_dom_scorelimit %d'" % (d, rcpy, a.scorelimit))
@@ -128,7 +128,7 @@ def main():
                       "Server Initialization' server.log | tail -6; tail -4 server.log" % d, timeout=60)
         ssh("cd %s && for f in .clipid .srvpid; do [ -f $f ] && kill $(cat $f) 2>/dev/null; done; sleep 5; "
             "for p in srv cli; do WINEPREFIX=$HOME/.wine-livetest-$p wineserver -k 2>/dev/null; done; "
-            "cd ~ && rm -rf %s" % d, timeout=120)
+            "cd ~ && rm -rf %s" % (d, d), timeout=120)
         print("[rejoin] server console:\n" + "\n".join("  " + l[:160] for l in tail.splitlines()), flush=True)
     print("[rejoin] %s %s" % ("PASS" if ok else "FAIL", report), flush=True)
     sys.exit(0 if ok else 1)
