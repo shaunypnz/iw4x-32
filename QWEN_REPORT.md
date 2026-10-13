@@ -83,15 +83,30 @@ Why: the stock engine sizes the XLive session/party layer for 18 (`ClientInfo us
 `RegisteredUser internalRegisteredUsers[18]`, `PartyMember partyMembers[18]` at `party+0x1D8`, and the member
 loops are hard-bounded `i < 0x12`). IW4x-32 does not enlarge those - it keeps slots >= 18 out of them with five
 hooks (`SV_UserinfoChanged` 0x401AAD, `SV_DropClient` 0x4C17DC, `Session_GetXuidForSlot` 0x487C10,
-`Session_SetClientAddress` 0x49ABB0, PartyHost member teardown 0x4D3D00). The client's own party bookkeeping
-indexes those tables with the *game* clientNum, so for a client in slot 28 its own entry is never written -
-`Session_SetClientAddress` (0x49ABB0, called from the party frame code at 0x5B03AC and 0x5B1C31/0x5B1C4A) is
-where its address would land. The party host address stays zero, the host goes "gone", and the engine's
-host-timeout handler at **0x5028B0** takes its silent branch
-(`systemlink != 0 || *(cl + 0x1848 /*partyId*/) == 1` -> `CL_Drop("@XBOXLIVE_PARTYENDED")`, no console print).
+`Session_SetClientAddress` 0x49ABB0, PartyHost member teardown 0x4D3D00).
 
-Probe: a temporary hook on 0x5028B0 (enabled by an `iw4x32-probe` file next to `iw4x.exe`) prints the caller of
-that handler - see below.
+### The probe (temporary hook, `iw4x32-probe` file next to `iw4x.exe`)
+
+Hooking the party host-timeout handler (0x5028B0), the "party host gone" helper (0x4A7CA0) and the
+disconnect-reason handler (0x4B6010) gives the exact chain, every time:
+
+```
+iw4x32-probe: disconnect reason '<the reason the server sent>'
+iw4x32-probe: party-gone  from 004B60FC syslink 1 f1848 0 f0C 0 sessIdx 0 f18 0 adr 0 0.0.0.0:0
+iw4x32-probe: party-timeout from 004A7CE4 ...
+Disconnecting from 00000000.000000000000:0 (@XBOXLIVE_PARTYENDED) at time 611469
+```
+
+- `0x4B60FC` is the `call 0x4A7CA0` inside the engine's **disconnect-reason handler** (`0x4B6010`): it knows
+  `EXE_MATCHENDED`, `EXE_SERVERQUIT`, `EXE_MIGRATIONABORTED`, `EXE_MIGRATION_IN_PROGRESS`, `hostquit`,
+  `EXE_PLAYERKICKED`, `roundsdone`, `XBOXLIVE_SIGNINCHANGED` - **anything else falls through to the party-gone
+  path**, which ends the game with `@XBOXLIVE_PARTYENDED`.
+- `syslink 1`: the `systemlink` dvar is on, so `0x5028B0` takes its first branch and drops without printing
+  anything - that is why the client log shows no reason at all.
+- **Caveat found the hard way**: in the runs above the reason was the test's own `rcon quit` at the end of the
+  run. The `@XBOXLIVE_PARTYENDED` in the table above is that artifact, not the live failure. The live client
+  left the same way (through 0x4B6010) while its server was still up, so what matters is *which reason string*
+  the server sends - the probe now prints it.
 
 ---
 
