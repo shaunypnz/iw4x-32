@@ -201,26 +201,28 @@ PROGRESS: 100% - fix in (2 client-side hooks, +71 lines), shipped DLL passes the
 
 ---
 
-# Round 3-5 (2026-10-13/14) - `iw4x32/tasks/map_change_rejoin.md`: a v2.0 client does not come back after a map change
+# Round 6 (2026-10-14) - `iw4x32/tasks/map_change_rejoin.md`: a v2.0 client does not come back after a map change
 
-Branch `fix/iw4x32-map-change`. Nothing pushed. Full write-up in `QWEN_REPORT.md` (rounds 2-5 at the top).
+Branch `fix/iw4x32-map-change`. Nothing pushed. Full write-up in `QWEN_REPORT.md` (round 6 at the top, rounds 2-5 below).
 
-## Status: fix in, both CHECK forms run. The field failure itself is still not reproducible without probes.
+## Status: fix in, both CHECK forms run again on the round-6 build. The field failure itself is still not reproducible without probes.
 
 | # | Item | State |
 |---|---|---|
-| 1 | reproduce with the CHECK command | **no** - and the CHECK as written cannot pass: its pass rule needs `client_slot >= 18`, and `--bots 8` puts the client in slot 8 in every build. Working form: `--bots 28` |
+| 1 | reproduce with the CHECK command | **no** - and the CHECK as written cannot pass: its pass rule needs `client_slot >= 18`, and `--bots 8` puts the client in slot 8 in every build (round 6 read the slot scan in `SV_DirectConnect` `0x46056A`: lowest free slot, and our hook there never picks one). Working form: `--bots 28` |
 | 2 | find the cause | done, statically: the walk-out is `0x40FF00` (`Disconnecting from ... (@XBOXLIVE_PARTYENDED)`), and every session-layer path that can end a running game reaches it through the party host timeout handler `0x5028B0` (keepalive `0x4973A0`, in-game session frame `0x4E5090`, party-gone helper `0x4A7CA0`). The session layer is 18 members wide, so an IW4x-32 player in a slot >= 18 is never in it |
-| 3 | fix in `src/Components/Modules/IW4x32.cpp` | done - `LanClientInGame()` + `PartyTimeout_Stub` on `0x5028B0`, marked `// IW4x-32:`. Round 4's second hook on `0x4B6010` was removed in round 5: a map rotation never sends a disconnect reason (`SV_SpawnServer` sends `loadingnewmap` and drops the rest with `sendReason = 0`), so that hook only ever fired on the test's own `rcon quit`, and it was swallowing kicks and `EXE_MATCHENDED` |
-| 4 | probe-free reproduction | not achieved. A real level change and a real end-of-match rotation (scorelimit) both leave the client in slot 28 for the whole 12-13 min window with the fix compiled out, `client.log` clean - and the same with the shipped build |
+| 3 | fix in `src/Components/Modules/IW4x32.cpp` | done - `LanClientInGame()` + `PartyTimeout_Stub` on `0x5028B0`, marked `// IW4x-32:`. Round 4's second hook on `0x4B6010` was removed in round 5 and round 6 proved the removal right: the `EXE_SERVERKILLED` fallback needs the pending end-game flag set without a reason, and the only setter that does that (`0x474050`) is called only from `CL_ConnectFromParty` and only while `sv_running` |
+| 4 | probe-free reproduction | not achieved. A real level change and a real end-of-match rotation (scorelimit) both leave the client in slot 28 for the whole 12-13 min window with the fix compiled out, `client.log` clean - and the same with the shipped build. Round 6: all six probe-free walk-outs in `.scratch` sit exactly 3 s before the runner's own `rcon quit`, one of them with the client in slot 0 |
 | 5 | `iw4x32/tools/mapchange_rejoin.py` | added round 4, extended round 5: `--map-to`, `--scorelimit`, `--endgame-at`, `--kill-client-at`, and it saves `client.log` + `server.log` to `.scratch/<tag>/` |
+| 6 | round 6: make the guard and the layout visible in a client console | done - `PartyTimeoutSkip()` counts and prints the first three skips, `ServerInfo()` prints the layout every connect. The client console used to be silent about `iw4x32` for a whole session, which is why "did the client keep the 32-player layout?" had to be answered from saved logs |
+| 7 | round 6: `aiboi_test.py` lock | hazard, not fixed here (it is not in this repo): the `.lock` is held only for the folder copy, so two overlapping runs share `net_port 28971` and both reports come out wrong |
 
 ## Commands
 
 ```
-bash $HOME/Projects/IW4x-32/tools-re/build_iw4x_fork.sh . Release      # -> build/bin/Win32/Release/iw4x.dll, md5 debf8fe5165a39463af0b2c441f4730a
-python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 28 --client --minutes 5 --map-change-at 2   # PASS
-python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 8 --client --minutes 5 --map-change-at 2    # the CHECK as written - fails on client_slot only
+bash $HOME/Projects/IW4x-32/tools-re/build_iw4x_fork.sh . Release      # -> build/bin/Win32/Release/iw4x.dll, md5 fe61d12d69a524eb39760ced1bf42da9
+python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 28 --client --minutes 5 --map-change-at 2   # PASS, client_slot 28
+python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 8 --client --minutes 5 --map-change-at 2    # the CHECK as written - fails on client_slot only (8)
 python3 iw4x32/tools/mapchange_rejoin.py --bots 28 --minutes 12 --scorelimit 40 --change-at 0   # the match-end form - PASS, rotation at ~560 s, client slot 28, 0 walk-outs
 ```
 

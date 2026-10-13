@@ -4,7 +4,8 @@ BROKEN CHECK: `python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build
   engine gives a connecting client the lowest free slot, so with `--bots 8` the client is in **slot 8** - in
   every build, whatever the code does. Re-measured against the round-5 build:
   `FAIL {'map_changed': True, 'players_after_map_change': 9, 'server_alive': True, 'players_max': 9, 'players_wanted': 9, 'new_crash_dumps': 0, 'client_slot': 8}`
-  - every criterion passes except the slot rule. Nothing in this worktree can move that slot.
+  - every criterion passes except the slot rule. Nothing in this worktree can move that slot. Re-measured
+  round 6 on the round-6 build: identical, `client_slot: 8` (see round 6 for the `SV_DirectConnect` slot scan).
 - The bug itself only exists for a client in a slot >= 18 (the stock party/session layer is 18 members wide),
   so the test also needs enough bots to push the client out of that layer. **Working form:**
   `python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 28 --client --minutes 5 --map-change-at 2`
@@ -13,6 +14,94 @@ BROKEN CHECK: `python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build
   the failure. In the runs that reproduced it the client followed the change, came back, and only then walked
   out - 427 s, 479 s and 720 s later. `iw4x32/tools/mapchange_rejoin.py` (added this round) is the 12-minute
   form of the same scenario.
+
+---
+
+# Round 6 (2026-10-14) - the CHECK re-measured, the last two static holes closed, and the client console made to talk
+
+HEAD `8fb54f4` + this round's change. New DLL md5 `fe61d12d69a524eb39760ced1bf42da9`. Nothing pushed.
+
+## 1. The CHECK, re-measured on this round's build
+
+```
+python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 8 --client --minutes 5 --map-change-at 2
+FAIL {'map_changed': True, 'players_after_map_change': 9, 'server_alive': True, 'players_max': 9, 'players_wanted': 9, 'new_crash_dumps': 0, 'client_slot': 8}
+python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 28 --client --minutes 5 --map-change-at 2
+PASS {'map_changed': True, 'players_after_map_change': 29, 'server_alive': True, 'players_max': 29, 'players_wanted': 29, 'new_crash_dumps': 0, 'client_slot': 28}
+```
+
+Why `--bots 8` can never pass, now read off the engine instead of inferred. `aiboi_test.py:65` issues
+`spawnBot <bots>` before line 69 starts the client, and `SV_DirectConnect` (stock `iw4x.exe`, `0x46056A`) gives
+a connecting client the lowest free slot:
+
+```
+slot = 0; p = svs.clients;                        // DAT_07100000, client_s stride 0x299e4
+do { if (p->state == 0) break; slot++; p += 0x299e4; } while (slot < svs.maxclients);   // DAT_031d938C
+```
+
+8 bots occupy slots 0..7, so the client is in slot 8 and `top >= 18` (line 100) is unreachable. This fork's
+only `SV_DirectConnect` hook (`0x460561`) accepts or rejects a connect - it never picks a slot - so no change
+in this worktree can move it. `--bots 28` is the one-word fix, and it is also the only form that puts the
+client in the slot range the bug lives in.
+
+**Harness hazard, found while measuring:** the `.lock` taken at `aiboi_test.py:52` is held by a remote shell
+that exits as soon as the game folder is copied, so it serialises setup only, not the run. Two overlapping
+runs then both use `net_port 28971`: the second server never gets the port, its rcon commands reach the *first*
+server, and both reports come out wrong. Measured on the pair I started by accident - the 8-bot run reported
+`players_max: 32` (the other run's `spawnBot 28` landed on its server) and the 28-bot run reported
+`client_slot: 8` with `server_alive: False` (its client joined the other run's 8-bot server). The two numbers
+above are from runs started strictly one after the other.
+
+## 2. The two static holes that were still open, closed
+
+**(a) Can a map change ever make the server broadcast `disconnect EXE_SERVERKILLED`?** No - settled with a
+write census rather than a caller list. The pending end-game latch is a flag at `0x20987A4` and a reason at
+`0x20987A8`; the whole exe touches them at ten sites:
+
+| site | what it does |
+|---|---|
+| `0x474050` | sets the flag with **no reason**, and only while `sv_running` (`0x1AD7934` is the `sv_running` dvar block, registered at `0x60AFA2`) |
+| `0x4CA1E7` | `SV_SetEndGameReason`: flag + reason together |
+| `0x6275B0 / C7 / F0 / FC` | the reason chooser - `roundsdone`, `EXE_MIGRATIONLIMIT`, `hostquit`, `EXE_MATCHENDED`; it always leaves a reason |
+| `0x4BAA62 / 6A / 89 / 90` | the processor - reason null or empty -> `"EXE_SERVERKILLED"` -> `0x4806C0` -> `SV_KillServer` |
+
+`0x474050` has exactly one caller, `CL_ConnectFromParty` (`0x433D30`), and does nothing unless `sv_running`.
+So the fallback string is only reachable on a machine running a server of its own, and a dedicated server's
+end-of-match broadcast always carries a real reason. Round 5's removal of the `0x4B6010` hook stands.
+
+**(b) Does a level restart reset the client arrays with a hardcoded 18?** No. `SV_SpawnServer` (`0x4A7120`)
+walks `svs.clients` in three loops, every one bounded by `svs.maxclients` (`0x31D938C`). The only 18 in the
+function is the session layer's member capacity - `Session_Init(0x21, party_maxplayers, 18 - party_maxplayers)`
+- and that structure really is 18 wide, which is why the fork guards slots >= 18 instead of widening it.
+
+**(c) The task's first suspect, the client switching layout on a map change, is ruled out by the client
+consoles.** `SetLayout` prints every time it flips. Across the 12 saved client logs - including the ones that
+did a real level change (`rcon map mp_broadcast`) and a real end-of-match rotation (scorelimit) - there is not
+one `iw4x32:` line, i.e. the client never left the 32-player layout, while the same logs do show
+`Server changing map <map>, gametype <gt>`. The client follows the change and keeps its layout.
+
+**(d) Every walk-out in the saved logs is the runner's own `rcon quit`.** All six probe-free ones sit exactly
+3 s before the runner's quit line: `live1` 479 s vs quit 504 s (client up at 22 s), `live2` 427 vs 461,
+`expB28` 612 vs 646, `expE28` 609 vs 643, `expF28` 720 vs 754, `expA8` 668 vs 702. `expA8` had the client in
+**slot 0**, which the 18-wide session layer cannot explain at all. The harness has still never produced the
+live failure; the shipped guard rests on the static path, not on a reproduction.
+
+## 3. What changed in the code (`src/Components/Modules/IW4x32.cpp`, both marked `// IW4x-32:`)
+
+- `PartyTimeoutSkip()` + `g_PartyTimeoutSkips` - the `0x5028B0` guard now counts what it swallows and prints
+  `iw4x32: ignored a party host timeout - the game connection is plain UDP` for the first three (the keepalive
+  can ask again every frame, hence the cap). Without this the guard is invisible in the field: a report that
+  says "the client left after the map change" with no such line means the walk-out came through a path the
+  guard does not cover - the information the last four rounds have been missing.
+- `ServerInfo()` - prints which layout the server asked for on every serverinfo parse, not only when it
+  changes, so "did the client keep the 32-player layout across the restart?" is readable straight off a client
+  console instead of only off saved logs.
+
+No game-path behaviour change: same hooks, same conditions.
+
+`NEXT ROUND: no` - the CHECK cannot pass as written, and the live failure is not reproducible in the harness.
+A next round is only worth running if the CHECK becomes `--bots 28` and/or the field client's
+`main/console_mp.log` from the failing server turns up.
 
 ---
 
