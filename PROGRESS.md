@@ -194,3 +194,4 @@ PROGRESS: 30% - done: CHECK with --bots 8 FAILs (client_slot 8, top>=18 impossib
 PROGRESS: 35% - done: rebuilt with the two fix hooks (build ok), re-read engine 0x5028B0/0x4B6010 to confirm the stubs / next: A/B live run - same recipe with the fix off (walk-out) then on
 PROGRESS: 45% - done: control run with the fix OFF reproduces the walk-out (EXE_SERVERKILLED -> party-gone -> @XBOXLIVE_PARTYENDED at 537 s) / next: same recipe with the fix ON
 PROGRESS: 60% - done: A/B on the live box - fix OFF walks the client out (PARTYENDED 537 s), fix ON keeps it in slot 28 for 11 min across the level restart; probes removed from the code / next: rebuild clean, run both CHECK commands
+PROGRESS: 70% - done: clean build (no probes) + CHECK runs: bots 8 FAIL only on client_slot 8 (unreachable rule), bots 28 PASS / next: iw4x32/tools/mapchange_rejoin.py A/B - control with the two hooks removed, then the fixed build
