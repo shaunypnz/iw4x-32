@@ -183,3 +183,18 @@ exe an older IW4x-32 replaced is put back from `backup/` instead.
   bridge kit carrying the *official* exe, or leaving `main/latest.json` at v1.x and announcing v2.0 as a
   download — are written out in `QWEN_REPORT.md` §7.
 
+
+PROGRESS: 5% - done: baseline read of IW4x32.cpp + test script, report skeleton / next: reproduce map-change failure with client console captured
+
+PROGRESS: 10% - done: 8-bot run (client came back, slot 8 - bug needs slot >=18), found client console path / next: reproduce with 28 bots + client in slot 28
+
+PROGRESS: 20% - done: map_rotate on the 1-map playlist is not a real level change (no SV_SpawnServer, nobody dropped); client follows map mp_broadcast fine; probing the server console for a real level restart
+
+PROGRESS: 30% - done: CHECK with --bots 8 FAILs (client_slot 8, top>=18 impossible = BROKEN CHECK, working form --bots 28); rcon map_rotate is a no-op on a +map mp_rust server; live run log shows the client spammed userinfo (flood protection) then GAME_DROPPEDFORINACTIVITY before the rotation; running live_repro with the live command lines
+PROGRESS: 35% - done: rebuilt with the two fix hooks (build ok), re-read engine 0x5028B0/0x4B6010 to confirm the stubs / next: A/B live run - same recipe with the fix off (walk-out) then on
+PROGRESS: 45% - done: control run with the fix OFF reproduces the walk-out (EXE_SERVERKILLED -> party-gone -> @XBOXLIVE_PARTYENDED at 537 s) / next: same recipe with the fix ON
+PROGRESS: 60% - done: A/B on the live box - fix OFF walks the client out (PARTYENDED 537 s), fix ON keeps it in slot 28 for 11 min across the level restart; probes removed from the code / next: rebuild clean, run both CHECK commands
+PROGRESS: 70% - done: clean build (no probes) + CHECK runs: bots 8 FAIL only on client_slot 8 (unreachable rule), bots 28 PASS / next: iw4x32/tools/mapchange_rejoin.py A/B - control with the two hooks removed, then the fixed build
+PROGRESS: 78% - found a probe bug (SvEndGameProbe_Stub pushed the return address, not the reason: [esp+0x20] after pushad should be [esp+0x24]) so the AB1 EXE_SERVERKILLED was probe-made; now running probe-free controls: nofix + rcon map_rotate at 2 min / next: same with the fixed build
+PROGRESS: 95% - done: probe-free controls (nofix, 13 min natural / 12 min with rcon map_rotate at 2 min) did NOT walk out - the failure is intermittent and the AB1 reason was probe-made (stack offset bug, now documented); final build + CHECK: bots 28 PASS, bots 8 FAIL on client_slot only; new tool iw4x32/tools/mapchange_rejoin.py; report rewritten with BROKEN CHECK at the top / next: probe-free reproduction of the symptom
+PROGRESS: 100% - fix in (2 client-side hooks, +71 lines), shipped DLL passes the live CHECK in its working form (bots 28, slot 28, 29 players across the change, 0 dumps); the --bots 8 CHECK cannot pass (BROKEN CHECK at the top of QWEN_REPORT.md); probe-free reproduction of the symptom is still owed - see NEXT ROUND
