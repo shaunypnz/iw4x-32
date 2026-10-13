@@ -577,9 +577,36 @@ namespace Components
     volatile DWORD s_back_4D9576 = 0x4D9576; // CL_Init
     volatile DWORD s_back_46056A = 0x46056A; // SV_DirectConnect: the protocol check
     volatile DWORD s_back_4CCF49 = 0x4CCF49; // CG_ParseServerinfo
-  volatile DWORD s_back_5028B5 = 0x5028B5; // TEMP probe: party host timeout handler, after the stolen mov
+  volatile DWORD s_back_5028B5 = 0x5028B5; // party host timeout handler, after the stolen mov
   volatile DWORD s_back_4A7CA5 = 0x4A7CA5; // TEMP probe: "party host gone", after the stolen mov
   volatile DWORD s_back_4B6015 = 0x4B6015; // TEMP probe: disconnect-reason handler, after push esi / mov esi,[esp+8]
+
+  bool g_Probe = false; // set when the iw4x32-probe file is next to iw4x.exe
+
+  // IW4x-32: the engine's party-host timeout handler (0x5028B0) is how a v2.0 client leaves a 32-slot game
+  // after a map change. The party/session layer is 18 members wide (see the 0x12 guards above), so a client
+  // sitting in a slot >= 18 is never registered with the session host and stops hearing from it; the
+  // keepalive at 0x4973A0 then runs its 12 s timeout and this handler ends the whole game with
+  // @XBOXLIVE_PARTYENDED (0x40FF00) - on a systemlink client the handler does nothing else. The level
+  // restart is what breaks the party contact, so the client is gone ~15 s after the change and the server
+  // only notices when it drops the now-silent client for inactivity. The game connection itself is plain
+  // UDP and has its own timeout, so while the client is actually connected to the game we ignore the party
+  // timeout; a server that really goes away still drops the client the normal way.
+  constexpr unsigned int XLIVE_DVAR_PTR = 0x649E714; // dvar block, +0x10 = the systemlink flag
+  constexpr unsigned int CL_CONNECTION_STATE = 0xB2C540; // IW4x reads the same global (see Menus.cpp)
+
+  void __cdecl DumpParty(const char* tag, void* cl, void* retAddr); // below, diagnostic only
+
+  bool __cdecl PartyTimeoutSkip(void* party, void* localClientNum, void* retAddr)
+  {
+    if (g_Probe)
+      DumpParty("party-timeout", party, retAddr);
+
+    if (!*reinterpret_cast<unsigned char*>(*reinterpret_cast<DWORD*>(XLIVE_DVAR_PTR) + 0x10))
+      return false; // signed-in / online client: the party layer is real, leave it alone
+
+    return *reinterpret_cast<int*>(CL_CONNECTION_STATE) >= 5; // CA_CONNECTED .. CA_ACTIVE: still in the game
+  }
 
   // TEMP DIAGNOSTIC: print who calls the party host-timeout handler (0x5028B0), the one that ends the
   // game with @XBOXLIVE_PARTYENDED. Enabled by an "iw4x32-probe" file next to iw4x.exe.
@@ -596,7 +623,6 @@ namespace Components
                      net[7], net[8], net[9], *reinterpret_cast<unsigned short*>(net + 2));
   }
 
-  void __cdecl PartyDropProbe(void* cl, void* retAddr) { DumpParty("party-timeout", cl, retAddr); }
   void __cdecl PartyGoneProbe(void* cl, void* retAddr) { DumpParty("party-gone", cl, retAddr); }
 
   // TEMP DIAGNOSTIC: the engine's disconnect-reason handler (0x4B6010) - print the reason the server sent.
@@ -619,19 +645,22 @@ namespace Components
     }
   }
 
-  void __declspec(naked) PartyDropProbe_Stub()
+  // 0x5028B0: skip the party-host timeout handler for a LAN client that is still connected to the game.
+  void __declspec(naked) PartyTimeout_Stub()
   {
     __asm
     {
-      pushad
-      mov eax, dword ptr [esp + 0x24] // param_1 = client_t*
-      push dword ptr [esp + 0x20]     // return address
-      push eax
-      call PartyDropProbe
-      add esp, 8
-      popad
+      push dword ptr [esp]         // return address - who asked for the timeout
+      push dword ptr [esp + 0xC]   // param_2
+      push dword ptr [esp + 0xC]   // param_1
+      call PartyTimeoutSkip
+      add esp, 0xC
+      test eax, eax
+      jnz partyTimeoutIgnored
       mov eax, dword ptr ds:[0x649E714]
       jmp dword ptr [s_back_5028B5]
+    partyTimeoutIgnored:
+      retn
     }
   }
 
@@ -880,9 +909,10 @@ namespace Components
 
     ApplyToEngine();
     InstallHooks();
+    Utils::Hook(0x5028B0, PartyTimeout_Stub, HOOK_JUMP).install()->quick(); // see PartyTimeoutSkip
     if (ProbeFile("iw4x32-probe")) // TEMP DIAGNOSTIC: who ends the party on a 32-slot server?
     {
-      Utils::Hook(0x5028B0, PartyDropProbe_Stub, HOOK_JUMP).install()->quick();
+      g_Probe = true;
       Utils::Hook(0x4A7CA0, PartyGoneProbe_Stub, HOOK_JUMP).install()->quick();
       Utils::Hook(0x4B6010, ReasonProbe_Stub, HOOK_JUMP).install()->quick();
     }
