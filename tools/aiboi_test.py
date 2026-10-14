@@ -11,8 +11,8 @@ What the live run does (one test at a time on the box - a lock file there; a sec
   2. starts a 32-slot LAN dedicated server under Wine (its own Wine prefixes: the live test game and anything
      else on the box are never touched), adds --bots bots over rcon
   3. --client: also starts a game client on the box's desktop, rendered by the box's own GPU, joins iw4x://
-  4. --map-change-at MIN: forces a map change mid-test. --change-via rotate (default) starts the server with a
-     two-map sv_maprotation and fires `map_rotate` - the path a real match takes at its end; --change-via map
+  4. --map-change-at MIN: forces a map change mid-test. --change-via rotate (default) sets a two-map
+     sv_maprotation over rcon and fires `map_rotate` - the path a real match takes at its end; --change-via map
      fires `map <map2>` directly. Either way the bots are re-added afterwards.
   5. watches for --minutes: player count, highest slot in use, server alive, client process up, new crash dumps
   6. stops everything it started (by PID), removes the folder, prints a report and exits 0 = pass
@@ -240,7 +240,8 @@ def self_test():
     n += 1
     ok, res = verdict(["rejoin"], obs(good, 29))
     if ok or not any(c["name"] == "rejoin_setup" and not c["ok"] for c in res):
-        fails.append("rejoin without --map-change-at: got PASS" if ok else "rejoin without --map-change-at: no rejoin_setup failure")
+        why = "got PASS" if ok else "no rejoin_setup failure"
+        fails.append(f"rejoin without --map-change-at: {why}")
 
     for f in fails:
         print("[self-test] FAIL " + f)
@@ -287,7 +288,8 @@ def main():
                     help="how to trigger the change: rcon map_rotate over a two-map rotation (what a real match "
                          "does at its end) or rcon map <map2> directly")
     ap.add_argument("--case", default=None, metavar="LIST",
-                    help="comma list of " + ",".join(CASES) + " (default: baseline, + rejoin with --client and --map-change-at)")
+                    help="comma list of " + ",".join(CASES) + " (default: baseline, + rejoin when --client and "
+                         "--map-change-at are both given)")
     ap.add_argument("--self-test", action="store_true", help="judge the recorded transcripts, no box needed")
     ap.add_argument("--save-logs", metavar="DIR", default=None,
                     help="copy the run's server and client console logs here before the folder is removed")
@@ -319,9 +321,7 @@ def main():
     port = 28971
     srv = (f"cd {d} && (WINEPREFIX=$HOME/.wine-livetest-srv WINEDEBUG=-all setsid nohup wine iw4x.exe -dedicated -stdout "
            f"+set sv_lanonly 1 +set net_port {port} +exec server.cfg +set sv_maxclients 32 +set party_maxplayers 32 "
-           f"+set party_enable 0 +set logfile 1 "
-           + (f'+set sv_maprotation "map {a.map} map {a.map_change_to}" ' if a.change_via == "rotate" else "")
-           + f"+map {a.map} > server.log 2>&1 < /dev/null & echo $! > .srvpid)")
+           f"+set party_enable 0 +set logfile 1 +map {a.map} > server.log 2>&1 < /dev/null & echo $! > .srvpid)")
     rcpy = f"python3 rc.py --port {port}"                 # the game folder's rcon helper (password from server.cfg)
     try:
         ssh(host, srv)
@@ -338,8 +338,13 @@ def main():
         polls = []
         while time.time() < t0 + a.minutes * 60:
             if a.map_change_at is not None and change_t is None and time.time() - t0 >= a.map_change_at * 60:
-                ssh(host, f"cd {d} && {rcpy} "
-                          + ("map_rotate" if a.change_via == "rotate" else f"'map {a.map_change_to}'"))
+                if a.change_via == "rotate":
+                    # the rotation has to go in over rcon: the shell eats the quotes on the command line, so
+                    # +set sv_maprotation "map a map b" reaches the engine as six separate arguments
+                    ssh(host, f"cd {d} && {rcpy} 'set sv_maprotation \"map {a.map} map {a.map_change_to}\"'")
+                    ssh(host, f"cd {d} && {rcpy} map_rotate")
+                else:
+                    ssh(host, f"cd {d} && {rcpy} 'map {a.map_change_to}'")
                 change_t = time.time() - t0
                 time.sleep(45)
                 ssh(host, f"cd {d} && {rcpy} 'spawnBot {a.bots}'")
@@ -383,8 +388,8 @@ def main():
                             f"tail -6 server.log", timeout=60)
         cli_tail = ""
         if a.client:
-            _, cli_tail = ssh(host, f"cd {d} && cat $(ls -t {CLI_LOG}* 2>/dev/null) 2>/dev/null "
-                                    f"| grep -a -E 'onnect|isconnect|PARTYENDED|hanging map|rror|xception' | tail -16", timeout=60)
+            cli_grep = "| grep -a -E 'onnect|isconnect|PARTYENDED|hanging map|rror|xception' | tail -16"
+            _, cli_tail = ssh(host, f"cd {d} && cat $(ls -t {CLI_LOG}* 2>/dev/null) 2>/dev/null {cli_grep}", timeout=60)
         ssh(host, f"cd {d} && for f in .clipid .srvpid; do [ -f $f ] && kill $(cat $f) 2>/dev/null; done; sleep 5; "
                   f"for p in srv cli; do WINEPREFIX=$HOME/.wine-livetest-$p wineserver -k 2>/dev/null; done; "
                   f"cd ~ && rm -rf {d}", timeout=120)
