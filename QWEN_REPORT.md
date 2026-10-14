@@ -1,9 +1,12 @@
 # QWEN_REPORT — client rejoin test case (this round)
 
-**Result: `tools/aiboi_test.py` now carries a `rejoin` test case (client back on the new map after a forced map
-change) and an offline `--self-test` that judges recorded transcripts. `python3 tools/aiboi_test.py --self-test`
-passes: the good transcript passes every case, and each of the 8 bad ones fails the check that names its
-problem.**
+**Result: `tools/aiboi_test.py` now carries a `rejoin` test case — a live client must come back on the new map by
+itself after a map change — and an offline `--self-test` that judges recorded transcripts. CHECK:
+`python3 tools/aiboi_test.py --self-test` passes (11 checks: the good transcript passes every case, each of the 8
+bad ones fails the check that names its problem). Live on the box, 28 bots + a real client on its GPU and a
+rotation-driven map change: **PASS, 13/13 checks**, twice running (runs 10 and 11). The client was back in slot 28
+72 s after the change both times. The bug from `iw4x32/tasks/map_change_rejoin.md` did not reproduce on this
+branch — see §4.**
 
 Branch: `feat/client-rejoin-test` (worktree). Nothing pushed.
 
@@ -166,7 +169,20 @@ The client's console shows both reloads it followed: `Server changing map mp_rus
   ever sit in slot 8. The reproduce command in `iw4x32/tasks/map_change_rejoin.md` (`--bots 8 --client`) therefore
   fails that check for setup reasons — the rejoin case is meant to run with the default 28 bots.
 * The client's console log is `userraw/console_mp.log` (rotated `.NNN`); the `client.log` the run redirects wine's
-  stdout to stays empty — that is why the tool now tails the real one.
+  stdout to stays empty — that is why the tool greps the real one, and greps `console_mp.log*`: the dedicated
+  server opens `console_mp.log` first, the client rotates it to `.000` when it starts and writes a fresh one, so
+  the two processes' lines are split across files.
+* **The bug did not reproduce on this branch.** With this branch's dll and a live client on the box's GPU, the
+  client followed a direct `map mp_crash` (run 4) and a rotation-driven change (run 10), came back by itself in
+  72 s both times, in slot 28, process up, 0 minidumps — and it did it in every one of the ten runs, including the
+  runs where the level restarted but the map did not change. So on this branch the `rejoin` case is a regression
+  guard, not a reproducer. Whoever picks up the fix should run the same command against the build that shows the
+  bug; the case is what fails there, and the fixtures in `--self-test` show the shape of that failure.
+* Two things this setup does **not** cover, worth saying out loud: `party_enable 0` (a real online session joins
+  through the party, and `CL_ConnectFromParty` is exactly the line that does *not* repeat on a follow), and a
+  match that ends by itself (time limit / score limit) rather than a change fired at a fixed minute.
+* `iw4x32: N-slot server` (the dll's own server-init line) is printed **once per process**, not once per level —
+  it is kept in the report as information, and `session_restarted` uses the bot guids instead.
 
 ---
 
