@@ -11,9 +11,9 @@ What the live run does (one test at a time on the box - a lock file there; a sec
   2. starts a 32-slot LAN dedicated server under Wine (its own Wine prefixes: the live test game and anything
      else on the box are never touched), adds --bots bots over rcon
   3. --client: also starts a game client on the box's desktop, rendered by the box's own GPU, joins iw4x://
-  4. --map-change-at MIN: forces a map change mid-test. --change-via rotate (default) goes through the rotation
-     mechanism a real match uses at its end: rcon set sv_maprotation "map <map2>" then rcon map_rotate. (Naming
-     two maps does not advance - map_rotate then just restarts the current map, checked on the box.)
+  4. --map-change-at MIN: forces a map change mid-test. --change-via rotate (default) goes the way a real match
+     does at its end: the copy's server.cfg names the next map in sv_maprotation (the engine snapshots the
+     rotation when the level starts, so it has to be there before +map) and the test fires rcon map_rotate.
      --change-via map fires rcon map <map2> directly. Either way the bots are re-added afterwards.
   5. watches for --minutes: player count, highest slot in use, server alive, client process up, new crash dumps
   6. stops everything it started (by PID), removes the folder, prints a report and exits 0 = pass
@@ -285,8 +285,8 @@ def main():
     ap.add_argument("--map-change-to", default="mp_crash", metavar="MAP",
                     help="the map to change to (must differ from --map; the test game folder has the stock mp_ maps)")
     ap.add_argument("--change-via", choices=("rotate", "map"), default="rotate",
-                    help="how to trigger the change: rcon map_rotate over a rotation set to the next map (what a "
-                         "real match does at its end) or rcon map <map2> directly")
+                    help="how to trigger the change: rcon map_rotate over a rotation the copy's server.cfg names "
+                         "(what a real match does at its end) or rcon map <map2> directly")
     ap.add_argument("--case", default=None, metavar="LIST",
                     help="comma list of " + ",".join(CASES) + " (default: baseline, + rejoin when --client and "
                          "--map-change-at are both given)")
@@ -319,6 +319,17 @@ def main():
                       f"ls {d}/minidumps 2>/dev/null | wc -l > {d}/.dumps0 && echo locked-ok", timeout=3700)
     if "locked-ok" not in o:
         sys.exit(f"setup failed: {o[-400:]}")
+    if a.change_via == "rotate":
+        # the engine reads sv_maprotation when the LEVEL starts - setting it over rcon mid-level changes the dvar
+        # but not the rotation the next map_rotate uses (checked on the box: set it to mp_rust mid-level, the
+        # rotate still went to the map named at level start). So the rotation goes into the copy's server.cfg,
+        # and it names only the map we want next: with two maps named, map_rotate restarts the current one.
+        # server.cfg in the copy is a HARD LINK into the base folder, so write a new file, never append in place.
+        rc, o = ssh(host, f"cd {d} && {{ cat userraw/server.cfg; "
+                          f"printf '\nset sv_maprotation \"map {a.map_change_to}\"\n'; "
+                          f"}} > .cfg.new && mv .cfg.new userraw/server.cfg && tail -2 userraw/server.cfg")
+        if a.map_change_to not in o:
+            sys.exit(f"could not write the rotation into the copy's server.cfg: {o[-200:]}")
     subprocess.run(["scp", "-q", dll, f"{host}:{d}/iw4x.dll"], check=True)
     port = 28971
     srv = (f"cd {d} && (WINEPREFIX=$HOME/.wine-livetest-srv WINEDEBUG=-all setsid nohup wine iw4x.exe -dedicated -stdout "
@@ -340,13 +351,8 @@ def main():
         polls = []
         while time.time() < t0 + a.minutes * 60:
             if a.map_change_at is not None and change_t is None and time.time() - t0 >= a.map_change_at * 60:
-                if a.change_via == "rotate":
-                    # the rotation path a real match takes. naming TWO maps does not advance on this build -
-                    # map_rotate restarts the current one - so the rotation names the map we want next.
-                    ssh(host, f"cd {d} && {rcpy} 'set sv_maprotation \"map {a.map_change_to}\"'")
-                    ssh(host, f"cd {d} && {rcpy} map_rotate")
-                else:
-                    ssh(host, f"cd {d} && {rcpy} 'map {a.map_change_to}'")
+                ssh(host, f"cd {d} && {rcpy} "
+                          + ("map_rotate" if a.change_via == "rotate" else f"'map {a.map_change_to}'"))
                 change_t = time.time() - t0
                 time.sleep(45)
                 ssh(host, f"cd {d} && {rcpy} 'spawnBot {a.bots}'")
