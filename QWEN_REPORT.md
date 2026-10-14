@@ -126,8 +126,8 @@ cfg file) instead of on the wine command line.
 folder is made with `cp -al`, so every file in it — `userraw/server.cfg` included — is a HARD LINK into
 `Games/MW2-IW4x32-v2`. Appending the rotation line to the copy's server.cfg edited the base folder's cfg. The tool
 now rewrites the copy's cfg as a new file (`{ cat; printf ...; } > .cfg.new && mv`) so the link is broken before
-anything is written; the base cfg is back to its original content (one trailing newline added, md5 otherwise the
-same file the other test folders share). The same reason the tool already `rm -f`s the copied log files.
+anything is written; the base cfg is back to its original content - one trailing newline added, byte-identical
+apart from that. The same reason the tool already `rm -f`s the copied log files.
 
 ## 4. Open questions / notes
 
