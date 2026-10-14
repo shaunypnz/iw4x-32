@@ -274,6 +274,8 @@ def main():
     ap.add_argument("--case", default=None, metavar="LIST",
                     help="comma list of " + ",".join(CASES) + " (default: baseline, + rejoin with --client and --map-change-at)")
     ap.add_argument("--self-test", action="store_true", help="judge the recorded transcripts, no box needed")
+    ap.add_argument("--save-logs", metavar="DIR", default=None,
+                    help="copy the run's server and client console logs here before the folder is removed")
     a = ap.parse_args()
     if a.self_test:
         sys.exit(self_test())
@@ -340,7 +342,7 @@ def main():
         init_lines = int(inits.split()[-1]) if inits.split() and inits.split()[-1].isdigit() else 0
         cli_connects = 0
         if a.client:
-            _, cc = ssh(host, f"cd {d} && grep -a -c '{CLI_CONNECT}' {CLI_LOG} 2>/dev/null")
+            _, cc = ssh(host, f"cd {d} && cat {CLI_LOG}* 2>/dev/null | grep -a -c '{CLI_CONNECT}'")
             cli_connects = int(cc.split()[-1]) if cc.split() and cc.split()[-1].isdigit() else 0
         obs_rec = {"polls": polls, "want": want, "client": a.client, "map_change_t": change_t,
                    "map_init_lines": init_lines, "new_crash_dumps": new_dumps, "server_alive": alive_all,
@@ -351,13 +353,17 @@ def main():
                   "maps_seen": sorted({p["map"] for p in polls if p["map"]}), "server_reinits": init_lines,
                   "client_connects": cli_connects, "new_crash_dumps": new_dumps, "polls": len(polls)}
     finally:
+        if a.save_logs:
+            os.makedirs(a.save_logs, exist_ok=True)
+            subprocess.run(["scp", "-q", f"{host}:{d}/server.log", f"{host}:{d}/client.log",
+                            f"{host}:{d}/userraw/console_mp.log*", a.save_logs + "/"], capture_output=True)
+            print(f"[aiboi_test] logs copied to {a.save_logs}", flush=True)
         _, tail = ssh(host, f"cd {d} && grep -a -E 'IW4x32:|ERROR|rror|xception|Crash' server.log | tail -8; "
                             f"tail -6 server.log", timeout=60)
         cli_tail = ""
         if a.client:
-            _, cli_tail = ssh(host, f"cd {d} && for f in $(ls -t {CLI_LOG}* 2>/dev/null | head -1); do "
-                                    f"echo \"== $f\"; grep -a -E 'onnect|isconnect|PARTYENDED|rror|xception' \"$f\" | tail -14; "
-                                    f"done", timeout=60)
+            _, cli_tail = ssh(host, f"cd {d} && cat $(ls -t {CLI_LOG}* 2>/dev/null) 2>/dev/null "
+                                    f"| grep -a -E 'onnect|isconnect|PARTYENDED|rror|xception' | tail -16", timeout=60)
         ssh(host, f"cd {d} && for f in .clipid .srvpid; do [ -f $f ] && kill $(cat $f) 2>/dev/null; done; sleep 5; "
                   f"for p in srv cli; do WINEPREFIX=$HOME/.wine-livetest-$p wineserver -k 2>/dev/null; done; "
                   f"cd ~ && rm -rf {d}", timeout=120)
