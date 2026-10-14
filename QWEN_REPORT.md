@@ -95,6 +95,33 @@ and after the change must be disjoint — a client that never left can no longer
 `Server changing map mp_crash`, i.e. the client-side reload ran), `players_back_after`. The `iw4x32` marker line
 count stays in the report as information, not as a check.
 
+**Run 3** (`--change-via map`, `.scratch/live3.log` + `.scratch/logs3`): first run against the rewritten checks —
+`map_changed` ok, `client_rejoined` ok (slot 28, back 72 s after the change), `client_follow_line` ok, and the two
+old checks (`server_reinit`, `client_reconnect_line`) were gone. `session_restarted` did not exist yet, so the run
+could not yet prove the client had actually been dropped.
+
+**Run 4** (`--change-via map`, `.scratch/live4.log`) — the first full PASS of the rejoin case, 13/13 checks:
+
+```
+poll t=24s  map=mp_rust  players=29 client=slot 28      poll t=169s map=mp_crash players=29 client=slot 28
+poll t=94s  map=mp_rust  players=29 client=slot 28      poll t=311s map=mp_crash players=29 client=slot 28
+ok   map_changed: maps in status: mp_rust -> mp_crash
+ok   session_restarted: bot guids before ['bot0','bot1']..28 vs after ['bot28','bot29']..28
+ok   client_rejoined / rejoin_within: back after 72 s, limit 150 s / rejoin_slot_32: slot 28
+ok   client_follow_line: 1 'Server changing map mp_crash' line(s) in userraw/console_mp.log*
+PASS {'players_max': 29, 'players_wanted': 29, 'client_slot': 28, 'maps_seen': ['mp_crash','mp_rust'],
+      'polls': 11, 'client_follow_lines': 1, 'iw4x32_marker_lines': 1, 'new_crash_dumps': 0}
+```
+
+**Run 5** (`--change-via rotate`, `.scratch/live5.log`) — the probe caught a bad case **live**, not just in the
+fixtures: `FAIL map_changed: mp_rust -> mp_rust` and `FAIL client_follow_line: 0 ... mp_crash line(s)`, while
+`session_restarted` said ok. That combination is exactly right and it explains itself: `map_rotate` *did* restart
+the level (the client's log has `Server changing map mp_rust, gametype dom`, every bot was dropped and re-added as
+`bot28..bot55`), but the rotation never named a second map. The saved command line shows why — the shell ate the
+quotes, so the engine got `+set sv_maprotation map mp_rust map mp_crash` as six separate arguments. Fixed by
+setting the rotation over rcon (`set sv_maprotation "map a map b"` reaches the server console quoted, like in a
+cfg file) instead of on the wine command line.
+
 ## 4. Open questions / notes
 
 * `client_slot_32` (both cases) needs `--bots >= 18`: bots take the low slots, so with 8 bots the client can only
