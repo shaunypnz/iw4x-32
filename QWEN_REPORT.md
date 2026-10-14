@@ -33,6 +33,16 @@ are both given):
 `rejoin` refuses to run without `--client` and `--map-change-at` (`rejoin_setup` fails) rather than passing on an
 empty setup.
 
+How to run the case live (the box runs one test at a time and waits its turn):
+
+```
+python3 tools/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 28 --client \
+        --minutes 6 --map-change-at 1.5 --change-via rotate --save-logs .scratch/logs
+```
+
+(`--change-via map` for the direct change, which needs `--minutes 5`; `--save-logs` keeps the server and client
+consoles for reading afterwards — the run's own folder is deleted.)
+
 ## 2. `--self-test` (the CHECK)
 
 `python3 tools/aiboi_test.py --self-test` — 11 checks, no box, no game, deterministic:
@@ -163,6 +173,18 @@ PASS {'players_max': 29, 'players_wanted': 29, 'client_slot': 28, 'maps_seen': [
 The client's console shows both reloads it followed: `Server changing map mp_rust` (the first, no-op rotate) at
 91 s and `Server changing map mp_crash` at 144 s — and it came back after each.
 
+**Run 12** — the task's own reproduce command, verbatim (`--bots 8 --client --minutes 5 --map-change-at 2`). It
+does not reproduce either: `map_changed` ok, `session_restarted` ok, `client_rejoined` ok, back after 72 s,
+`client_follow_line` ok. The two failures are the slot checks, and they fail for a setup reason, not a bug: with
+8 bots the human sits in slot 8, so `>= 18` cannot be met and the 32-player layout is not exercised at all.
+
+```
+ok   client_rejoined: live-test in status again after the change: True
+ok   rejoin_within: back after 72 s, limit 150 s
+FAIL rejoin_slot_32: slot 8 after the change, needs >= 18
+FAIL client_slot_32: highest human slot 8, needs >= 18
+```
+
 ## 4. Open questions / notes
 
 * `client_slot_32` (both cases) needs `--bots >= 18`: bots take the low slots, so with 8 bots the client can only
@@ -174,10 +196,12 @@ The client's console shows both reloads it followed: `Server changing map mp_rus
   the two processes' lines are split across files.
 * **The bug did not reproduce on this branch.** With this branch's dll and a live client on the box's GPU, the
   client followed a direct `map mp_crash` (run 4) and a rotation-driven change (run 10), came back by itself in
-  72 s both times, in slot 28, process up, 0 minidumps — and it did it in every one of the ten runs, including the
-  runs where the level restarted but the map did not change. So on this branch the `rejoin` case is a regression
-  guard, not a reproducer. Whoever picks up the fix should run the same command against the build that shows the
-  bug; the case is what fails there, and the fixtures in `--self-test` show the shape of that failure.
+  72 s both times, in slot 28, process up, 0 minidumps — and it did it in every one of the twelve runs, including
+  the runs where the level restarted but the map did not change. Run 12 is the task's own reproduce command
+  (`--bots 8 --client --minutes 5 --map-change-at 2`) verbatim: the client rejoined there too. So on this branch
+  the `rejoin` case is a regression guard, not a reproducer. Whoever picks up the fix should run the same command
+  against the build that shows the bug; the case is what fails there, and the fixtures in `--self-test` show the
+  shape of that failure.
 * Two things this setup does **not** cover, worth saying out loud: `party_enable 0` (a real online session joins
   through the party, and `CL_ConnectFromParty` is exactly the line that does *not* repeat on a follow), and a
   match that ends by itself (time limit / score limit) rather than a change fired at a fixed minute.
