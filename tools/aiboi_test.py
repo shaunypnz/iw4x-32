@@ -22,8 +22,8 @@ judges one observation record - what the run saw - and prints one line per check
   rejoin    the client comes back by itself after a forced map change: the server re-initialises (the dll's
             server-init line appears again), the client is in `status` again under its own name within
             REJOIN_MAX_S, still in a slot >= 18 (the client-side 32-player layout survived the level reload),
-            its process is still up, and the bots are back too. This is the case for the "client does not come
-            back after a map change" bug.
+            its process is still up, its own console log shows a second connect (join + follow the change), and
+            the bots are back too. This is the case for the "client does not come back after a map change" bug.
 
 --self-test runs the cases over the recorded transcripts at the bottom of this file: the good one must pass, and
 every bad one must fail the check that names its problem - a probe that always reads "perfect" is broken."""
@@ -33,6 +33,8 @@ CLIENT_NAME = "live-test"                 # the test client joins with +set name
 SLOT_32 = 18                              # a slot >= 18 exists only with the 32-player layout live
 REJOIN_MAX_S = 120.0                      # a stock client follows a map change within seconds
 MAP_INIT = "iw4x32: .*slot server"        # the dll prints this on every server initialization
+CLI_LOG = "userraw/console_mp.log"        # the client's own console log (its wine stdout stays empty)
+CLI_CONNECT = "CL_ConnectFromParty called for local client"   # the client connecting / following the server
 BASE = "Games/MW2-IW4x32-v2"              # on the box, relative to its home: stock exe + game files
 
 
@@ -107,6 +109,8 @@ def case_rejoin(o):
         yield chk("rejoin_within", False, "never came back")
         yield chk("rejoin_slot_32", False, "never came back")
     yield chk("client_process_up", bool(after) and after[-1]["client_up"], "client process still up at the end")
+    yield chk("client_reconnect_line", o["client_connects"] >= 2,
+              f"{o['client_connects']} '{CLI_CONNECT}' line(s) in {CLI_LOG}, needs >= 2 (join + follow the change)")
     players_after = max((len(p["rows"]) for p in after), default=0)
     yield chk("players_back_after", players_after >= o["want"], f"most {players_after} of {o['want']} after the change")
 
@@ -140,14 +144,16 @@ def table(bots, client_slot_no):
     return rows
 
 
-def obs(polls, want, map_change_t=None, map_init_lines=1, new_crash_dumps=0, server_alive=True, client=True):
+def obs(polls, want, map_change_t=None, map_init_lines=1, new_crash_dumps=0, server_alive=True, client=True,
+        client_connects=2):
     """polls: [(t, status text, client process up)] -> the observation record the cases judge."""
     ps = []
     for t, txt, up in polls:
         mp, rows = parse_status(txt)
         ps.append({"t": t, "map": mp, "rows": rows, "client_up": up})
     return {"polls": ps, "want": want, "client": client, "map_change_t": map_change_t,
-            "map_init_lines": map_init_lines, "new_crash_dumps": new_crash_dumps, "server_alive": server_alive}
+            "map_init_lines": map_init_lines, "new_crash_dumps": new_crash_dumps, "server_alive": server_alive,
+            "client_connects": client_connects}
 
 
 def transcript(mp, change_t, client_after, bots=28, up_after=True, bots_after=None, mp_after="mp_broadcast"):
@@ -184,10 +190,12 @@ def self_test():
     good_obs = obs(good, 29, map_change_t=change_t, map_init_lines=2)
     expect("good run", ["baseline", "rejoin"], good_obs, True)
 
-    # bad: the client stays off the server after the map change (the bug this case is for)
+    # bad: the client never rejoins (the bug this case is for) - it is off the server and its own console shows
+    # only the one connect
     lost, change_t = transcript("mp_rust", 120.0, None)
-    expect("client never rejoins", ["rejoin"], obs(lost, 29, map_change_t=change_t, map_init_lines=2),
-           False, ("client_rejoined", "rejoin_within", "rejoin_slot_32"))
+    expect("client never rejoins", ["rejoin"], obs(lost, 29, map_change_t=change_t, map_init_lines=2,
+                                                  client_connects=1),
+           False, ("client_rejoined", "rejoin_within", "rejoin_slot_32", "client_reconnect_line"))
     # bad: it rejoins in a low slot - the client-side layout fell back to 18 players on the reload
     low, change_t = transcript("mp_rust", 120.0, 3)
     expect("rejoins in slot 3", ["rejoin"], obs(low, 29, map_change_t=change_t, map_init_lines=2),
@@ -282,7 +290,8 @@ def main():
           flush=True)
     # 1. lock (wait up to 1 h for another test), throwaway folder, DLL in
     rc, o = ssh(host, f"mkdir -p Games/live-test && exec 9>Games/live-test/.lock && flock -w 3600 9 && "
-                      f"cp -al {BASE} {d} && rm -f {d}/iw4x.dll {d}/server-v2.log {d}/client-v2.log && "
+                      f"cp -al {BASE} {d} && rm -f {d}/iw4x.dll {d}/server-v2.log {d}/client-v2.log "
+                      f"{d}/userraw/console_mp.log* && "
                       f"ls {d}/minidumps 2>/dev/null | wc -l > {d}/.dumps0 && echo locked-ok", timeout=3700)
     if "locked-ok" not in o:
         sys.exit(f"setup failed: {o[-400:]}")
@@ -326,20 +335,26 @@ def main():
         new_dumps = int(dumps.split()[-1]) if dumps.split() and dumps.split()[-1].lstrip("-").isdigit() else 0
         _, inits = ssh(host, f"cd {d} && grep -a -c '{MAP_INIT}' server.log")
         init_lines = int(inits.split()[-1]) if inits.split() and inits.split()[-1].isdigit() else 0
+        cli_connects = 0
+        if a.client:
+            _, cc = ssh(host, f"cd {d} && grep -a -c '{CLI_CONNECT}' {CLI_LOG} 2>/dev/null")
+            cli_connects = int(cc.split()[-1]) if cc.split() and cc.split()[-1].isdigit() else 0
         obs_rec = {"polls": polls, "want": want, "client": a.client, "map_change_t": change_t,
-                   "map_init_lines": init_lines, "new_crash_dumps": new_dumps, "server_alive": alive_all}
+                   "map_init_lines": init_lines, "new_crash_dumps": new_dumps, "server_alive": alive_all,
+                   "client_connects": cli_connects}
         ok, res = verdict(cases, obs_rec)
         report = {"players_max": max((len(p["rows"]) for p in polls), default=0), "players_wanted": want,
                   "client_slot": client_slot(polls[-1]["rows"]) if polls and a.client else None,
                   "maps_seen": sorted({p["map"] for p in polls if p["map"]}), "server_reinits": init_lines,
-                  "new_crash_dumps": new_dumps, "polls": len(polls)}
+                  "client_connects": cli_connects, "new_crash_dumps": new_dumps, "polls": len(polls)}
     finally:
         _, tail = ssh(host, f"cd {d} && grep -a -E 'IW4x32:|ERROR|rror|xception|Crash' server.log | tail -8; "
                             f"tail -6 server.log", timeout=60)
         cli_tail = ""
         if a.client:
-            _, cli_tail = ssh(host, f"cd {d} && for f in $(ls -t main/*.log main/*.txt *.log 2>/dev/null | head -2); do "
-                                    f"echo \"== $f\"; tail -12 \"$f\"; done", timeout=60)
+            _, cli_tail = ssh(host, f"cd {d} && for f in $(ls -t {CLI_LOG}* 2>/dev/null | head -1); do "
+                                    f"echo \"== $f\"; grep -a -E 'onnect|isconnect|PARTYENDED|rror|xception' \"$f\" | tail -14; "
+                                    f"done", timeout=60)
         ssh(host, f"cd {d} && for f in .clipid .srvpid; do [ -f $f ] && kill $(cat $f) 2>/dev/null; done; sleep 5; "
                   f"for p in srv cli; do WINEPREFIX=$HOME/.wine-livetest-$p wineserver -k 2>/dev/null; done; "
                   f"cd ~ && rm -rf {d}", timeout=120)

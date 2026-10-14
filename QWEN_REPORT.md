@@ -1,4 +1,67 @@
-# QWEN_REPORT — IW4x-32 engine component
+# QWEN_REPORT — client rejoin test case (this round)
+
+**Result: `tools/aiboi_test.py` now carries a `rejoin` test case (client back on the new map after a forced map
+change) and an offline `--self-test` that judges recorded transcripts. `python3 tools/aiboi_test.py --self-test`
+passes: the good transcript passes every case, and each of the 8 bad ones fails the check that names its
+problem.**
+
+Branch: `feat/client-rejoin-test` (worktree). Nothing pushed.
+
+## 1. Deliverable
+
+`tools/aiboi_test.py` — the live game test tool, now in the repo (it used to live only in the RE tools folder,
+outside the checkout, so the CHECK could not run it). Split into two halves:
+
+* **the judging half** (no box, no game): `parse_status()` turns rcon `status` text into `(map, [(slot, guid,
+  name)])`; `case_baseline` / `case_rejoin` each yield one `chk(name, ok, detail)` per check; `verdict()` runs
+  the selected cases over one **observation record** (the polls of the run + the console counters).
+* **the live half**: same run as before (lock, throwaway folder, stock exe + our dll, dedicated server, bots,
+  optional client, optional `map_rotate`), but it now *records* what it saw into that same observation record and
+  lets the judging half decide. Nothing about the pass rule moved into the ssh loop.
+
+Test cases (`--case baseline,rejoin`; default: `baseline`, plus `rejoin` when `--client` and `--map-change-at`
+are both given):
+
+| case | checks |
+|---|---|
+| `baseline` (the old pass rule, unchanged) | `server_alive`, `no_new_crash_dumps`, `players_in`, `client_slot_32` (highest human slot >= 18) |
+| `rejoin` (new) | `client_in_before` — our client (`+set name live-test`) is in `status` before the change, so the case is judging something; `map_changed` — `status` shows two different maps; `server_reinit` — the dll's `iw4x32: N-slot server` line appears **twice** in the server console, i.e. the map-change mechanism really re-initialized the server; `client_rejoined` — the client is in `status` again after the change; `rejoin_within` — back within 120 s of the rotate; `rejoin_slot_32` — its slot after the change is >= 18, which is only possible if the **client-side** 32-player layout survived the level reload; `client_process_up` — its process is still up at the end; `client_reconnect_line` — the client's own console log (`userraw/console_mp.log`) shows >= 2 connects (join + follow the change); `players_back_after` — the bots are back too |
+
+`rejoin` refuses to run without `--client` and `--map-change-at` (`rejoin_setup` fails) rather than passing on an
+empty setup.
+
+## 2. `--self-test` (the CHECK)
+
+`python3 tools/aiboi_test.py --self-test` — 11 checks, no box, no game, deterministic:
+
+* `parse_status` on the real status shape: map name, 29 rows, the client found in slot 28, exactly 1 human row
+  (bots carry a `bot<N>` guid).
+* the **good** transcript (28 bots + client in slot 28, rotate at 120 s, client back in slot 28 at 140 s, 2
+  server-init lines, 2 client connects, 0 dumps) passes `baseline` **and** `rejoin`.
+* 8 **bad** transcripts, each must fail the named check — this is the "can the probe see a bad case" proof:
+  client never comes back (the bug: `client_rejoined`, `rejoin_within`, `rejoin_slot_32`, `client_reconnect_line`),
+  client back in slot 3 (client-side layout fell back: `rejoin_slot_32`), client back but its process died
+  (`client_process_up`), server never re-initialized (`server_reinit`), the rotate landed on the same map
+  (`map_changed`), the server went down (`server_alive`), bots never re-added (`players_back_after`), a new crash
+  dump (`no_new_crash_dumps`), and `rejoin` on a run with no `--map-change-at` (`rejoin_setup`).
+
+The transcripts are built with `status_text()`, which writes the same columns `status` prints; the address column
+stays the placeholder `0:<LAN-IP>` so nothing machine-specific is in the repo.
+
+## 3. Live run (numbers below)
+
+## 4. Open questions / notes
+
+* `client_slot_32` (both cases) needs `--bots >= 18`: bots take the low slots, so with 8 bots the client can only
+  ever sit in slot 8. The reproduce command in `iw4x32/tasks/map_change_rejoin.md` (`--bots 8 --client`) therefore
+  fails that check for setup reasons — the rejoin case is meant to run with the default 28 bots.
+* The client's console log is `userraw/console_mp.log` (rotated `.NNN`); the `client.log` the run redirects wine's
+  stdout to stays empty — that is why the tool now tails the real one.
+
+---
+
+# Previous round — IW4x-32 engine component / player kit
+
 
 **Result: a stock `iw4x.exe` (r5154, MD5 `9c42ffa4f7aefd08fd501b40f5e41eab`, untouched on disk) plus our
 `iw4x.dll` runs a 32-player dedicated server with 31 bots, no crash.** The DLL rewrites the closed-source
