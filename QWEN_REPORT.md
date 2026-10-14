@@ -25,7 +25,7 @@ are both given):
 | case | checks |
 |---|---|
 | `baseline` (the old pass rule, unchanged) | `server_alive`, `no_new_crash_dumps`, `players_in`, `client_slot_32` (highest human slot >= 18) |
-| `rejoin` (new) | `client_in_before` — our client (`+set name live-test`) is in `status` before the change, so the case is judging something; `map_changed` — `status` shows two different maps; `server_reinit` — the dll's `iw4x32: N-slot server` line appears **twice** in the server console, i.e. the map-change mechanism really re-initialized the server; `client_rejoined` — the client is in `status` again after the change; `rejoin_within` — back within 120 s of the rotate; `rejoin_slot_32` — its slot after the change is >= 18, which is only possible if the **client-side** 32-player layout survived the level reload; `client_process_up` — its process is still up at the end; `client_reconnect_line` — the client's own console log (`userraw/console_mp.log`) shows >= 2 connects (join + follow the change); `players_back_after` — the bots are back too |
+| `rejoin` (new) | `client_in_before` — our client (`+set name live-test`) is in `status` before the change, so the case is judging something; `map_changed` — `status` shows two different maps; `session_restarted` — the bots answering after the change carry **new** guids (`bot0..bot27` before, `bot28..bot55` after): a level restart drops every client, so without this a client that never left would "rejoin" and nothing would be proven; `client_rejoined` — the client is in `status` again after the change; `rejoin_within` — back within `REJOIN_MAX_S` (150 s) of the change; `rejoin_slot_32` — its slot after the change is >= 18, which is only possible if the **client-side** 32-player layout survived the level reload; `client_process_up` — its process is still up at the end; `client_follow_line` — the client's own console log (`userraw/console_mp.log*`) shows the `Server changing map <map2>` notice, i.e. the client-side reload really ran; `players_back_after` — the bots are back too |
 
 `rejoin` refuses to run without `--client` and `--map-change-at` (`rejoin_setup` fails) rather than passing on an
 empty setup.
@@ -36,14 +36,15 @@ empty setup.
 
 * `parse_status` on the real status shape: map name, 29 rows, the client found in slot 28, exactly 1 human row
   (bots carry a `bot<N>` guid).
-* the **good** transcript (28 bots + client in slot 28, rotate at 120 s, client back in slot 28 at 140 s, 2
-  server-init lines, 2 client connects, 0 dumps) passes `baseline` **and** `rejoin`.
+* the **good** transcript (28 bots + client in slot 28, change at 120 s, client back in slot 28 at 140 s, bots
+  re-added with new guids, 1 client follow line, 0 dumps) passes `baseline` **and** `rejoin`.
 * 8 **bad** transcripts, each must fail the named check — this is the "can the probe see a bad case" proof:
-  client never comes back (the bug: `client_rejoined`, `rejoin_within`, `rejoin_slot_32`, `client_reconnect_line`),
+  client never comes back (the bug: `client_rejoined`, `rejoin_within`, `rejoin_slot_32`, `client_follow_line`),
   client back in slot 3 (client-side layout fell back: `rejoin_slot_32`), client back but its process died
-  (`client_process_up`), server never re-initialized (`server_reinit`), the rotate landed on the same map
-  (`map_changed`), the server went down (`server_alive`), bots never re-added (`players_back_after`), a new crash
-  dump (`no_new_crash_dumps`), and `rejoin` on a run with no `--map-change-at` (`rejoin_setup`).
+  (`client_process_up`), **nobody was dropped** — the change never restarted the session, so a client that never
+  left would "rejoin" (`session_restarted`), the change landed on the same map (`map_changed`,
+  `session_restarted`), the server went down (`server_alive`), bots never re-added (`players_back_after`), a new
+  crash dump (`no_new_crash_dumps`), and `rejoin` on a run with no `--map-change-at` (`rejoin_setup`).
 
 The transcripts are built with `status_text()`, which writes the same columns `status` prints; the address column
 stays the placeholder `0:<LAN-IP>` so nothing machine-specific is in the repo.
@@ -131,14 +132,33 @@ probes and produced a finding worth more than the fix:
   want next advances.
 
 So `--change-via rotate` writes `set sv_maprotation "map <map2>"` into the copy's server.cfg before the server
-starts and then fires `map_rotate` — the rotation mechanism, with the change guaranteed.
+starts, then fires `map_rotate` twice: the first one after a manual `+map` only restarts the current map (the
+rotation system has not seen that level), the second follows the rotation. Run 10 below is that path end to end.
 
 **A hard-link trap worth knowing** (found while probing this, and it bit the base game folder): the throwaway
-folder is made with `cp -al`, so every file in it — `userraw/server.cfg` included — is a HARD LINK into
-the base test game folder on the box (its name lives in the site config, not here). Appending the rotation line to the copy's server.cfg edited the base folder's cfg. The base
-cfg is back to its original content - one trailing newline added, byte-identical apart from that - and the tool no
-longer touches server.cfg at all (the rotation goes in over rcon). The same reason the tool `rm -f`s the copied log
-files: never write through a link you did not break.
+folder is made with `cp -al`, so every file in it — `userraw/server.cfg` included — is a HARD LINK into the base
+test game folder on the box (its name lives in the site config, not here). Appending the rotation line to the
+copy's server.cfg edited the base folder's cfg. The base cfg is back to its original content — one trailing
+newline added, byte-identical apart from that — and the tool now rewrites the copy's cfg as a NEW file
+(`{ cat; printf ...; } > .cfg.new && mv`), never appends in place. Same reason it `rm -f`s the copied log files:
+never write through a link you did not break.
+
+**Runs 9-10** (`--change-via rotate`, the rotation in the copy's cfg, `map_rotate` fired twice). Run 9 still had the
+single-rotate version and failed `map_changed`; run 10 is the rotate path passing end to end, 13/13:
+
+```
+poll t=94s  map=mp_rust  players=29 client=slot 28      poll t=277s map=mp_crash players=29 client=slot 28
+poll t=205s map=mp_rust  players=29 client=slot 28      poll t=301s map=mp_crash players=29 client=slot 28
+ok   map_changed: maps in status: mp_rust -> mp_crash
+ok   session_restarted: bot guids before ['bot0','bot1']..28 vs after ['bot28','bot29']..28
+ok   client_rejoined / rejoin_within: back after 72 s, limit 150 s / rejoin_slot_32: slot 28
+ok   client_follow_line: 1 'Server changing map mp_crash' line(s) in userraw/console_mp.log*
+PASS {'players_max': 29, 'players_wanted': 29, 'client_slot': 28, 'maps_seen': ['mp_crash','mp_rust'],
+      'polls': 11, 'client_follow_lines': 1, 'iw4x32_marker_lines': 1, 'new_crash_dumps': 0}
+```
+
+The client's console shows both reloads it followed: `Server changing map mp_rust` (the first, no-op rotate) at
+91 s and `Server changing map mp_crash` at 144 s — and it came back after each.
 
 ## 4. Open questions / notes
 
