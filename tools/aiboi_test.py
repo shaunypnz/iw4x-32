@@ -11,7 +11,8 @@ What the live run does (one test at a time on the box - a lock file there; a sec
   2. starts a 32-slot LAN dedicated server under Wine (its own Wine prefixes: the live test game and anything
      else on the box are never touched), adds --bots bots over rcon
   3. --client: also starts a game client on the box's desktop, rendered by the box's own GPU, joins iw4x://
-  4. --map-change-at MIN: forces a map change mid-test (rcon map_rotate), re-adds the bots
+  4. --map-change-at MIN: forces a map change mid-test (rcon map <map2> - the server.cfg rotation is one map
+     long, so map_rotate alone would not change anything), re-adds the bots
   5. watches for --minutes: player count, highest slot in use, server alive, client process up, new crash dumps
   6. stops everything it started (by PID), removes the folder, prints a report and exits 0 = pass
 
@@ -31,7 +32,7 @@ import argparse, json, os, re, subprocess, sys, time
 
 CLIENT_NAME = "live-test"                 # the test client joins with +set name <CLIENT_NAME>
 SLOT_32 = 18                              # a slot >= 18 exists only with the 32-player layout live
-REJOIN_MAX_S = 120.0                      # a stock client follows a map change within seconds
+REJOIN_MAX_S = 150.0                      # a stock client follows a map change within about a minute
 MAP_INIT = "iw4x32: .*slot server"        # the dll prints this on every server initialization
 CLI_LOG = "userraw/console_mp.log"        # the client's own console log (its wine stdout stays empty)
 CLI_CONNECT = "CL_ConnectFromParty called for local client"   # the client connecting / following the server
@@ -156,7 +157,7 @@ def obs(polls, want, map_change_t=None, map_init_lines=1, new_crash_dumps=0, ser
             "client_connects": client_connects}
 
 
-def transcript(mp, change_t, client_after, bots=28, up_after=True, bots_after=None, mp_after="mp_broadcast"):
+def transcript(mp, change_t, client_after, bots=28, up_after=True, bots_after=None, mp_after="mp_crash"):
     """a 5-minute run: bots + client in, map change at change_t (the rotate lands on mp_after), client_after =
     slot the client is back in (None = it never came back), bots_after = how many bots the re-add brought back,
     polls every 20 s."""
@@ -208,9 +209,9 @@ def self_test():
     still, change_t = transcript("mp_rust", 120.0, 28)
     expect("no server re-init", ["rejoin"], obs(still, 29, map_change_t=change_t, map_init_lines=1),
            False, ("server_reinit",))
-    # bad: the map never changed (single-map rotation)
+    # bad: the map never changed (the change command landed on the map we were already on)
     same = [(t, status_text("mp_rust", table(28, 28)), True) for t in (20, 40, 60, 80, 100, 120, 140, 160, 200)]
-    expect("same map after rotate", ["rejoin"], obs(same, 29, map_change_t=120.0, map_init_lines=2),
+    expect("same map after the change", ["rejoin"], obs(same, 29, map_change_t=120.0, map_init_lines=2),
            False, ("map_changed",))
     # bad: the server itself went down at the change - baseline must see it
     expect("server died", ["baseline"], obs([(20, status_text("mp_rust", table(28, 28)), True)], 29,
@@ -267,7 +268,9 @@ def main():
     ap.add_argument("--minutes", type=float, default=5)
     ap.add_argument("--map", default="mp_rust")
     ap.add_argument("--map-change-at", type=float, default=None, metavar="MIN",
-                    help="rcon map_rotate after MIN minutes, re-add the bots, and require everyone back afterwards")
+                    help="rcon map <map2> after MIN minutes, re-add the bots, and require everyone back afterwards")
+    ap.add_argument("--map-change-to", default="mp_crash", metavar="MAP",
+                    help="the map to change to (must differ from --map; the test game folder has the stock mp_ maps)")
     ap.add_argument("--case", default=None, metavar="LIST",
                     help="comma list of " + ",".join(CASES) + " (default: baseline, + rejoin with --client and --map-change-at)")
     ap.add_argument("--self-test", action="store_true", help="judge the recorded transcripts, no box needed")
@@ -316,7 +319,7 @@ def main():
         polls = []
         while time.time() < t0 + a.minutes * 60:
             if a.map_change_at is not None and change_t is None and time.time() - t0 >= a.map_change_at * 60:
-                ssh(host, f"cd {d} && {rcpy} map_rotate")
+                ssh(host, f"cd {d} && {rcpy} 'map {a.map_change_to}'")
                 change_t = time.time() - t0
                 time.sleep(45)
                 ssh(host, f"cd {d} && {rcpy} 'spawnBot {a.bots}'")

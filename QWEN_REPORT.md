@@ -48,7 +48,26 @@ empty setup.
 The transcripts are built with `status_text()`, which writes the same columns `status` prints; the address column
 stays the placeholder `0:<LAN-IP>` so nothing machine-specific is in the repo.
 
-## 3. Live run (numbers below)
+## 3. Live runs
+
+**Run 1** (`--bots 28 --client --minutes 5 --map-change-at 2`, this branch's dll, `.scratch/live1.log`): the run
+itself was clean — 29/29 players, client in slot 28, 0 new minidumps, 11 polls — but three rejoin checks failed:
+
+```
+ok   client_in_before: live-test in status before the change
+FAIL map_changed: maps in status: mp_rust -> mp_rust
+FAIL server_reinit: 1 'iw4x32: .*slot server' line(s) in the server console, needs >= 2
+ok   client_rejoined: live-test in status again after the change: True
+FAIL client_reconnect_line: 1 'CL_ConnectFromParty called for local client' line(s) in userraw/console_mp.log
+```
+
+Cause, read from the evidence before touching anything: **the map change never happened.** The test game folder's
+`userraw/server.cfg` sets `sv_maprotation "gametype dom map mp_rust"` — a one-map rotation — so `rcon map_rotate`
+is a no-op: the server console carries a single `iw4x32: 32-slot server` line, `status` shows `mp_rust` the whole
+run, and the client's own console shows one connect. `client_rejoined` said ok only because the client never left
+— which is exactly why the case also demands `map_changed` and `server_reinit`: without them a run in which
+nothing was reloaded would "pass" a rejoin test. Fixed by making the change explicit: `--map-change-to mp_crash`
+(default) runs `rcon map mp_crash`; the stock mp_ maps are all in the test game folder.
 
 ## 4. Open questions / notes
 
