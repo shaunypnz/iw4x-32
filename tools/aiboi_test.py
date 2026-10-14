@@ -40,7 +40,6 @@ REJOIN_MAX_S = 150.0                      # a stock client follows a map change 
 MAP_INIT = "iw4x32: .*slot server"        # the dll's server-init line (printed once per process, not per level)
 CLI_LOG = "userraw/console_mp.log"        # console log of whatever game process opens it last (see --save-logs)
 CLI_FOLLOW = "Server changing map"        # the client got the server's map-change notice and reloads with it
-BASE = "Games/MW2-IW4x32-v2"              # on the box, relative to its home: stock exe + game files
 
 
 # ---------------------------------------------------------------- the judging half (no box, no game)
@@ -307,13 +306,15 @@ def main():
     if not os.path.isfile(dll):
         sys.exit(f"no such DLL: {dll}")
     host = site_get("gpu_ssh")
+    base = site_get("game_base")   # the box's base test game folder (stock exe + game files), relative to its
+    #                              home: a box layout detail, so it lives in the site config, not in the repo
     run = f"t{int(time.time())}"
     d = f"Games/live-test/{run}"
     print(f"[aiboi_test] {run}: dll {dll} bots {a.bots} client {a.client} {a.minutes} min cases {','.join(cases)}",
           flush=True)
     # 1. lock (wait up to 1 h for another test), throwaway folder, DLL in
     rc, o = ssh(host, f"mkdir -p Games/live-test && exec 9>Games/live-test/.lock && flock -w 3600 9 && "
-                      f"cp -al {BASE} {d} && rm -f {d}/iw4x.dll {d}/server-v2.log {d}/client-v2.log "
+                      f"cp -al {base} {d} && rm -f {d}/iw4x.dll {d}/server-v2.log {d}/client-v2.log "
                       f"{d}/userraw/console_mp.log* && "
                       f"ls {d}/minidumps 2>/dev/null | wc -l > {d}/.dumps0 && echo locked-ok", timeout=3700)
     if "locked-ok" not in o:

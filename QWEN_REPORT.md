@@ -126,10 +126,10 @@ the *current* map instead of advancing. A rotation that names only the map you w
 
 **A hard-link trap worth knowing** (found while probing this, and it bit the base game folder): the throwaway
 folder is made with `cp -al`, so every file in it — `userraw/server.cfg` included — is a HARD LINK into
-`Games/MW2-IW4x32-v2`. Appending the rotation line to the copy's server.cfg edited the base folder's cfg. The tool
-now rewrites the copy's cfg as a new file (`{ cat; printf ...; } > .cfg.new && mv`) so the link is broken before
-anything is written; the base cfg is back to its original content - one trailing newline added, byte-identical
-apart from that. The same reason the tool already `rm -f`s the copied log files.
+the base test game folder on the box (its name lives in the site config, not here). Appending the rotation line to the copy's server.cfg edited the base folder's cfg. The base
+cfg is back to its original content - one trailing newline added, byte-identical apart from that - and the tool no
+longer touches server.cfg at all (the rotation goes in over rcon). The same reason the tool `rm -f`s the copied log
+files: never write through a link you did not break.
 
 ## 4. Open questions / notes
 
