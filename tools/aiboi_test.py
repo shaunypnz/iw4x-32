@@ -13,8 +13,9 @@ What the live run does (one test at a time on the box - a lock file there; a sec
   3. --client: also starts a game client on the box's desktop, rendered by the box's own GPU, joins iw4x://
   4. --map-change-at MIN: forces a map change mid-test. --change-via rotate (default) goes the way a real match
      does at its end: the copy's server.cfg names the next map in sv_maprotation (the engine snapshots the
-     rotation when the level starts, so it has to be there before +map) and the test fires rcon map_rotate.
-     --change-via map fires rcon map <map2> directly. Either way the bots are re-added afterwards.
+     rotation when the level starts, so it has to be there before +map) and the test fires rcon map_rotate -
+     twice, because the first map_rotate after a manual +map only restarts the current map. --change-via map
+     fires rcon map <map2> directly. Either way the bots are re-added afterwards.
   5. watches for --minutes: player count, highest slot in use, server alive, client process up, new crash dumps
   6. stops everything it started (by PID), removes the folder, prints a report and exits 0 = pass
 
@@ -281,7 +282,8 @@ def main():
     ap.add_argument("--minutes", type=float, default=5)
     ap.add_argument("--map", default="mp_rust")
     ap.add_argument("--map-change-at", type=float, default=None, metavar="MIN",
-                    help="rcon map <map2> after MIN minutes, re-add the bots, and require everyone back afterwards")
+                    help="force a map change after MIN minutes, re-add the bots, and require everyone back "
+                         "afterwards (the rotate path wants the run to be a minute longer)")
     ap.add_argument("--map-change-to", default="mp_crash", metavar="MAP",
                     help="the map to change to (must differ from --map; the test game folder has the stock mp_ maps)")
     ap.add_argument("--change-via", choices=("rotate", "map"), default="rotate",
@@ -351,8 +353,14 @@ def main():
         polls = []
         while time.time() < t0 + a.minutes * 60:
             if a.map_change_at is not None and change_t is None and time.time() - t0 >= a.map_change_at * 60:
-                ssh(host, f"cd {d} && {rcpy} "
-                          + ("map_rotate" if a.change_via == "rotate" else f"'map {a.map_change_to}'"))
+                if a.change_via == "rotate":
+                    # the first map_rotate after a manual +map only restarts the current map - the rotation
+                    # system has not seen this level before. the second one follows the rotation. (box-checked)
+                    ssh(host, f"cd {d} && {rcpy} map_rotate")
+                    time.sleep(50)
+                    ssh(host, f"cd {d} && {rcpy} map_rotate")
+                else:
+                    ssh(host, f"cd {d} && {rcpy} 'map {a.map_change_to}'")
                 change_t = time.time() - t0
                 time.sleep(45)
                 ssh(host, f"cd {d} && {rcpy} 'spawnBot {a.bots}'")
