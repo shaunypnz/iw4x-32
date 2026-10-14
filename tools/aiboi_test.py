@@ -11,9 +11,9 @@ What the live run does (one test at a time on the box - a lock file there; a sec
   2. starts a 32-slot LAN dedicated server under Wine (its own Wine prefixes: the live test game and anything
      else on the box are never touched), adds --bots bots over rcon
   3. --client: also starts a game client on the box's desktop, rendered by the box's own GPU, joins iw4x://
-  4. --map-change-at MIN: forces a map change mid-test. --change-via rotate (default) sets a two-map
-     sv_maprotation over rcon and fires `map_rotate` - the path a real match takes at its end; --change-via map
-     fires `map <map2>` directly. Either way the bots are re-added afterwards.
+  4. --map-change-at MIN: forces a map change mid-test. --change-via rotate (default) puts a two-map
+     sv_maprotation in the copy's server.cfg and fires `map_rotate` - the path a real match takes at its end;
+     --change-via map fires `map <map2>` directly. Either way the bots are re-added afterwards.
   5. watches for --minutes: player count, highest slot in use, server alive, client process up, new crash dumps
   6. stops everything it started (by PID), removes the folder, prints a report and exits 0 = pass
 
@@ -285,8 +285,8 @@ def main():
     ap.add_argument("--map-change-to", default="mp_crash", metavar="MAP",
                     help="the map to change to (must differ from --map; the test game folder has the stock mp_ maps)")
     ap.add_argument("--change-via", choices=("rotate", "map"), default="rotate",
-                    help="how to trigger the change: rcon map_rotate over a two-map rotation (what a real match "
-                         "does at its end) or rcon map <map2> directly")
+                    help="how to trigger the change: rcon map_rotate over a two-map rotation written to the "
+                         "copy's server.cfg (what a real match does at its end) or rcon map <map2> directly")
     ap.add_argument("--case", default=None, metavar="LIST",
                     help="comma list of " + ",".join(CASES) + " (default: baseline, + rejoin when --client and "
                          "--map-change-at are both given)")
@@ -317,6 +317,14 @@ def main():
                       f"ls {d}/minidumps 2>/dev/null | wc -l > {d}/.dumps0 && echo locked-ok", timeout=3700)
     if "locked-ok" not in o:
         sys.exit(f"setup failed: {o[-400:]}")
+    if a.change_via == "rotate":
+        # a real match rotates over a multi-map sv_maprotation. the copy's server.cfg is a HARD LINK into the
+        # base folder, so rewrite it as a new file - appending to it in place would edit the base cfg too.
+        rc, o = ssh(host, f"cd {d} && {{ cat userraw/server.cfg; "
+                          f"printf '\nset sv_maprotation \"gametype dom map {a.map} map {a.map_change_to}\"\n'; "
+                          f"}} > .cfg.new && mv .cfg.new userraw/server.cfg && tail -3 userraw/server.cfg")
+        if a.map_change_to not in o:
+            sys.exit(f"could not write the rotation into the copy's server.cfg: {o[-200:]}")
     subprocess.run(["scp", "-q", dll, f"{host}:{d}/iw4x.dll"], check=True)
     port = 28971
     srv = (f"cd {d} && (WINEPREFIX=$HOME/.wine-livetest-srv WINEDEBUG=-all setsid nohup wine iw4x.exe -dedicated -stdout "
@@ -338,13 +346,8 @@ def main():
         polls = []
         while time.time() < t0 + a.minutes * 60:
             if a.map_change_at is not None and change_t is None and time.time() - t0 >= a.map_change_at * 60:
-                if a.change_via == "rotate":
-                    # the rotation has to go in over rcon: the shell eats the quotes on the command line, so
-                    # +set sv_maprotation "map a map b" reaches the engine as six separate arguments
-                    ssh(host, f"cd {d} && {rcpy} 'set sv_maprotation \"map {a.map} map {a.map_change_to}\"'")
-                    ssh(host, f"cd {d} && {rcpy} map_rotate")
-                else:
-                    ssh(host, f"cd {d} && {rcpy} 'map {a.map_change_to}'")
+                ssh(host, f"cd {d} && {rcpy} "
+                          + ("map_rotate" if a.change_via == "rotate" else f"'map {a.map_change_to}'"))
                 change_t = time.time() - t0
                 time.sleep(45)
                 ssh(host, f"cd {d} && {rcpy} 'spawnBot {a.bots}'")

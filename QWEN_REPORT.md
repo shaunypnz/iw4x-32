@@ -122,6 +122,13 @@ quotes, so the engine got `+set sv_maprotation map mp_rust map mp_crash` as six 
 setting the rotation over rcon (`set sv_maprotation "map a map b"` reaches the server console quoted, like in a
 cfg file) instead of on the wine command line.
 
+**A hard-link trap worth knowing** (found while probing this, and it bit the base game folder): the throwaway
+folder is made with `cp -al`, so every file in it — `userraw/server.cfg` included — is a HARD LINK into
+`Games/MW2-IW4x32-v2`. Appending the rotation line to the copy's server.cfg edited the base folder's cfg. The tool
+now rewrites the copy's cfg as a new file (`{ cat; printf ...; } > .cfg.new && mv`) so the link is broken before
+anything is written; the base cfg is back to its original content (one trailing newline added, md5 otherwise the
+same file the other test folders share). The same reason the tool already `rm -f`s the copied log files.
+
 ## 4. Open questions / notes
 
 * `client_slot_32` (both cases) needs `--bots >= 18`: bots take the low slots, so with 8 bots the client can only
