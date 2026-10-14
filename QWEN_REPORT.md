@@ -117,10 +117,12 @@ PASS {'players_max': 29, 'players_wanted': 29, 'client_slot': 28, 'maps_seen': [
 fixtures: `FAIL map_changed: mp_rust -> mp_rust` and `FAIL client_follow_line: 0 ... mp_crash line(s)`, while
 `session_restarted` said ok. That combination is exactly right and it explains itself: `map_rotate` *did* restart
 the level (the client's log has `Server changing map mp_rust, gametype dom`, every bot was dropped and re-added as
-`bot28..bot55`), but the rotation never named a second map. The saved command line shows why — the shell ate the
-quotes, so the engine got `+set sv_maprotation map mp_rust map mp_crash` as six separate arguments. Fixed by
-setting the rotation over rcon (`set sv_maprotation "map a map b"` reaches the server console quoted, like in a
-cfg file) instead of on the wine command line.
+`bot28..bot55`), but the rotation never named a second map. Two things were wrong, and a dedicated probe
+(`.scratch/probe_rot4.log`) settled both: (a) `+set sv_maprotation "map a map b"` on the wine command line never
+reaches the engine as one value - the shell eats the quotes, the server sees six arguments; (b) even with the dvar
+set correctly over rcon (`"sv_mapRotation" is: "map mp_rust map mp_crash"`), `map_rotate` on this build restarts
+the *current* map instead of advancing. A rotation that names only the map you want next does advance:
+`set sv_maprotation "map mp_crash"` + `map_rotate` -> `map: mp_crash`. That is what `--change-via rotate` does now.
 
 **A hard-link trap worth knowing** (found while probing this, and it bit the base game folder): the throwaway
 folder is made with `cp -al`, so every file in it — `userraw/server.cfg` included — is a HARD LINK into
