@@ -1,4 +1,217 @@
-# QWEN_REPORT — IW4x-32 engine component
+# QWEN_REPORT — client rejoin test case (this round)
+
+**Result: `tools/aiboi_test.py` now carries a `rejoin` test case — a live client must come back on the new map by
+itself after a map change — and an offline `--self-test` that judges recorded transcripts. CHECK:
+`python3 tools/aiboi_test.py --self-test` passes (11 checks: the good transcript passes every case, each of the 8
+bad ones fails the check that names its problem). Live on the box, 28 bots + a real client on its GPU and a
+rotation-driven map change: **PASS, 13/13 checks**, twice running (runs 10 and 11). The client was back in slot 28
+72 s after the change both times. The bug from `iw4x32/tasks/map_change_rejoin.md` did not reproduce on this
+branch — see §4.**
+
+Branch: `feat/client-rejoin-test` (worktree). Nothing pushed.
+
+## 1. Deliverable
+
+`tools/aiboi_test.py` — the live game test tool, now in the repo (it used to live only in the RE tools folder,
+outside the checkout, so the CHECK could not run it). Split into two halves:
+
+* **the judging half** (no box, no game): `parse_status()` turns rcon `status` text into `(map, [(slot, guid,
+  name)])`; `case_baseline` / `case_rejoin` each yield one `chk(name, ok, detail)` per check; `verdict()` runs
+  the selected cases over one **observation record** (the polls of the run + the console counters).
+* **the live half**: same run as before (lock, throwaway folder, stock exe + our dll, dedicated server, bots,
+  optional client, optional `map_rotate`), but it now *records* what it saw into that same observation record and
+  lets the judging half decide. Nothing about the pass rule moved into the ssh loop.
+
+Test cases (`--case baseline,rejoin`; default: `baseline`, plus `rejoin` when `--client` and `--map-change-at`
+are both given):
+
+| case | checks |
+|---|---|
+| `baseline` (the old pass rule, unchanged) | `server_alive`, `no_new_crash_dumps`, `players_in`, `client_slot_32` (highest human slot >= 18) |
+| `rejoin` (new) | `client_in_before` — our client (`+set name live-test`) is in `status` before the change, so the case is judging something; `map_changed` — `status` shows two different maps; `session_restarted` — the bots answering after the change carry **new** guids (`bot0..bot27` before, `bot28..bot55` after): a level restart drops every client, so without this a client that never left would "rejoin" and nothing would be proven; `client_rejoined` — the client is in `status` again after the change; `rejoin_within` — back within `REJOIN_MAX_S` (150 s) of the change; `rejoin_slot_32` — its slot after the change is >= 18, which is only possible if the **client-side** 32-player layout survived the level reload; `client_process_up` — its process is still up at the end; `client_follow_line` — the client's own console log (`userraw/console_mp.log*`) shows the `Server changing map <map2>` notice, i.e. the client-side reload really ran; `players_back_after` — the bots are back too |
+
+`rejoin` refuses to run without `--client` and `--map-change-at` (`rejoin_setup` fails) rather than passing on an
+empty setup.
+
+How to run the case live (the box runs one test at a time and waits its turn):
+
+```
+python3 tools/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 28 --client \
+        --minutes 6 --map-change-at 1.5 --change-via rotate --save-logs .scratch/logs
+```
+
+(`--change-via map` for the direct change, which needs `--minutes 5`; `--save-logs` keeps the server and client
+consoles for reading afterwards — the run's own folder is deleted.)
+
+## 2. `--self-test` (the CHECK)
+
+`python3 tools/aiboi_test.py --self-test` — 11 checks, no box, no game, deterministic:
+
+* `parse_status` on the real status shape: map name, 29 rows, the client found in slot 28, exactly 1 human row
+  (bots carry a `bot<N>` guid).
+* the **good** transcript (28 bots + client in slot 28, change at 120 s, client back in slot 28 at 140 s, bots
+  re-added with new guids, 1 client follow line, 0 dumps) passes `baseline` **and** `rejoin`.
+* 8 **bad** transcripts, each must fail the named check — this is the "can the probe see a bad case" proof:
+  client never comes back (the bug: `client_rejoined`, `rejoin_within`, `rejoin_slot_32`, `client_follow_line`),
+  client back in slot 3 (client-side layout fell back: `rejoin_slot_32`), client back but its process died
+  (`client_process_up`), **nobody was dropped** — the change never restarted the session, so a client that never
+  left would "rejoin" (`session_restarted`), the change landed on the same map (`map_changed`,
+  `session_restarted`), the server went down (`server_alive`), bots never re-added (`players_back_after`), a new
+  crash dump (`no_new_crash_dumps`), and `rejoin` on a run with no `--map-change-at` (`rejoin_setup`).
+
+The transcripts are built with `status_text()`, which writes the same columns `status` prints; the address column
+stays the placeholder `0:<LAN-IP>` so nothing machine-specific is in the repo.
+
+## 3. Live runs
+
+**Run 1** (`--bots 28 --client --minutes 5 --map-change-at 2`, this branch's dll, `.scratch/live1.log`): the run
+itself was clean — 29/29 players, client in slot 28, 0 new minidumps, 11 polls — but three rejoin checks failed:
+
+```
+ok   client_in_before: live-test in status before the change
+FAIL map_changed: maps in status: mp_rust -> mp_rust
+FAIL server_reinit: 1 'iw4x32: .*slot server' line(s) in the server console, needs >= 2
+ok   client_rejoined: live-test in status again after the change: True
+FAIL client_reconnect_line: 1 'CL_ConnectFromParty called for local client' line(s) in userraw/console_mp.log
+```
+
+Cause, read from the evidence before touching anything: **the map change never happened.** The test game folder's
+`userraw/server.cfg` sets `sv_maprotation "gametype dom map mp_rust"` — a one-map rotation — so `rcon map_rotate`
+is a no-op: the server console carries a single `iw4x32: 32-slot server` line, `status` shows `mp_rust` the whole
+run, and the client's own console shows one connect. `client_rejoined` said ok only because the client never left
+— which is exactly why the case also demands `map_changed` and `server_reinit`: without them a run in which
+nothing was reloaded would "pass" a rejoin test. Fixed by making the change explicit: `--map-change-to mp_crash`
+(default) runs `rcon map mp_crash`; the stock mp_ maps are all in the test game folder.
+
+**Run 2** (`--map-change-at 2`, `.scratch/live2.log`): `map_changed` now ok (`mp_rust -> mp_crash`), the client was
+back in slot 28 and 29/29 players after the change — but `server_reinit` (2 marker lines) and
+`client_reconnect_line` (2 connects) still failed. Instead of adjusting the thresholds I saved the run's logs
+(`--save-logs`, added for this) and read them:
+
+* **the dll's `iw4x32: N-slot server` line appears once per process, not once per level.** One
+  `------ Server Initialization ------` block in the whole server console, and the server console never mentions
+  `mp_crash` at all — yet the client's log has `Server changing map mp_crash, gametype dom` and then
+  `Loading fastfile mp_crash_load` / `Loading fastfile mp_crash`. So a map change does not re-run the engine's
+  server-init banner path that the marker hook sits on; the marker can never be a map-change signal.
+* **`CL_ConnectFromParty` is not the follow-the-change marker either** — the client logs it once, at the initial
+  join (11 s in), and still rejoins fine.
+* **what a real level restart does leave in `status`: the bots.** Before the change the bots are `bot0..bot27`,
+  after it `bot28..bot55` — the restart dropped every client and the re-add named the next ones. That is the
+  observable proof that the session really restarted, which is what makes "the client came back" mean something.
+* **the log files collide**: the dedicated server and the client share the game folder, and both open
+  `userraw/console_mp.log`; whoever opens it second rotates the other's file to `.000`. That is why run 1 counted
+  one connect — it grepped the server's file. The tool now greps `console_mp.log*` (all of them) and
+  `--save-logs` keeps both.
+
+So the rejoin case now judges: `client_in_before`, `map_changed`, **`session_restarted`** (the bot guid sets before
+and after the change must be disjoint — a client that never left can no longer "rejoin"), `client_rejoined`,
+`rejoin_within`, `rejoin_slot_32`, `client_process_up`, **`client_follow_line`** (the client's console shows
+`Server changing map mp_crash`, i.e. the client-side reload ran), `players_back_after`. The `iw4x32` marker line
+count stays in the report as information, not as a check.
+
+**Run 3** (`--change-via map`, `.scratch/live3.log` + `.scratch/logs3`): first run against the rewritten checks —
+`map_changed` ok, `client_rejoined` ok (slot 28, back 72 s after the change), `client_follow_line` ok, and the two
+old checks (`server_reinit`, `client_reconnect_line`) were gone. `session_restarted` did not exist yet, so the run
+could not yet prove the client had actually been dropped.
+
+**Run 4** (`--change-via map`, `.scratch/live4.log`) — the first full PASS of the rejoin case, 13/13 checks:
+
+```
+poll t=24s  map=mp_rust  players=29 client=slot 28      poll t=169s map=mp_crash players=29 client=slot 28
+poll t=94s  map=mp_rust  players=29 client=slot 28      poll t=311s map=mp_crash players=29 client=slot 28
+ok   map_changed: maps in status: mp_rust -> mp_crash
+ok   session_restarted: bot guids before ['bot0','bot1']..28 vs after ['bot28','bot29']..28
+ok   client_rejoined / rejoin_within: back after 72 s, limit 150 s / rejoin_slot_32: slot 28
+ok   client_follow_line: 1 'Server changing map mp_crash' line(s) in userraw/console_mp.log*
+PASS {'players_max': 29, 'players_wanted': 29, 'client_slot': 28, 'maps_seen': ['mp_crash','mp_rust'],
+      'polls': 11, 'client_follow_lines': 1, 'iw4x32_marker_lines': 1, 'new_crash_dumps': 0}
+```
+
+**Run 5** (`--change-via rotate`, `.scratch/live5.log`) — the probe caught a bad case **live**, not just in the
+fixtures: `FAIL map_changed: mp_rust -> mp_rust` and `FAIL client_follow_line: 0 ... mp_crash line(s)`, while
+`session_restarted` said ok. That combination is exactly right and it explains itself: `map_rotate` *did* restart
+the level (the client's log has `Server changing map mp_rust, gametype dom`, every bot was dropped and re-added as
+`bot28..bot55`), but the rotation never named a second map. Getting the rotation to actually advance took three
+probes and produced a finding worth more than the fix:
+
+* `+set sv_maprotation "map a map b"` on the wine command line never reaches the engine as one value — the shell
+  eats the quotes and the server gets six arguments (visible in the saved command line at the top of server.log).
+* Over rcon the value lands (`"sv_mapRotation" is: "map mp_rust map mp_crash"`) — and `map_rotate` still restarts
+  the current map.
+* **The engine snapshots `sv_maprotation` when the LEVEL starts; changing the dvar mid-level changes the dvar and
+  nothing else.** Probe: set the rotation to `mp_rust` over rcon, call `map_rotate` — the server went to
+  **mp_crash**, the value the dvar had when the level started. That is the whole story behind runs 5-8.
+* With two maps named in the rotation, `map_rotate` restarts the current one; a rotation naming only the map you
+  want next advances.
+
+So `--change-via rotate` writes `set sv_maprotation "map <map2>"` into the copy's server.cfg before the server
+starts, then fires `map_rotate` twice: the first one after a manual `+map` only restarts the current map (the
+rotation system has not seen that level), the second follows the rotation. Run 10 below is that path end to end.
+
+**A hard-link trap worth knowing** (found while probing this, and it bit the base game folder): the throwaway
+folder is made with `cp -al`, so every file in it — `userraw/server.cfg` included — is a HARD LINK into the base
+test game folder on the box (its name lives in the site config, not here). Appending the rotation line to the
+copy's server.cfg edited the base folder's cfg. The base cfg is back to its original content — one trailing
+newline added, byte-identical apart from that — and the tool now rewrites the copy's cfg as a NEW file
+(`{ cat; printf ...; } > .cfg.new && mv`), never appends in place. Same reason it `rm -f`s the copied log files:
+never write through a link you did not break.
+
+**Runs 9-10** (`--change-via rotate`, the rotation in the copy's cfg, `map_rotate` fired twice). Run 9 still had the
+single-rotate version and failed `map_changed`; run 10 is the rotate path passing end to end, 13/13:
+
+```
+poll t=94s  map=mp_rust  players=29 client=slot 28      poll t=277s map=mp_crash players=29 client=slot 28
+poll t=205s map=mp_rust  players=29 client=slot 28      poll t=301s map=mp_crash players=29 client=slot 28
+ok   map_changed: maps in status: mp_rust -> mp_crash
+ok   session_restarted: bot guids before ['bot0','bot1']..28 vs after ['bot28','bot29']..28
+ok   client_rejoined / rejoin_within: back after 72 s, limit 150 s / rejoin_slot_32: slot 28
+ok   client_follow_line: 1 'Server changing map mp_crash' line(s) in userraw/console_mp.log*
+PASS {'players_max': 29, 'players_wanted': 29, 'client_slot': 28, 'maps_seen': ['mp_crash','mp_rust'],
+      'polls': 11, 'client_follow_lines': 1, 'iw4x32_marker_lines': 1, 'new_crash_dumps': 0}
+```
+
+The client's console shows both reloads it followed: `Server changing map mp_rust` (the first, no-op rotate) at
+91 s and `Server changing map mp_crash` at 144 s — and it came back after each.
+
+**Run 12** — the task's own reproduce command, verbatim (`--bots 8 --client --minutes 5 --map-change-at 2`). It
+does not reproduce either: `map_changed` ok, `session_restarted` ok, `client_rejoined` ok, back after 72 s,
+`client_follow_line` ok. The two failures are the slot checks, and they fail for a setup reason, not a bug: with
+8 bots the human sits in slot 8, so `>= 18` cannot be met and the 32-player layout is not exercised at all.
+
+```
+ok   client_rejoined: live-test in status again after the change: True
+ok   rejoin_within: back after 72 s, limit 150 s
+FAIL rejoin_slot_32: slot 8 after the change, needs >= 18
+FAIL client_slot_32: highest human slot 8, needs >= 18
+```
+
+## 4. Open questions / notes
+
+* `client_slot_32` (both cases) needs `--bots >= 18`: bots take the low slots, so with 8 bots the client can only
+  ever sit in slot 8. The reproduce command in `iw4x32/tasks/map_change_rejoin.md` (`--bots 8 --client`) therefore
+  fails that check for setup reasons — the rejoin case is meant to run with the default 28 bots.
+* The client's console log is `userraw/console_mp.log` (rotated `.NNN`); the `client.log` the run redirects wine's
+  stdout to stays empty — that is why the tool greps the real one, and greps `console_mp.log*`: the dedicated
+  server opens `console_mp.log` first, the client rotates it to `.000` when it starts and writes a fresh one, so
+  the two processes' lines are split across files.
+* **The bug did not reproduce on this branch.** With this branch's dll and a live client on the box's GPU, the
+  client followed a direct `map mp_crash` (run 4) and a rotation-driven change (run 10), came back by itself in
+  72 s both times, in slot 28, process up, 0 minidumps — and it did it in every one of the twelve runs, including
+  the runs where the level restarted but the map did not change. Run 12 is the task's own reproduce command
+  (`--bots 8 --client --minutes 5 --map-change-at 2`) verbatim: the client rejoined there too. So on this branch
+  the `rejoin` case is a regression guard, not a reproducer. Whoever picks up the fix should run the same command
+  against the build that shows the bug; the case is what fails there, and the fixtures in `--self-test` show the
+  shape of that failure.
+* Two things this setup does **not** cover, worth saying out loud: `party_enable 0` (a real online session joins
+  through the party, and `CL_ConnectFromParty` is exactly the line that does *not* repeat on a follow), and a
+  match that ends by itself (time limit / score limit) rather than a change fired at a fixed minute.
+* `iw4x32: N-slot server` (the dll's own server-init line) is printed **once per process**, not once per level —
+  it is kept in the report as information, and `session_restarted` uses the bot guids instead.
+
+---
+
+# Previous round — IW4x-32 engine component / player kit
+
 
 **Result: a stock `iw4x.exe` (r5154, MD5 `9c42ffa4f7aefd08fd501b40f5e41eab`, untouched on disk) plus our
 `iw4x.dll` runs a 32-player dedicated server with 31 bots, no crash.** The DLL rewrites the closed-source
