@@ -69,6 +69,32 @@ run, and the client's own console shows one connect. `client_rejoined` said ok o
 nothing was reloaded would "pass" a rejoin test. Fixed by making the change explicit: `--map-change-to mp_crash`
 (default) runs `rcon map mp_crash`; the stock mp_ maps are all in the test game folder.
 
+**Run 2** (`--map-change-at 2`, `.scratch/live2.log`): `map_changed` now ok (`mp_rust -> mp_crash`), the client was
+back in slot 28 and 29/29 players after the change — but `server_reinit` (2 marker lines) and
+`client_reconnect_line` (2 connects) still failed. Instead of adjusting the thresholds I saved the run's logs
+(`--save-logs`, added for this) and read them:
+
+* **the dll's `iw4x32: N-slot server` line appears once per process, not once per level.** One
+  `------ Server Initialization ------` block in the whole server console, and the server console never mentions
+  `mp_crash` at all — yet the client's log has `Server changing map mp_crash, gametype dom` and then
+  `Loading fastfile mp_crash_load` / `Loading fastfile mp_crash`. So a map change does not re-run the engine's
+  server-init banner path that the marker hook sits on; the marker can never be a map-change signal.
+* **`CL_ConnectFromParty` is not the follow-the-change marker either** — the client logs it once, at the initial
+  join (11 s in), and still rejoins fine.
+* **what a real level restart does leave in `status`: the bots.** Before the change the bots are `bot0..bot27`,
+  after it `bot28..bot55` — the restart dropped every client and the re-add named the next ones. That is the
+  observable proof that the session really restarted, which is what makes "the client came back" mean something.
+* **the log files collide**: the dedicated server and the client share the game folder, and both open
+  `userraw/console_mp.log`; whoever opens it second rotates the other's file to `.000`. That is why run 1 counted
+  one connect — it grepped the server's file. The tool now greps `console_mp.log*` (all of them) and
+  `--save-logs` keeps both.
+
+So the rejoin case now judges: `client_in_before`, `map_changed`, **`session_restarted`** (the bot guid sets before
+and after the change must be disjoint — a client that never left can no longer "rejoin"), `client_rejoined`,
+`rejoin_within`, `rejoin_slot_32`, `client_process_up`, **`client_follow_line`** (the client's console shows
+`Server changing map mp_crash`, i.e. the client-side reload ran), `players_back_after`. The `iw4x32` marker line
+count stays in the report as information, not as a check.
+
 ## 4. Open questions / notes
 
 * `client_slot_32` (both cases) needs `--bots >= 18`: bots take the low slots, so with 8 bots the client can only

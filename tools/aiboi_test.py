@@ -11,8 +11,9 @@ What the live run does (one test at a time on the box - a lock file there; a sec
   2. starts a 32-slot LAN dedicated server under Wine (its own Wine prefixes: the live test game and anything
      else on the box are never touched), adds --bots bots over rcon
   3. --client: also starts a game client on the box's desktop, rendered by the box's own GPU, joins iw4x://
-  4. --map-change-at MIN: forces a map change mid-test (rcon map <map2> - the server.cfg rotation is one map
-     long, so map_rotate alone would not change anything), re-adds the bots
+  4. --map-change-at MIN: forces a map change mid-test. --change-via rotate (default) starts the server with a
+     two-map sv_maprotation and fires `map_rotate` - the path a real match takes at its end; --change-via map
+     fires `map <map2>` directly. Either way the bots are re-added afterwards.
   5. watches for --minutes: player count, highest slot in use, server alive, client process up, new crash dumps
   6. stops everything it started (by PID), removes the folder, prints a report and exits 0 = pass
 
@@ -282,6 +283,9 @@ def main():
                     help="rcon map <map2> after MIN minutes, re-add the bots, and require everyone back afterwards")
     ap.add_argument("--map-change-to", default="mp_crash", metavar="MAP",
                     help="the map to change to (must differ from --map; the test game folder has the stock mp_ maps)")
+    ap.add_argument("--change-via", choices=("rotate", "map"), default="rotate",
+                    help="how to trigger the change: rcon map_rotate over a two-map rotation (what a real match "
+                         "does at its end) or rcon map <map2> directly")
     ap.add_argument("--case", default=None, metavar="LIST",
                     help="comma list of " + ",".join(CASES) + " (default: baseline, + rejoin with --client and --map-change-at)")
     ap.add_argument("--self-test", action="store_true", help="judge the recorded transcripts, no box needed")
@@ -315,7 +319,9 @@ def main():
     port = 28971
     srv = (f"cd {d} && (WINEPREFIX=$HOME/.wine-livetest-srv WINEDEBUG=-all setsid nohup wine iw4x.exe -dedicated -stdout "
            f"+set sv_lanonly 1 +set net_port {port} +exec server.cfg +set sv_maxclients 32 +set party_maxplayers 32 "
-           f"+set party_enable 0 +set logfile 1 +map {a.map} > server.log 2>&1 < /dev/null & echo $! > .srvpid)")
+           f"+set party_enable 0 +set logfile 1 "
+           + (f'+set sv_maprotation "map {a.map} map {a.map_change_to}" ' if a.change_via == "rotate" else "")
+           + f"+map {a.map} > server.log 2>&1 < /dev/null & echo $! > .srvpid)")
     rcpy = f"python3 rc.py --port {port}"                 # the game folder's rcon helper (password from server.cfg)
     try:
         ssh(host, srv)
@@ -332,7 +338,8 @@ def main():
         polls = []
         while time.time() < t0 + a.minutes * 60:
             if a.map_change_at is not None and change_t is None and time.time() - t0 >= a.map_change_at * 60:
-                ssh(host, f"cd {d} && {rcpy} 'map {a.map_change_to}'")
+                ssh(host, f"cd {d} && {rcpy} "
+                          + ("map_rotate" if a.change_via == "rotate" else f"'map {a.map_change_to}'"))
                 change_t = time.time() - t0
                 time.sleep(45)
                 ssh(host, f"cd {d} && {rcpy} 'spawnBot {a.bots}'")
