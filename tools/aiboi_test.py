@@ -690,7 +690,9 @@ def main():
         _, dumps = ssh(host, f"cd {d} && echo $(( $(ls minidumps 2>/dev/null | wc -l) - $(cat .dumps0) ))")
         new_dumps = int(dumps.split()[-1]) if dumps.split() and dumps.split()[-1].lstrip("-").isdigit() else 0
         cli_log_txt, srv_log_txt = fetch_logs(host, d)
-        marker = len(re.findall(MAP_INIT, srv_log_txt))
+        # the dll's server-init line, counted where it is printed: the server's own stdout, once per process
+        _, mk = ssh(host, f"cd {d} && grep -a -c '{MAP_INIT}' server.log 2>/dev/null || echo 0")
+        marker = int(mk.split()[-1]) if mk.split() and mk.split()[-1].isdigit() else 0
         obs_rec = {"polls": polls, "want": want, "client": a.client, "map_change_t": change_t,
                    "map_to": a.map_change_to, "new_crash_dumps": new_dumps, "server_alive": alive_all,
                    "client_log": cli_log_txt, "server_log": srv_log_txt, "iw4x32_marker": marker}
