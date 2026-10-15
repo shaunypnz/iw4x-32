@@ -35,8 +35,20 @@ export PATH="$T/bin:$PATH"
 run_sh() { local s="$1"; [ -f "$s" ] || s="$KIT/$s"; bash "$s" || echo "  exit=$?"; }
 same() { cmp -s "$1" "$2" && echo "  OK   $3" || echo "  FAIL $3"; }
 
+echo "== server start before install: must refuse =="
+out=$(bash "$KIT/start-server-linux.sh" --dry 2>&1 || true)
+echo "$out" | grep -q "not installed" && [ ! -e "$GAME/userraw/server_iw4x32.cfg" ] \
+    && echo "  OK   server refuses a game without IW4x-32" || echo "  FAIL server start without install: $out"
+
 echo "== install: official dll in place, v1.x iw4x.exe left over =="
 run_sh install-linux.sh
+echo "== server start after install (dry run, port 28961) =="
+out=$(bash "$KIT/start-server-linux.sh" --dry 28961 2>&1 || true)
+echo "$out" | grep -q "net_port 28961" && echo "$out" | grep -q "sv_maxclients 32" && echo "$out" | grep -q "+exec server_iw4x32.cfg" \
+    && echo "  OK   server command: port 28961, 32 slots, its settings file" || echo "  FAIL server command: $out"
+same "$GAME/userraw/server_iw4x32.cfg" "$KIT/server/server_iw4x32.cfg" "server settings made in userraw/"
+printf '// edited\n' >> "$GAME/userraw/server_iw4x32.cfg"; bash "$KIT/start-server-linux.sh" --dry >/dev/null 2>&1
+grep -q "// edited" "$GAME/userraw/server_iw4x32.cfg" && echo "  OK   a second start keeps the edited settings" || echo "  FAIL settings overwritten"
 same "$GAME/iw4x.dll" "$V/ours.dll" "game iw4x.dll is ours (files/iw4x.dll)"
 same "$GAME/iw4x.exe" "$V/official.exe" "game iw4x.exe restored from backup/"
 same "$KIT/backup/iw4x.dll" "$V/official.dll" "backup holds the official dll"

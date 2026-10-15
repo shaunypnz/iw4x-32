@@ -6,7 +6,7 @@ REM  Install IW4x-32 v2.0 (32-player IW4x).  Put this IW4x-32 folder INSIDE your
 REM  MW2 / IW4x game folder (the folder that has iw4x.exe), then double-click this file.
 REM
 REM  What it does (plain cmd + certutil, nothing downloaded, nothing else touched):
-REM   1. checks your iw4x.dll is the OFFICIAL IW4x r5154 file (SHA-256)
+REM   1. checks your iw4x.dll is the OFFICIAL IW4x file this release is made for (SHA-256)
 REM   2. copies it to IW4x-32\backup\
 REM   3. copies IW4x-32\files\iw4x.dll into the game folder and checks it
 REM
@@ -15,9 +15,10 @@ REM  the 18-player limits in memory when the game starts.  If an older IW4x-32 (
 REM  replaced your iw4x.exe, the official one is put back from IW4x-32\backup\ first.
 REM  Undo any time: "Uninstall IW4x-32.bat".  What changes and why: CHANGES.txt.
 REM =====================================================================================
+set "OFFICIAL_VER=r5168"
 set "OFFICIAL_EXE=49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009"
-set "OFFICIAL_DLL=82819f1a0c8e3758af8acb8773dc2e2f5cc069202b995e79772a23c9551236cd"
-set "OURS_DLL=0d8a8f630df43d25babb847b08f74c9a416a2e05c9336dd40ad0a15460ad9c7c"
+set "OFFICIAL_DLL=e0d8adc473f04f2d0988cffec3ecb8128e9faeba1e169c0acb13118d29aff6ea"
+set "OURS_DLL=f0a247ff84e1307330d43a03c4e8e4f8b8f921a465c6206e0b14a825f736a2d1"
 set "V1_EXE=2609c2687dd2ffb3f32c7687ed04f57b38ef6879c14b1c546faf8bfd8f35ea6b"
 for %%I in ("%~dp0.") do set "KIT=%%~fI"
 for %%I in ("%~dp0..") do set "GAME=%%~fI"
@@ -36,7 +37,7 @@ if /i "%DLL_NOW%"=="%OURS_DLL%" if /i not "%EXE_NOW%"=="%V1_EXE%" (
 )
 echo [1/3] Checking your current IW4x files ...
 if /i not "%DLL_NOW%"=="%OFFICIAL_DLL%" if /i not "%DLL_NOW%"=="%OURS_DLL%" goto :notofficial
-echo        OK - official IW4x r5154
+echo        OK - official IW4x %OFFICIAL_VER%
 
 echo [2/3] Backing up to IW4x-32\backup\ ...
 if not exist "%KIT%\backup" mkdir "%KIT%\backup"
@@ -90,7 +91,8 @@ echo ERROR: IW4x is running. Close the game and run this again.
 goto :end
 :notofficial
 echo.
-echo  STOPPED: your iw4x.dll is not the official IW4x r5154 file.
+echo  STOPPED: your iw4x.dll is not the official IW4x %OFFICIAL_VER% file.
+echo   - Start the official IW4x launcher once so IW4x is up to date (it must be %OFFICIAL_VER%), then try again.
 echo   - If IW4x was updated since this release, wait for a matching IW4x-32 update.
 echo   - If you modded it yourself, run the IW4x launcher once to repair, then try again.
 echo  Nothing was changed.
