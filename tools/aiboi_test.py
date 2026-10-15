@@ -262,7 +262,8 @@ def case_rejoin(o):
               f"{len(f['fatal'])} session-ending error line(s) after the change"
               + (f": '{f['fatal'][0][1][:80]}'" if f["fatal"] else "")
               + f"; {len(f['benign'])} known-benign error line(s) (voice channels, missing menu files)",
-              "" if not f["fatal"] else "the client logged an error after the map change: '" + f["fatal"][0][1][:80] + "'")
+              "" if not f["fatal"] else "the client logged an error after the map change: "
+                                         + f["fatal"][0][1][:80])
     yield chk("client_process_up", bool(f["after"]) and f["after"][-1]["client_up"],
               "client process still up at the end", "the client process is gone by the end of the run")
     yield chk("client_high_slot_after", f["slot_after"] is not None and f["slot_after"] >= SLOT_32,
@@ -392,7 +393,8 @@ def cli_log(map_to="mp_crash", notice=True, dropped=None, reinit=True, loaded=Tr
 def srv_log(map_to="mp_crash", restarts=2, human_slot=28, reconnects=True):
     """the server console of the same run: the two level restarts, the bots the re-add named, and the human's
     slot being handed out again after the change."""
-    out = [(1885, "------ Server Initialization ------"), (1890, "iw4x32: 32-slot server - 32-player layout, patched clients only")]
+    out = [(1885, "------ Server Initialization ------"),
+           (1890, "iw4x32: 32-slot server - 32-player layout, patched clients only")]
     for i in range(28):
         out.append((70000 + i * 500, f'Going from CS_FREE to CS_CONNECTED for  (num {i} guid "bot{i}")'))
     out.append((78927, "Client 0 connecting with 100 challenge ping from 0:<LAN-IP>"))
