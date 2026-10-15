@@ -507,6 +507,19 @@ def self_test():
     dump, change_t = transcript("mp_rust", 120.0, 28)
     expect("new crash dump", ["baseline"], obs(dump, 29, map_change_t=change_t, new_crash_dumps=1),
            False, ("no_new_crash_dumps",))
+    # the log files the box hands back: both processes share userraw/console_mp.log*, so the command line each
+    # block starts with is what keeps the client's story separate from the server's
+    n += 1
+    raw = ("## server.log\n['iw4x.exe' '-dedicated' '-stdout' +set net_port 28971 +map mp_rust]\n"
+           "[     5927] ------ Server Initialization ------\n"
+           "## client.log\n\n"
+           f"## userraw/console_mp.log\n{cli_log()}\n"
+           f"## userraw/console_mp.log.000\n{srv_log()}\n")
+    c, s = split_logs(raw)
+    if "Server changing map" not in c or "Server Initialization" not in s or "-dedicated" in c or "iw4x://" in s:
+        fails.append(f"split_logs: client {len(c)} chars, server {len(s)} chars - wanted the map-change notice on "
+                     "the client side and the level restarts on the server side")
+
     # the rejoin case must refuse a setup it cannot judge, not silently pass
     n += 1
     ok, res = verdict(["rejoin"], obs(good, 29))
@@ -544,21 +557,30 @@ def ssh(host, cmd, timeout=600):
     return r.returncode, (r.stdout + r.stderr).strip()
 
 
-def fetch_logs(host, d):
-    """the client's and the server's own console lines, filtered to CLI_EVENT. Both processes write into the same
-    userraw/console_mp.log* set (the client rotates it when it starts, pushing the server's lines to .000), so
-    each block is sorted by the command line it begins with: -dedicated is the server, iw4x:// is the client."""
-    _, raw = ssh(host, f"cd {d} && for f in server.log client.log {CLI_LOG} {CLI_LOG}.000; do "
-                       f'[ -f "$f" ] && echo "## $f" && tail -c 400000 "$f" | grep -a -E \'{CLI_EVENT}\'; done',
-                 timeout=180)
+def split_logs(raw):
+    """what fetch_logs pulled off the box -> (the client's console text, the server's). Each block begins with the
+    command line of the process that wrote it, which is the only thing that tells them apart now that both share
+    userraw/console_mp.log*: -dedicated is the server, the iw4x:// join is the client. Empty blocks (the client's
+    client.log, which stays empty without -stdout) drop out; a block with both markers (the client never rotated
+    the server's log) goes with whichever command line came first; one with neither goes to the client, because
+    reading the server's lines as the client's can only ever fail a check, never fake a rejoin."""
     parts = re.split(r"^## (\S+)\n", raw, flags=re.M)
     cli, srv = [], []
     for text in parts[2::2]:
         if not text.strip():
             continue
-        ded, cli_uri = text.find("-dedicated"), text.find("iw4x://")
-        (srv if 0 <= ded < cli_uri or (cli_uri < 0 and ded >= 0) else cli).append(text)
+        ded, join = text.find("-dedicated"), text.find("iw4x://")
+        (srv if 0 <= ded < join or (join < 0 <= ded) else cli).append(text)
     return "\n".join(cli), "\n".join(srv)
+
+
+def fetch_logs(host, d):
+    """the client's and the server's own console lines, filtered to CLI_EVENT, from the four files the run leaves
+    behind (see split_logs for which of them belongs to whom)."""
+    _, raw = ssh(host, f"cd {d} && for f in server.log client.log {CLI_LOG} {CLI_LOG}.000; do "
+                       f'[ -f "$f" ] && echo "## $f" && tail -c 400000 "$f" | grep -a -E \'{CLI_EVENT}\'; done',
+                 timeout=180)
+    return split_logs(raw)
 
 
 def main():
