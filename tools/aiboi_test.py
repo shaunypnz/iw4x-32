@@ -107,7 +107,6 @@ CLI_REINIT = "Setting state to CA_LOADING in CL_InitCGame"   # the client is tak
 CLI_DROP = re.compile(r"Disconnecting from |Disconnecting: |Server disconnected|Connection lost|CL_Disconnect"
                       r"|Com_Error|Sys_Error|Exception|timed out")
 CLI_FATAL = re.compile(r"Disconnecting from |Server disconnected|Connection lost|Com_Error|Sys_Error|Exception")
-CLI_BENIGN = re.compile(r"Could not load|Adding channel: error|No channels added|already defined")
 SV_SLOT = re.compile(r"Going from (\w+) to (\w+) for (.*?) \(num (\d+) guid \"(\w+)\"\)")
 
 
@@ -207,7 +206,8 @@ def case_rejoin(o):
         yield chk("rejoin_setup", False, "the rejoin case needs --client and --map-change-at",
                   "the rejoin case cannot be judged without --client and --map-change-at")
         return
-    f, cli, srv = rejoin_facts(o), rejoin_facts(o)["cli"], rejoin_facts(o)["srv"]
+    f = rejoin_facts(o)
+    cli, srv = f["cli"], f["srv"]
     maps = [p["map"] for p in o["polls"] if p["map"]]
     # a level restart drops every client, and IW4x gives each spawnBot the next guid in the session - so the bots
     # that answer after the change are not the bots that answered before it. That is what proves the session
@@ -233,7 +233,9 @@ def case_rejoin(o):
               + ("" if cli["lines"] else " (its console log is empty: the client process never ran?)"))
     if f["reconnected"]:
         yield chk("client_reconnected", True, f"back in status {f['reconnect_s']:.0f} s after the change "
-                                              f"(limit {REJOIN_MAX_S:.0f} s)")
+                                              f"(limit {REJOIN_MAX_S:.0f} s)"
+                  + (f"; the server handed the human guid slot {srv['human_slots'][-1][1]} again"
+                     if len(srv["human_slots"]) > 1 else ""))
     else:
         why = f"client did not reconnect within {REJOIN_MAX_S:.0f} s after the map change"
         yield chk("client_reconnected", False,
@@ -312,7 +314,8 @@ def table(bots, client_slot_no, guid0=0):
     """a status table: bots in slots 0..bots-1 with session guids bot{guid0}.., our client in client_slot_no
     (None = not on the server). A level restart drops every bot and the re-add names the next ones, so a real
     change shows guid0 = bots after it and guid0 = 0 before it."""
-    rows = [(i, f"bot{guid0 + i}", "Lunarion") for i in range(bots)]
+    slots = [i for i in range(bots + 1) if i != client_slot_no][:bots]
+    rows = [(s, f"bot{guid0 + i}", "Lunarion") for i, s in enumerate(slots)]
     if client_slot_no is not None:
         rows.append((client_slot_no, "AB12cd34EF567890", CLIENT_NAME))
     return rows
@@ -415,8 +418,6 @@ def self_test():
             fails.append(f"{what}: got {'PASS' if ok else 'FAIL'} {sorted(bad_names)}, wanted "
                          f"{'PASS' if want_ok else 'FAIL'} with {sorted(want_fails) or 'no failures'}")
         elif want_reason and want_reason not in line:
-            fails.append(f"{what}: verdict line '{line}' does not name '{want_reason}'")
-        elif want_reason is not None and want_ok and want_reason is not True and want_reason not in line:
             fails.append(f"{what}: verdict line '{line}' does not name '{want_reason}'")
         missing = [c for c in want_ok_checks if c not in {x["name"] for x in res if x["ok"]}]
         if missing:
@@ -545,9 +546,9 @@ def fetch_logs(host, d):
     _, raw = ssh(host, f"cd {d} && for f in server.log client.log {CLI_LOG} {CLI_LOG}.000; do "
                        f'[ -f "$f" ] && echo "## $f" && tail -c 400000 "$f" | grep -a -E \'{CLI_EVENT}\'; done',
                  timeout=180)
+    parts = re.split(r"^## (\S+)\n", raw, flags=re.M)
     cli, srv = [], []
-    for name, text in zip(re.split(r"^## (\S+)\n", raw, flags=re.M)[1::2],
-                          re.split(r"^## (\S+)\n", raw, flags=re.M)[2::2]):
+    for text in parts[2::2]:
         if not text.strip():
             continue
         ded, cli_uri = text.find("-dedicated"), text.find("iw4x://")
