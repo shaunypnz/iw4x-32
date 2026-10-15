@@ -118,8 +118,16 @@ namespace Steam
       }
       else
       {
-        Proxy::SetMod("IW4x: Modern Warfare 2");
+        Proxy::SelectOwnedGame();
         Proxy::RunGame();
+      }
+
+      // Under Proton the proxy can fail to reach the native Steam client
+      // while Companion still picks up the record, so register regardless.
+      //
+      if (!Components::Dedicated::IsEnabled() && !Components::ZoneBuilder::IsEnabled())
+      {
+        Companion::Register(Proxy::AppId, "IW4x: Modern Warfare 2");
       }
 
       return true;
@@ -143,6 +151,7 @@ namespace Steam
 
     void SteamAPI_Shutdown()
     {
+      Companion::Unregister();
       Proxy::UnInitialize();
       Callbacks::Uninitialize();
     }
