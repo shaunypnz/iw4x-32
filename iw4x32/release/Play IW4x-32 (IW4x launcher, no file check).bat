@@ -5,7 +5,7 @@ REM Fallback if "Play IW4x-32.bat" does not start the game: runs the OFFICIAL IW
 REM   --skip-remote      "Skip all remote checks and file reconciliation"  (keeps the IW4x-32 iw4x.dll)
 REM   --no-self-update   "Skip the automatic launcher self-update check"
 REM and afterwards checks the IW4x-32 iw4x.dll is still installed.
-set "OURS_DLL=0d8a8f630df43d25babb847b08f74c9a416a2e05c9336dd40ad0a15460ad9c7c"
+set "OURS_DLL=f0a247ff84e1307330d43a03c4e8e4f8b8f921a465c6206e0b14a825f736a2d1"
 for %%I in ("%~dp0..") do set "GAME=%%~fI"
 set "L="
 if exist "%GAME%\iw4x-launcher.exe" set "L=%GAME%\iw4x-launcher.exe"

@@ -7,9 +7,12 @@ because it shipped patched official files; v2.0 ships a DLL built from that sour
 verify byte by byte - read the code, or build it yourself.
 
 THE FILES
-  files/iw4x.dll   the only game file this kit installs; built from this repo's tag by GitHub Actions
-                   (Release | Win32), sha256 in SHA256SUMS.txt and latest.json
-  iw4x.exe         NOT touched. Your official IW4x r5154 file stays exactly where it is.
+  files/iw4x.dll   the only game file this kit installs; built from this repo's tag (Release | Win32), the
+                   exact file that passed the live 32-player test; sha256 in SHA256SUMS.txt and latest.json.
+                   Made for official IW4x r5168 (the installer checks your iw4x.dll is that release first).
+  iw4x.exe         NOT touched. Your official IW4x iw4x.exe (unchanged since r5154) stays exactly where it is.
+  Start IW4x-32 Server.bat, start-server-linux.sh, server/server_iw4x32.cfg
+                   the 32-player dedicated server starter (Windows / Linux under Wine) and its settings template.
   everything else in this folder is installers, start scripts and documentation.
 
 WHAT THE DLL DOES
