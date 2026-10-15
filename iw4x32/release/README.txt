@@ -27,13 +27,13 @@ TESTED ON
 
 REQUIREMENTS
   - Modern Warfare 2 (2009) on Steam.
-  - IW4x r5154 (the current official release) installed and started once.
+  - IW4x r5168 (the current official release) installed and started once.
 
 INSTALL
   1. Extract the zip.
   2. Move the IW4x-32 folder INTO your MW2 game folder (the folder with iw4x.exe).
   3. Double-click "Install IW4x-32.bat".
-     It checks your iw4x.dll is the official IW4x r5154 file, backs it up to
+     It checks your iw4x.dll is the official IW4x r5168 file, backs it up to
      IW4x-32\backup\, installs ours and checks it. If your file is not the official
      one it stops and changes nothing.
      Linux: same steps, but run  bash IW4x-32/install-linux.sh
@@ -78,6 +78,17 @@ PLAY
     Normal IW4x hides servers with more than 18 slots, so players without
     IW4x-32 will not see them (and get an install message if they try to join).
 
+HOST A 32-PLAYER SERVER
+  1. Install exactly as above ("Install IW4x-32.bat", or ./install-linux.sh on Linux).
+  2. Windows: double-click "Start IW4x-32 Server.bat" (another port: run it as
+     "Start IW4x-32 Server.bat 28961"). Linux: ./start-server-linux.sh [port] - it runs
+     iw4x.exe -dedicated under Wine (prefix ~/.wine-iw4x32-server unless WINEPREFIX is set).
+  3. The first start makes userraw\server_iw4x32.cfg in your game folder: set the server
+     name (sv_hostname), an rcon password and the map rotation there, then restart.
+  4. Players on the internet: forward the port (UDP, default 28960) on your router.
+     Add bots: type  spawnBot 10  in the server console.
+  "--dry" as the first argument only checks the install and prints the command.
+
 UNINSTALL
   Double-click "Uninstall IW4x-32.bat" (Linux: bash IW4x-32/uninstall-linux.sh) to
   restore your backup, or run the IW4x launcher once (it re-downloads the official
@@ -93,20 +104,20 @@ IS IT SAFE?
     or build it yourself.
   - CHANGES.txt explains what the DLL does and lists every engine site it changes.
   - The DLL changes the game in memory only, and only when it recognises the IW4x
-    r5154 engine: if the check fails it changes nothing at all. A file named
+    r5168 engine: if the check fails it changes nothing at all. A file named
     iw4x32-disable next to iw4x.exe switches it off.
   - Like IW4x itself, this is a client mod for a 2009 game: use it on your own
     install, and keep your backup.
 
 KNOWN LIMITS
-  - Made for IW4x r5154. When IW4x updates, the matching IW4x-32 update arrives by itself
+  - Made for IW4x r5168. When IW4x updates, the matching IW4x-32 update arrives by itself
     the next time you start through "Play IW4x-32" (after it has passed its tests).
-  - A server you start yourself is limited by sv_maxclients; hosting 32 players needs the
-    same IW4x-32 build on the server.
+  - Hosting 32 players needs this IW4x-32 build on the server too - start it with
+    "Start IW4x-32 Server.bat" / start-server-linux.sh (they set sv_maxclients 32).
   - End-of-match stats for players 19-32 have not been checked yet.
 
 TROUBLESHOOTING
-  - "STOPPED: your iw4x.dll is not the official IW4x r5154 file": run the IW4x launcher
+  - "STOPPED: your iw4x.dll is not the official IW4x r5168 file": run the IW4x launcher
     once to repair it, then install again. If IW4x has released a newer version, wait for
     an IW4x-32 update.
   - Steam opens normal MW2, or nothing happens: start with "Play IW4x-32.bat" (not by
