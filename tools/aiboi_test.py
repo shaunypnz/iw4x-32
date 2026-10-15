@@ -25,7 +25,8 @@ judges one observation record - what the run saw - and prints one line per check
             slot >= 18 (only the 32-player engine changes can put a client that high).
   rejoin    what actually happened to the client across a forced map change, read off the two console logs and
             the status polls: it got the server's map-change notice, it came back on its own (in how long), it
-            finished loading the new level (game state + cgame init in its own console), it logged no
+            finished loading the new level (game state + cgame init in its own console, or - when neither copy of
+            that console has flushed that far - a live usercmd stream on the server), it logged no
             session-ending error, its process is up, and the bots are back. The slot it had before and after is
             reported next to all of this and judged by its own check (high-slot coverage) - a client sitting in
             a low slot is a layout gap, it is not a failed rejoin. This is the case for the "client does not come
@@ -39,6 +40,13 @@ started with - that is what tells the client's lines from the server's. The engi
 with milliseconds since that process started and the file is append-only, so the lines are in event order and
 the reload timings come out of the client's own clock.
 
+A console file is not the console: the game writes it through a 4 KB stdio buffer and flushes it only when that
+buffer is full, so the last lines of a level reload sit in the process (box-checked - the client's log sat at
+108730 bytes for two minutes while the client kept printing, and the missing 'CL_InitCGame' line appeared when a
+`say` flood pushed the buffer out). So the run reads two copies of the client's console (its console log and its
+-stdout copy), makes the client print before fetching, and keeps the server's `lastmsg` for that client as a
+second, independent witness that it is in the level: a client on a loading screen sends no usercmds.
+
 --self-test runs the cases over the recorded transcripts at the bottom of this file: the good one must pass, and
 every bad one must fail the check that names its problem - a probe that always reads "perfect" is broken."""
 import argparse, json, os, re, subprocess, sys, time
@@ -46,8 +54,13 @@ import argparse, json, os, re, subprocess, sys, time
 CLIENT_NAME = "live-test"                 # the test client joins with +set name <CLIENT_NAME>
 SLOT_32 = 18                              # a slot >= 18 exists only with the 32-player layout live
 REJOIN_MAX_S = 150.0                      # a stock client follows a map change within about a minute
+PLAYING_MAX_MS = 2000                     # a client in the level sends a usercmd every frame, so the server's
+#                                         `lastmsg` for it stays near 0 (11400 ms once its process was killed)
+PLAYING_MIN_S = 30.0                      # ... and only a poll this far after the change can prove it is in it
+FLUSH_LINES = 80                          # `say` lines enough to carry the client's 4 KB console buffer to disk
 MAP_INIT = "iw4x32: .*slot server"        # the dll's server-init line (printed once per process, not per level)
 CLI_LOG = "userraw/console_mp.log"        # console log of whatever game process opens it last (see --save-logs)
+CLI_OUT = "client.log"                    # the client's -stdout copy of the same console, without the ms stamps
 CLI_FOLLOW = "Server changing map"        # the client got the server's map-change notice and reloads with it
 
 # the console lines that tell the rejoin story, as a grep -E pattern (the box filters them out of the ~100 KB
@@ -70,16 +83,19 @@ STAMP = re.compile(r"^\[\s*(\d+)\]\s?(.*)$")
 
 
 def parse_status(text):
-    """rcon `status` -> (map or None, [(slot, guid, name), ...]). Bots carry a bot<N> guid; the header, the ----
-    line and the map line do not match ROW, so they drop out. Colour codes are stripped from the name."""
+    """rcon `status` -> (map or None, [(slot, guid, name, lastmsg_ms or None), ...]). Bots carry a bot<N> guid;
+    the header, the ---- line and the map line do not match ROW, so they drop out. Colour codes are stripped from
+    the name, and `lastmsg` is read off the right end of the row (the name column is not a fixed width - IW4x
+    appends " iw4x" to every name, so counting from the left would land on the wrong column)."""
     m = re.search(r"^\s*map:\s*(\S+)", text, re.M)
     rows = []
     for l in text.splitlines():
         g = ROW.match(l)
         if not g:
             continue
-        rest = g.group(5).split()
-        rows.append((int(g.group(1)), g.group(4), re.sub(r"\^\d", "", rest[0]) if rest else ""))
+        rest = [re.sub(r"\^\d", "", t) for t in g.group(5).split()]
+        lastmsg = int(rest[-4]) if len(rest) >= 4 and rest[-4].lstrip("-").isdigit() else None
+        rows.append((int(g.group(1)), g.group(4), rest[0] if rest else "", lastmsg))
     return (m.group(1) if m else None), rows
 
 
@@ -93,15 +109,26 @@ def bot_guids(rows):
 
 def client_slot(rows):
     """slot of our test client in a status row list, None when it is not on the server."""
-    for slot, _guid, name in humans(rows):
+    for slot, _guid, name, _lastmsg in humans(rows):
         if name.lower() == CLIENT_NAME:
             return slot
     return None
 
 
+def client_lastmsg(rows):
+    """ms since the server last heard from our test client, None when it is not on the server. This is the
+    server's own witness that the client finished loading: in the level it sends a usercmd every frame (0-12 ms
+    on the box), on a loading screen or dead it sends nothing (11400 ms and climbing after its process was
+    killed)."""
+    for _slot, _guid, name, lastmsg in humans(rows):
+        if name.lower() == CLIENT_NAME:
+            return lastmsg
+    return None
+
+
 # ------------------------------------------------- the console logs: what the client did about the change
 
-CLI_NOTICE = re.compile(r"^Server changing map (\S+)")
+CLI_NOTICE = re.compile(r"^Server changing map (\w+)")   # the engine writes "map mp_crash, gametype dom"
 CLI_LOADED = re.compile(r"^CL_InitCGame:\s+([\d.]+) seconds")
 CLI_REINIT = "Setting state to CA_LOADING in CL_InitCGame"   # the client is taking the new level's game state
 CLI_DROP = re.compile(r"Disconnecting from |Disconnecting: |Server disconnected|Connection lost|CL_Disconnect"
@@ -140,12 +167,38 @@ def client_story(text, map_to):
               and not CLI_FATAL.search(line)]
     reinit = next((ms for ms, line in tail if CLI_REINIT in line), None)
     done = next(((ms, float(CLI_LOADED.match(line).group(1))) for ms, line in tail if CLI_LOADED.match(line)), None)
-    return {"lines": len(ev), "notices": [n[2] for n in notices],
+    # a copy without the engine's ms stamps (the -stdout one) still proves a line was printed, but every one of
+    # its lines would read as ms 0: keep the order, drop the timings rather than invent them
+    stamped = any(STAMP.match(l) for l in (text or "").splitlines())
+    return {"lines": len(ev), "stamped": stamped, "notices": [n[2] for n in notices],
             "notice": None if at is None else {"ms": at[1], "map": at[2]},
             "dropped": drop, "fatal": fatal, "benign": benign,
-            "reinit_ms": reinit, "loaded_ms": done[0] if done else None, "load_secs": done[1] if done else None,
-            "since_notice": lambda ms: None if at is None or ms is None else (ms - at[1]) / 1000.0,
+            "reinit_ms": reinit if stamped else None, "loaded_ms": done[0] if (done and stamped) else None,
+            "loaded": done is not None, "load_secs": done[1] if done else None,
+            "since_notice": lambda ms: None if at is None or ms is None or not stamped else (ms - at[1]) / 1000.0,
             "last": ev[-1][1] if ev else ""}
+
+
+def client_story_all(texts, map_to):
+    """the rejoin story out of every copy of the client's console the run left behind (its console log and, with
+    -stdout, its stdout copy). Each copy is written through the game's own 4 KB buffer and lags the process by
+    whatever it has not flushed, so a line missing from one copy is not evidence of anything: the story is what
+    the copies say together. The timings come from whichever copy carries the engine's ms stamps."""
+    stories = [client_story(t, map_to) for t in texts if t and t.strip()]
+    if not stories:
+        return dict(client_story("", map_to), copies=0, timed=False)
+    ref = max(stories, key=lambda s: (s["loaded"], s["reinit_ms"] is not None, s["notice"] is not None))
+    out = dict(ref, copies=len(stories), timed=ref["stamped"], lines=sum(s["lines"] for s in stories),
+               notices=sorted({m for s in stories for m in s["notices"]}))
+    for key in ("dropped", "fatal", "benign"):
+        seen, merged = set(), []
+        for s in stories:
+            for ms, line in s[key]:
+                if line not in seen:
+                    seen.add(line)
+                    merged.append((ms, line))
+        out[key] = sorted(merged, key=lambda e: e[0])
+    return out
 
 
 def server_story(text):
@@ -166,19 +219,40 @@ def server_story(text):
 
 
 def rejoin_facts(o):
-    """one dict with everything the rejoin case judges: the polls say where the client sat, its own console says
-    what it did about the change. Computed once so the checks and the verdict line cannot disagree."""
+    """one dict with everything the rejoin case judges: the polls say where the client sat and whether the server
+    still hears from it, its own consoles say what it did about the change. Computed once so the checks and the
+    verdict line cannot disagree."""
     before = [p for p in o["polls"] if p["t"] <= o["map_change_t"]]
     after = [p for p in o["polls"] if p["t"] > o["map_change_t"]]
-    cli, srv = client_story(o.get("client_log"), o["map_to"]), server_story(o.get("server_log"))
+    cli = client_story_all([o.get("client_log"), o.get("client_stdout")], o["map_to"])
+    srv = server_story(o.get("server_log"))
     back = [p for p in after if client_slot(p["rows"]) is not None]
     slot_after = client_slot(back[-1]["rows"]) if back else None
+    live = [(p["t"], client_lastmsg(p["rows"])) for p in back if client_lastmsg(p["rows"]) is not None]
+    lastmsg = live[-1][1] if live else None
+    playing_s = live[-1][0] - o["map_change_t"] if live else None
+    playing = lastmsg is not None and lastmsg <= PLAYING_MAX_MS and playing_s >= PLAYING_MIN_S
     return {"before": before, "after": after, "cli": cli, "srv": srv,
             "slot_before": client_slot(before[-1]["rows"]) if before else None, "slot_after": slot_after,
             "reconnected": bool(back), "reconnect_s": back[0]["t"] - o["map_change_t"] if back else None,
             "reinit_s": cli["since_notice"](cli["reinit_ms"]), "load_s": cli["since_notice"](cli["loaded_ms"]),
-            "loaded": cli["loaded_ms"] is not None,
+            "loaded_console": cli["loaded"], "lastmsg": lastmsg, "playing_s": playing_s, "playing": playing,
+            "loaded": cli["loaded"] or playing,
             "disconnected": bool(cli["dropped"]), "fatal": cli["fatal"], "benign": cli["benign"]}
+
+
+def secs(v):
+    """a duration in words, for the case where the copy of the console that proves the load carries no stamps."""
+    return "an unmeasured time" if v is None else f"{v:.0f} s"
+
+
+def copies(n):
+    return f"{n} copy" if n == 1 else f"{n} copies"
+
+
+def copies_read(cli):
+    """how much of the client's console the run actually got hold of, in words."""
+    return "no copy of its console" if not cli["copies"] else f"{copies(cli['copies'])} of its console"
 
 
 def slot_context(f):
@@ -189,7 +263,7 @@ def slot_context(f):
 
 def case_baseline(o):
     best = max((len(p["rows"]) for p in o["polls"]), default=0)
-    top = max([s for p in o["polls"] for s, _g, _n in humans(p["rows"])], default=-1)
+    top = max([s for p in o["polls"] for s, _g, _n, _l in humans(p["rows"])], default=-1)
     yield chk("server_alive", o["server_alive"], "every status poll answered", "the server stopped answering status")
     yield chk("no_new_crash_dumps", o["new_crash_dumps"] == 0, f"{o['new_crash_dumps']} new minidump(s)",
               f"{o['new_crash_dumps']} new crash dump(s) appeared during the run")
@@ -247,17 +321,31 @@ def case_rejoin(o):
                   f"client did not reconnect within {REJOIN_MAX_S:.0f} s after the map change"
                   + (f" - it left the session with @{why} and stayed out" if why else
                      (" and stayed out" if cli["dropped"] else "")))
-    if f["loaded"]:
+    if f["loaded_console"]:
         yield chk("client_loaded_map", True,
-                  f"took the new level's game state {f['reinit_s']:.0f} s after the notice and was in "
-                  f"{o['map_to']} {f['load_s']:.0f} s after it (cgame init {cli['load_secs']:.2f} s)")
+                  f"took the new level's game state {secs(f['reinit_s'])} after the notice and was in "
+                  f"{o['map_to']} {secs(f['load_s'])} after it (cgame init {cli['load_secs']:.2f} s)"
+                  if f["load_s"] is not None else
+                  f"'CL_InitCGame: N seconds' for {o['map_to']} after the notice in {copies_read(cli)} - not in a "
+                  "copy that carries the engine's ms stamps next to the notice, so the run cannot time it")
+    elif f["playing"]:
+        # neither copy of its console has flushed that far - the server is the witness instead, and a client
+        # sitting on a loading screen sends nothing at all
+        yield chk("client_loaded_map", True,
+                  f"in {o['map_to']} by the server's own account: a usercmd {f['lastmsg']} ms before the last "
+                  f"poll, {f['playing_s']:.0f} s after the change ("
+                  + ("no client console text at all" if not cli["copies"] else
+                     f"no cgame init line in {copies_read(cli)} - they lag the process by up to the game's "
+                     "4 KB log buffer") + ")")
     else:
         yield chk("client_loaded_map", False,
-                  f"no '{CLI_REINIT}' + 'CL_InitCGame: N seconds' pair after the notice"
-                  + (f"; it got as far as +{f['reinit_s']:.0f} s (game state) and stopped"
-                     if f["reinit_s"] is not None else f"; its console's last line is '{cli['last'][:80]}'"),
-                  f"client reconnected but never finished loading {o['map_to']} - its console shows no game "
-                  "state and no cgame init for the new level")
+                  ("no client console text at all" if not cli["copies"] else
+                   f"no '{CLI_REINIT}' + 'CL_InitCGame: N seconds' pair after the notice in {copies_read(cli)} "
+                   f"(last line '{cli['last'][:60]}')")
+                  + (f"; the server last heard from it {f['lastmsg']} ms before the last poll"
+                     if f["lastmsg"] is not None else "; it is not on the server in any later poll either"),
+                  f"client reconnected but never finished loading {o['map_to']} - no game state and no cgame "
+                  "init in its console, and no usercmd reaching the server")
     yield chk("client_no_session_error", not f["fatal"],
               f"{len(f['fatal'])} session-ending error line(s) after the change"
               + (f": '{f['fatal'][0][1][:80]}'" if f["fatal"] else "")
@@ -292,9 +380,11 @@ def verdict_line(cases, o, ok, res):
     if o["client"] and o["map_change_t"] is not None and "rejoin" in cases:
         f = rejoin_facts(o)
         if ok:
+            how = (f"finished loading it {f['load_s']:.0f} s after the notice" if f["load_s"] is not None else
+                   "finished loading it" if f["loaded_console"] else
+                   f"is in it - the server gets a usercmd from it every frame ({f['lastmsg']} ms since the last)")
             return (f"PASS - the client followed the change to {o['map_to']}, reconnected after "
-                    f"{f['reconnect_s']:.0f} s and finished loading it {f['load_s']:.0f} s after the notice "
-                    f"| {slot_context(f)}")
+                    f"{f['reconnect_s']:.0f} s and {how} | {slot_context(f)}")
         return f"FAIL - {(first['reason'] or first['detail']) if first else ''} | {slot_context(f)}"
     if ok:
         return "PASS - " + ", ".join(f"{c['name']} ok" for c in res)
@@ -304,29 +394,29 @@ def verdict_line(cases, o, ok, res):
 # ---------------------------------------------------------------- the recorded transcripts (--self-test)
 
 def status_text(mp, entries):
-    """entries [(slot, guid, name), ...] -> rcon status text. The address column stays a placeholder: no real
-    IPs in the repo, and nothing here reads it."""
+    """entries [(slot, guid, name, lastmsg_ms), ...] -> rcon status text. The address column stays a placeholder:
+    no real IPs in the repo, and nothing here reads it."""
     lines = [f"map: {mp}",
              " num score ping guid                             name            lastmsg address               qport rate",
              "--- ----- ---- -------------------------------- --------------- ------- --------------------- ----- -----"]
-    for slot, guid, name in entries:
-        lines.append(f"{slot:>3} {0:>4} {12:>3} {guid:>32} {name + '^7':<15} {60950:>6} {'0:<LAN-IP>':<21} {0:>4} {25000:>5}")
+    for slot, guid, name, lastmsg in entries:
+        lines.append(f"{slot:>3} {0:>4} {12:>3} {guid:>32} {name + '^7':<15} {lastmsg:>7} {'0:<LAN-IP>':<21} {0:>4} {25000:>5}")
     return "\n".join(lines)
 
 
-def table(bots, client_slot_no, guid0=0):
+def table(bots, client_slot_no, guid0=0, lastmsg=0):
     """a status table: bots in slots 0..bots-1 with session guids bot{guid0}.., our client in client_slot_no
-    (None = not on the server). A level restart drops every bot and the re-add names the next ones, so a real
-    change shows guid0 = bots after it and guid0 = 0 before it."""
+    (None = not on the server) answering the server `lastmsg` ms ago. A level restart drops every bot and the
+    re-add names the next ones, so a real change shows guid0 = bots after it and guid0 = 0 before it."""
     slots = [i for i in range(bots + 1) if i != client_slot_no][:bots]
-    rows = [(s, f"bot{guid0 + i}", "Lunarion") for i, s in enumerate(slots)]
+    rows = [(s, f"bot{guid0 + i}", "Lunarion", 12) for i, s in enumerate(slots)]
     if client_slot_no is not None:
-        rows.append((client_slot_no, "AB12cd34EF567890", CLIENT_NAME))
+        rows.append((client_slot_no, "AB12cd34EF567890", CLIENT_NAME, lastmsg))
     return rows
 
 
 def obs(polls, want, map_change_t=None, map_to="mp_crash", new_crash_dumps=0, server_alive=True, client=True,
-        client_log=None, server_log=None, iw4x32_marker=1):
+        client_log=None, client_stdout=None, server_log=None, iw4x32_marker=1):
     """polls: [(t, status text, client process up)] -> the observation record the cases judge."""
     ps = []
     for t, txt, up in polls:
@@ -334,18 +424,20 @@ def obs(polls, want, map_change_t=None, map_to="mp_crash", new_crash_dumps=0, se
         ps.append({"t": t, "map": mp, "rows": rows, "client_up": up})
     return {"polls": ps, "want": want, "client": client, "map_change_t": map_change_t, "map_to": map_to,
             "new_crash_dumps": new_crash_dumps, "server_alive": server_alive, "client_log": client_log,
-            "server_log": server_log, "iw4x32_marker": iw4x32_marker}
+            "client_stdout": client_stdout, "server_log": server_log, "iw4x32_marker": iw4x32_marker}
 
 
 def transcript(mp, change_t, client_after, bots=28, up_after=True, bots_after=None, mp_after="mp_crash",
-               restarted=True):
+               restarted=True, lastmsg_after=0):
     """a 5-minute run: bots + client in, map change at change_t (lands on mp_after), client_after = the slot the
-    client is back in (None = it never came back), bots_after = how many bots the re-add brought back,
-    restarted = the level restart dropped everyone (new bot guids), polls every 20 s."""
+    client is back in (None = it never came back), bots_after = how many bots the re-add brought back, restarted
+    = the level restart dropped everyone (new bot guids), lastmsg_after = how long ago the server last heard from
+    the client afterwards (0 = it is playing, tens of seconds = it is connected but says nothing), polls every
+    20 s."""
     polls = [(t, status_text(mp, table(bots, bots)), True) for t in (20, 40, 60, 80, 100, 120)]
     after = bots if bots_after is None else bots_after
     guid0 = bots if restarted else 0
-    polls += [(t, status_text(mp_after, table(after, client_after, guid0)), up_after)
+    polls += [(t, status_text(mp_after, table(after, client_after, guid0, lastmsg_after)), up_after)
               for t in (140, 160, 200, 240, 280, 300)]
     return polls, change_t
 
@@ -353,7 +445,7 @@ def transcript(mp, change_t, client_after, bots=28, up_after=True, bots_after=No
 # The client console of a real run (28 bots + client, mp_rust -> mp_crash), trimmed to the lines the rejoin
 # judgement reads: the file lists, dvar dumps and fastfile bookkeeping are dropped, the event lines are verbatim.
 # `cli_log` rebuilds it around the forced change so a transcript can stop wherever the story stops.
-CLI_BOOT = [(1131, "'+set r_fullscreen 0 +set r_mode 1280x720 +set name live-test iw4x://127.0.0.1:28971'"),
+CLI_BOOT = [(1131, "'+set r_fullscreen 0 +set r_mode 1280x720 +set name live-test iw4x://<test_server>:28971'"),
             (1132, "Adding channel: error"),
             (11657, "CL_Disconnect called for local client 0"),
             (11661, "Loading fastfile mp_rust_load"),
@@ -388,6 +480,13 @@ def cli_log(map_to="mp_crash", notice=True, dropped=None, reinit=True, loaded=Tr
             out.append((t_notice + 16417, "CL_InitCGame:  4.42 seconds"))
             out.append((t_notice + 16417, "Com_TouchMemory: 0 msec. Using sum: 1513413627"))
     return "\n".join(f"[{ms:>9}] {line}" for ms, line in out)
+
+
+def cli_stdout(map_to="mp_crash", **kw):
+    """the same console as cli_log(), without the engine's ms stamps - what the client's -stdout copy looks like.
+    It is written through a buffer of its own, so it is ahead of the console log exactly when the console log has
+    stopped at a level reload."""
+    return "\n".join(re.sub(r"^\[\s*\d+\]\s?", "", l) for l in cli_log(map_to, **kw).splitlines() if l.strip())
 
 
 def srv_log(map_to="mp_crash", restarts=2, human_slot=28, reconnects=True):
@@ -449,11 +548,25 @@ def self_test():
                server_log=srv_log(reconnects=False)),
            False, ("client_reconnected", "client_loaded_map", "client_high_slot_after"),
            want_reason="client did not reconnect within")
-    # bad: it reconnects (the server sees it again) but its console never finishes the new level
-    stuck, change_t = transcript("mp_rust", 120.0, 28)
+    # bad: it reconnects (the server sees it again) but never finishes the new level: neither copy of its console
+    # shows the cgame init AND the server gets no usercmd from it. One witness alone is not enough - a console
+    # file lags its process by up to the game's 4 KB log buffer, which is the whole reason there are two.
+    stuck, change_t = transcript("mp_rust", 120.0, 28, lastmsg_after=45000)
     expect("reconnects but never loads the map", ["rejoin"],
-           obs(stuck, 29, map_change_t=change_t, client_log=cli_log(loaded=False), server_log=srv_log()),
+           obs(stuck, 29, map_change_t=change_t, client_log=cli_log(loaded=False),
+               client_stdout=cli_stdout(loaded=False), server_log=srv_log()),
            False, ("client_loaded_map",), want_reason="never finished loading mp_crash")
+    # good: the console copies stop mid-reload (the unflushed tail) but the server still gets usercmds from it -
+    # it is in the level, and the verdict says which witness it used
+    unflushed, change_t = transcript("mp_rust", 120.0, 28)
+    expect("console stops mid-reload, client is playing", ["rejoin"],
+           obs(unflushed, 29, map_change_t=change_t, client_log=cli_log(loaded=False), server_log=srv_log()),
+           True, want_reason="usercmd")
+    # good: only the -stdout copy got that far; it carries no ms stamps, so the verdict keeps the timing out
+    stdout_only, change_t = transcript("mp_rust", 120.0, 28)
+    expect("the load line is only in the stdout copy", ["rejoin"],
+           obs(stdout_only, 29, map_change_t=change_t, client_log=cli_log(loaded=False),
+               client_stdout=cli_stdout(), server_log=srv_log()), True, want_reason="finished loading")
     # bad: it rejoins in a low slot - a layout gap, and NOT a reconnect failure (the confusion this file exists
     # to stop: the rejoin checks must all pass and the verdict must not talk about reconnecting)
     low, change_t = transcript("mp_rust", 120.0, 3)
@@ -508,17 +621,21 @@ def self_test():
     expect("new crash dump", ["baseline"], obs(dump, 29, map_change_t=change_t, new_crash_dumps=1),
            False, ("no_new_crash_dumps",))
     # the log files the box hands back: both processes share userraw/console_mp.log*, so the command line each
-    # block starts with is what keeps the client's story separate from the server's
+    # block starts with is what keeps the client's story separate from the server's, and the file name is what
+    # keeps the client's two copies of its own console apart (the stdout one carries no ms stamps)
     n += 1
     raw = ("## server.log\n['iw4x.exe' '-dedicated' '-stdout' +set net_port 28971 +map mp_rust]\n"
            "[     5927] ------ Server Initialization ------\n"
-           "## client.log\n\n"
+           f"## client.log\n['iw4x.exe' '-stdout' +set name live-test iw4x://<test_server>:28971]\n"
+           f"{cli_stdout()}\n"
            f"## userraw/console_mp.log\n{cli_log()}\n"
            f"## userraw/console_mp.log.000\n{srv_log()}\n")
-    c, s = split_logs(raw)
-    if "Server changing map" not in c or "Server Initialization" not in s or "-dedicated" in c or "iw4x://" in s:
-        fails.append(f"split_logs: client {len(c)} chars, server {len(s)} chars - wanted the map-change notice on "
-                     "the client side and the level restarts on the server side")
+    c, co, s = split_logs(raw)
+    if ("Server changing map" not in c or "Server Initialization" not in s or "-dedicated" in c
+            or "iw4x://" in s or "CL_InitCGame" not in co or "Server Initialization" in co):
+        fails.append(f"split_logs: client {len(c)} chars, client stdout {len(co)} chars, server {len(s)} chars "
+                     "- wanted the map-change notice on the client side, its stdout copy in the middle and the "
+                     "level restarts on the server side")
 
     # the rejoin case must refuse a setup it cannot judge, not silently pass
     n += 1
@@ -558,29 +675,45 @@ def ssh(host, cmd, timeout=600):
 
 
 def split_logs(raw):
-    """what fetch_logs pulled off the box -> (the client's console text, the server's). Each block begins with the
-    command line of the process that wrote it, which is the only thing that tells them apart now that both share
-    userraw/console_mp.log*: -dedicated is the server, the iw4x:// join is the client. Empty blocks (the client's
-    client.log, which stays empty without -stdout) drop out; a block with both markers (the client never rotated
-    the server's log) goes with whichever command line came first; one with neither goes to the client, because
-    reading the server's lines as the client's can only ever fail a check, never fake a rejoin."""
+    """what fetch_logs pulled off the box -> (the client's console log, the client's stdout copy, the server's
+    console text). Each block begins with the command line of the process that wrote it, which is the only thing
+    that tells the two processes apart now that both share userraw/console_mp.log*: -dedicated is the server, the
+    iw4x:// join is the client. Empty blocks (client.log when the client runs without -stdout) drop out; a block
+    with both markers (the client never rotated the server's log) goes with whichever command line came first; one
+    with neither goes to the client, because reading the server's lines as the client's can only ever fail a
+    check, never fake a rejoin. Within the client's own text the file name tells the two copies apart."""
     parts = re.split(r"^## (\S+)\n", raw, flags=re.M)
-    cli, srv = [], []
-    for text in parts[2::2]:
+    cli, cliout, srv = [], [], []
+    for name, text in zip(parts[1::2], parts[2::2]):
         if not text.strip():
             continue
         ded, join = text.find("-dedicated"), text.find("iw4x://")
-        (srv if 0 <= ded < join or (join < 0 <= ded) else cli).append(text)
-    return "\n".join(cli), "\n".join(srv)
+        if 0 <= ded < join or (join < 0 <= ded):
+            srv.append(text)
+        elif name.endswith(CLI_OUT):
+            cliout.append(text)
+        else:
+            cli.append(text)
+    return "\n".join(cli), "\n".join(cliout), "\n".join(srv)
 
 
 def fetch_logs(host, d):
     """the client's and the server's own console lines, filtered to CLI_EVENT, from the four files the run leaves
     behind (see split_logs for which of them belongs to whom)."""
-    _, raw = ssh(host, f"cd {d} && for f in server.log client.log {CLI_LOG} {CLI_LOG}.000; do "
+    _, raw = ssh(host, f"cd {d} && for f in server.log {CLI_OUT} {CLI_LOG} {CLI_LOG}.000; do "
                        f'[ -f "$f" ] && echo "## $f" && tail -c 400000 "$f" | grep -a -E \'{CLI_EVENT}\'; done',
                  timeout=180)
     return split_logs(raw)
+
+
+def flush_client_log(host, d, rcpy, n=FLUSH_LINES):
+    """make the client print, so its own console buffer reaches the disk. The game writes its console through a
+    4 KB stdio buffer and flushes only when that buffer is full, which is why the last lines of a level reload -
+    the cgame init line the rejoin verdict reads - are the first thing missing from the file (box-checked: the
+    client's console log sat at 108730 bytes for two minutes while the client went on printing, then jumped to
+    112892 with the missing 'CL_InitCGame' line in it after 60 `say` lines; killing the process flushes nothing).
+    `say` over rcon prints in every client's console, so push enough of them to carry the pending bytes out."""
+    ssh(host, f"cd {d} && for i in $(seq 1 {n}); do {rcpy} \"say log-flush-$i {'a' * 60}\"; done", timeout=900)
 
 
 def main():
@@ -647,7 +780,7 @@ def main():
            f"+set sv_lanonly 1 +set net_port {port} +exec server.cfg +set sv_maxclients 32 +set party_maxplayers 32 "
            f"+set party_enable 0 +set logfile 1 +map {a.map} > server.log 2>&1 < /dev/null & echo $! > .srvpid)")
     rcpy = f"python3 rc.py --port {port}"                 # the game folder's rcon helper (password from server.cfg)
-    cli_log_txt = srv_log_txt = ""
+    cli_log_txt = cli_out_txt = srv_log_txt = ""
     try:
         ssh(host, srv)
         time.sleep(60)
@@ -655,7 +788,8 @@ def main():
         if a.client:
             ssh(host, f"cd {d} && export DISPLAY=:0 XAUTHORITY=\"$(ls /run/user/$(id -u)/.mutter-Xwaylandauth.* | head -1)\" "
                       f"__GLX_VENDOR_LIBRARY_NAME=mesa WINEPREFIX=$HOME/.wine-livetest-cli WINEDEBUG=-all && "
-                      f"(setsid nohup wine iw4x.exe +set r_fullscreen 0 +set r_mode 1280x720 +set name {CLIENT_NAME} "
+                      f"(setsid nohup wine iw4x.exe -stdout +set r_fullscreen 0 +set r_mode 1280x720 "
+                      f"+set name {CLIENT_NAME} "
                       f"iw4x://127.0.0.1:{port} > client.log 2>&1 < /dev/null & echo $! > .clipid)")
         want = a.bots + (1 if a.client else 0)
         t0 = time.time()
@@ -690,26 +824,32 @@ def main():
             polls.append({"t": t, "map": mp, "rows": rows, "client_up": up})
         _, dumps = ssh(host, f"cd {d} && echo $(( $(ls minidumps 2>/dev/null | wc -l) - $(cat .dumps0) ))")
         new_dumps = int(dumps.split()[-1]) if dumps.split() and dumps.split()[-1].lstrip("-").isdigit() else 0
-        cli_log_txt, srv_log_txt = fetch_logs(host, d)
+        if a.client:
+            print("[aiboi_test] pushing the client's console buffer out with rcon say lines", flush=True)
+            flush_client_log(host, d, rcpy)
+            time.sleep(3)
+        cli_log_txt, cli_out_txt, srv_log_txt = fetch_logs(host, d)
         # the dll's server-init line, counted where it is printed: the server's own stdout, once per process
         _, mk = ssh(host, f"cd {d} && grep -a -c '{MAP_INIT}' server.log 2>/dev/null || echo 0")
         marker = int(mk.split()[-1]) if mk.split() and mk.split()[-1].isdigit() else 0
         obs_rec = {"polls": polls, "want": want, "client": a.client, "map_change_t": change_t,
                    "map_to": a.map_change_to, "new_crash_dumps": new_dumps, "server_alive": alive_all,
-                   "client_log": cli_log_txt, "server_log": srv_log_txt, "iw4x32_marker": marker}
+                   "client_log": cli_log_txt, "client_stdout": cli_out_txt, "server_log": srv_log_txt,
+                   "iw4x32_marker": marker}
         ok, res = verdict(cases, obs_rec)
         facts = rejoin_facts(obs_rec) if a.client and change_t is not None else None
-        cli_story = client_story(cli_log_txt, a.map_change_to)
+        cli_story = client_story_all([cli_log_txt, cli_out_txt], a.map_change_to)
         report = {"players_max": max((len(p["rows"]) for p in polls), default=0), "players_wanted": want,
                   "maps_seen": sorted({p["map"] for p in polls if p["map"]}), "polls": len(polls),
-                  "client_console_lines": cli_story["lines"], "iw4x32_marker_lines": marker,
-                  "new_crash_dumps": new_dumps}
+                  "client_console_lines": cli_story["lines"], "client_console_copies": cli_story["copies"],
+                  "iw4x32_marker_lines": marker, "new_crash_dumps": new_dumps}
         if facts:
             report.update({"client_disconnected": facts["disconnected"],
                            "client_reconnected": facts["reconnected"],
                            "client_reconnect_s": None if facts["reconnect_s"] is None else round(facts["reconnect_s"]),
                            "client_loaded_map": facts["loaded"],
                            "client_load_s": None if facts["load_s"] is None else round(facts["load_s"]),
+                           "client_lastmsg_ms": facts["lastmsg"],
                            "client_errors": [l[:90] for _ms, l in facts["fatal"]],
                            "client_slot_before": facts["slot_before"], "client_slot_after": facts["slot_after"],
                            "first_failure": next((c["name"] for c in res if not c["ok"]), None)})
@@ -721,9 +861,10 @@ def main():
             print(f"[aiboi_test] logs copied to {a.save_logs}", flush=True)
         _, tail = ssh(host, f"cd {d} && grep -a -E 'IW4x32:|ERROR|rror|xception|Crash' server.log | tail -8; "
                             f"tail -6 server.log", timeout=60)
-        # the client's own last console lines, straight out of the text the verdict was judged on (empty if the
-        # run died before fetch_logs - then there is nothing honest to print for it)
-        cli_tail = "\n".join(cli_log_txt.splitlines()[-16:]) if cli_log_txt else ""
+        # the client's own last console lines, straight out of the text the verdict was judged on - the copy that
+        # got furthest (empty if the run died before fetch_logs - then there is nothing honest to print for it)
+        tail_src = max((cli_log_txt, cli_out_txt), key=len)
+        cli_tail = "\n".join(tail_src.splitlines()[-16:]) if tail_src else ""
         ssh(host, f"cd {d} && for f in .clipid .srvpid; do [ -f $f ] && kill $(cat $f) 2>/dev/null; done; sleep 5; "
                   f"for p in srv cli; do WINEPREFIX=$HOME/.wine-livetest-$p wineserver -k 2>/dev/null; done; "
                   f"cd ~ && rm -rf {d}", timeout=120)

@@ -99,10 +99,98 @@ FAIL - the client is back but in slot 3, below 18 - the 32-player layout did not
        (client_reconnected, client_loaded_map and client_no_session_error all ok)
 ```
 
-## 4. CHECK results
+## 4. Round 3: why the live run failed `client_loaded_map`, and what the fix is
+
+The last live run failed one check and one only:
+
+```
+FAIL client_loaded_map: no 'Setting state to CA_LOADING in CL_InitCGame' + 'CL_InitCGame: N seconds' pair after
+the notice; it got as far as +13 s (game state) and stopped
+```
+
+**It is a measurement artifact, not a client that failed to load.** The evidence is in `scratch/probe-out/`
+(the instrumented probe the last pass left behind in `scratch/`, untracked - one run on the box, 27 bots +
+client, `mp_rust` -> `mp_crash`, sampled every 5-8 s; its numbers are quoted here):
+
+* the client's `userraw/console_mp.log` sat at **108730 bytes from +166 s to +300 s** of that run while the client
+  was demonstrably still printing (its `-stdout` copy grew 20413 -> 24192 -> 25562 bytes over the same window).
+  The file only ever grows in steps of ~4150 bytes: the game writes its console through a 4 KB stdio buffer and
+  flushes when the buffer is full. A level reload prints its `CL_InitCGame: N seconds` line and then goes quiet,
+  so that line is the first thing left sitting in the process and missing from the file. The failing run's client
+  console ends **mid-line** (`Error: Could not load menuf`) - the buffer boundary, caught in the act.
+* the post-change line was there all along in the client's `-stdout` copy (`client.log` line 491, `CL_InitCGame:
+  5.58 seconds`, present from +174 s on) - the harness never read that copy because the client was not started
+  with `-stdout`.
+* the probe's `say`-flood question is answered too: 60 `say` lines over rcon took the client's console log from
+  108730 to **112892** bytes and the missing line appeared in it (`2274:[ 95373] CL_InitCGame:  5.58 seconds`).
+  Making the client print is how you get its own buffer onto the disk. Killing it does nothing (sizes unchanged
+  after SIGTERM).
+* the server-side witness the probe was also asking about: the human's `status` row reads `lastmsg 0` while it is
+  in the level and `lastmsg 11400` (ping 999) once its process is gone. A client on a loading screen sends no
+  usercmds, so `lastmsg` is an independent witness that it finished loading - and it moves.
+
+Fixes, in this order:
+
+1. start the client with `-stdout` and read **both** copies of its console; the story is what the copies say
+   together (each one lags the process by whatever it has not flushed, so a line missing from one proves nothing).
+2. before fetching the logs, push `say` lines over rcon so the client flushes its own console log.
+3. `client_loaded_map` accepts the console pair as the primary proof and the server's `lastmsg` as the secondary
+   one, and says which one it used; it fails only when neither is there, with both numbers in the reason.
+4. `Server changing map (\w+)` - the old `(\S+)` captured `mp_crash,` with the comma, so the notice never matched
+   `map_to` and the code silently fell back to "the last notice whatever map it names".
+
+## 5. CHECK results
 
 | CHECK | result |
 |---|---|
-| `--self-test` | `[self-test] ok - 16 checks: good transcript passes, 0 wrong`, rc 0 |
-| build | PASS (unchanged from baseline - this task touches no C++; dll rebuilt at baseline, 4m29s) |
-| live rejoin run, high-slot client | in progress |
+| `python3 tools/aiboi_test.py --self-test` | `[self-test] ok - 18 checks: good transcript passes, 0 wrong`, rc 0 |
+| `bash $HOME/Projects/IW4x-32/tools-re/build_iw4x_fork.sh . Release` | PASS - `iw4x.vcxproj -> ...\build\bin\Win32\Release\iw4x.dll` (this task touches no C++; rebuilt anyway) |
+| live run `--bots 27 --client --minutes 5 --map-change-at 2` | **PASS**, 14/14 checks |
+
+The live run (t1792098949, 9 polls):
+
+```
+ok   client_followed_change: 2 'Server changing map' line(s) in the client console, last one for mp_crash
+ok   client_reconnected: back in status 72 s after the change (limit 150 s); the server handed the human guid slot 27 again
+ok   client_loaded_map: took the new level's game state 11 s after the notice and was in mp_crash 17 s after it
+                                    (cgame init 5.59 s)
+ok   client_no_session_error: 0 session-ending error line(s) after the change; 3 known-benign error line(s)
+PASS - the client followed the change to mp_crash, reconnected after 72 s and finished loading it 17 s after the
+       notice | slots: 27 before the change, 27 after (high-slot coverage >= 18: met)
+```
+
+The line the last run could not find is there now, and the flush is what put it there:
+
+```
+[    202745] Setting state to CA_LOADING in CL_InitCGame
+[    202746] iw4x32: server is 32-slot - using the 32 player/body layout
+[    208330] CL_InitCGame:  5.59 seconds
+```
+
+`client_console_copies: 2` in the report dict says both copies of the client's console were read; the `say` flood
+ran before the fetch, so the tail of the file is the tail of the story rather than the tail of a 4 KB block.
+
+## 6. What the self-test now covers (18 checks)
+
+The rejoin transcripts, all judged by the same code the live run uses:
+
+* good: notice -> reconnect -> cgame init, in both copies of the console (timed), and in the stdout copy only
+  (untimed - that copy carries no ms stamps, and the verdict says so instead of inventing a number)
+* good: the console copies stop mid-reload but the server still gets a usercmd every frame - the check passes on
+  that witness and names it
+* bad: reconnects but never loads - **both** witnesses have to say so (no cgame init line in either copy AND
+  `lastmsg` 45000 ms), which is what keeps a lagging log file from failing a healthy client
+* bad: never comes back, comes back in a low slot, no client console log at all, no level restart, bots not
+  re-added, same map after the change, session-ending error after the change, client process gone
+* plus the baseline transcripts and the two parsers, `split_logs` (three blocks in, three stories out) and
+  `parse_status` over the real `status` text
+
+## 7. Notes for the next reader
+
+* `client_loaded_map` is deliberately the third check, after `client_reconnected`: the task lists the story in
+  that order (disconnect, reconnect, finish loading, error, slots) and the verdict names the first thing that
+  failed in it. A client that never came back is reported as that, not as a load failure.
+* `PLAYING_MIN_S = 30` exists because `lastmsg` is small during the join handshake too (50 ms in a recorded
+  snapshot taken mid-join): only a poll well after the change can tell "in the level" from "negotiating".
+* the probe that measured all this is in `scratch/` (untracked, run once, cleaned the box up after itself);
+  `scratch/probe-out/probe.log` has the per-5-second samples behind the numbers quoted above.
