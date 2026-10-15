@@ -21,10 +21,16 @@ import argparse, hashlib, json, os, re, shutil, sys
 
 REPO = "shaunypnz/iw4x-32"
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-# official IW4x r5154 files - what a player's game folder must hold before we put our dll over it
-OFFICIAL = {"iw4x.dll": "82819f1a0c8e3758af8acb8773dc2e2f5cc069202b995e79772a23c9551236cd",
-            "iw4x.exe": "49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009"}
+# official IW4x files per release - what a player's game folder must hold before we put our dll over it. A new
+# upstream release: add its iw4x.dll SHA-256 (the release asset) here; iw4x.exe comes from the launcher and rarely changes.
+OFFICIAL_BY_IW4X = {
+    "r5154": {"iw4x.dll": "82819f1a0c8e3758af8acb8773dc2e2f5cc069202b995e79772a23c9551236cd",
+              "iw4x.exe": "49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009"},
+    "r5168": {"iw4x.dll": "e0d8adc473f04f2d0988cffec3ecb8128e9faeba1e169c0acb13118d29aff6ea",
+              "iw4x.exe": "49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009"},
+}
 OURS_CONST = re.compile(r"^(\s*(?:set \"?)?OURS_DLL=)[0-9A-Za-z_]*", re.M)
+OFFICIAL_CONST = {k: re.compile(rf"^(\s*(?:set \"?)?OFFICIAL_{k}=)[0-9A-Za-z_]*", re.M) for k in ("DLL", "EXE", "VER")}
 
 
 def sha(b):
@@ -63,11 +69,28 @@ def sync_ours_dll(kit, digest):
     return done
 
 
+def sync_official(kit, iw4x, off):
+    """set OFFICIAL_DLL= / OFFICIAL_EXE= / OFFICIAL_VER= in the installers to the official IW4x release the kit is for"""
+    done = []
+    want = {"DLL": off["iw4x.dll"], "EXE": off["iw4x.exe"], "VER": iw4x}
+    for p in kit_files(kit):
+        if not p.endswith((".bat", ".sh")):
+            continue
+        text = open(os.path.join(kit, p), "rb").read().decode("utf-8")
+        new = text
+        for k, rx in OFFICIAL_CONST.items():
+            new = rx.sub(lambda m, v=want[k]: m.group(1) + v, new)
+        if new != text:
+            open(os.path.join(kit, p), "wb").write(new.encode("utf-8"))
+            done.append(p)
+    return done
+
+
 def main():
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("--dll", help="built iw4x.dll to copy into the kit first")
     ap.add_argument("--version", default="v2.0")
-    ap.add_argument("--iw4x", default="r5154")
+    ap.add_argument("--iw4x", default="r5168", choices=sorted(OFFICIAL_BY_IW4X))
     ap.add_argument("--kit", default=os.path.join(ROOT, "iw4x32", "release"))
     ap.add_argument("--out", default=os.path.join(ROOT, "latest.json"))
     a = ap.parse_args()
@@ -84,6 +107,9 @@ def main():
     if not os.path.isfile(dll):
         sys.exit(f"make_latest: {dll} is missing - build Release and pass --dll, or copy the DLL in by hand")
 
+    OFFICIAL = OFFICIAL_BY_IW4X[a.iw4x]
+    for p in sync_official(a.kit, a.iw4x, OFFICIAL):
+        print(f"make_latest: official IW4x {a.iw4x} hashes set in {p}")
     digest = sha(open(dll, "rb").read())
     for p in sync_ours_dll(a.kit, digest):
         print(f"make_latest: OURS_DLL set in {p}")
