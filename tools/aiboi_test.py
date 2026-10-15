@@ -106,6 +106,7 @@ CLI_LOADED = re.compile(r"^CL_InitCGame:\s+([\d.]+) seconds")
 CLI_REINIT = "Setting state to CA_LOADING in CL_InitCGame"   # the client is taking the new level's game state
 CLI_DROP = re.compile(r"Disconnecting from |Disconnecting: |Server disconnected|Connection lost|CL_Disconnect"
                       r"|Com_Error|Sys_Error|Exception|timed out")
+CLI_WHY = re.compile(r"\(@([A-Z_]+)\)")
 CLI_FATAL = re.compile(r"Disconnecting from |Server disconnected|Connection lost|Com_Error|Sys_Error|Exception")
 SV_SLOT = re.compile(r"Going from (\w+) to (\w+) for (.*?) \(num (\d+) guid \"(\w+)\"\)")
 
@@ -237,13 +238,15 @@ def case_rejoin(o):
                   + (f"; the server handed the human guid slot {srv['human_slots'][-1][1]} again"
                      if len(srv["human_slots"]) > 1 else ""))
     else:
-        why = f"client did not reconnect within {REJOIN_MAX_S:.0f} s after the map change"
+        # the reason stays one plain sentence; the console line it died on is in the detail above it
+        why = next((m.group(1) for ms, line in cli["dropped"] if (m := CLI_WHY.search(line))), None)
         yield chk("client_reconnected", False,
                   f"{CLIENT_NAME} never appeared in status after the change"
                   + (f"; its console left the session with '{cli['dropped'][0][1][:80]}'" if cli["dropped"] else
                      f"; its console's last line is '{cli['last'][:80]}'"),
-                  why + (f" - it disconnected and stayed out (last console line '{cli['last'][:70]}')"
-                         if cli["dropped"] else ""))
+                  f"client did not reconnect within {REJOIN_MAX_S:.0f} s after the map change"
+                  + (f" - it left the session with @{why} and stayed out" if why else
+                     (" and stayed out" if cli["dropped"] else "")))
     if f["loaded"]:
         yield chk("client_loaded_map", True,
                   f"took the new level's game state {f['reinit_s']:.0f} s after the notice and was in "
