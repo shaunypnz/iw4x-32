@@ -139,25 +139,37 @@ Fixes, in this order:
 4. `Server changing map (\w+)` - the old `(\S+)` captured `mp_crash,` with the comma, so the notice never matched
    `map_to` and the code silently fell back to "the last notice whatever map it names".
 
-## 5. CHECK results
+## 5. CHECK results (round 2, all four re-run on the final tree)
 
 | CHECK | result |
 |---|---|
+| `git-privacy-check work` | **PASS** (rc 0, nothing found) - see §8 for what made it fail and the two fixes |
 | `python3 tools/aiboi_test.py --self-test` | `[self-test] ok - 18 checks: good transcript passes, 0 wrong`, rc 0 |
-| `bash $HOME/Projects/IW4x-32/tools-re/build_iw4x_fork.sh . Release` | PASS - `iw4x.vcxproj -> ...\build\bin\Win32\Release\iw4x.dll` (this task touches no C++; rebuilt anyway) |
+| `bash $HOME/Projects/IW4x-32/tools-re/build_iw4x_fork.sh . Release` | PASS - `iw4x.vcxproj -> ...\build\bin\Win32\Release\iw4x.dll`, 3864064 bytes (this task touches no C++; rebuilt anyway) |
 | live run `--bots 27 --client --minutes 5 --map-change-at 2` | **PASS**, 14/14 checks |
 
-The live run (t1792098949, 9 polls):
+The live run (t1792102080, 9 polls):
 
 ```
+ok   client_in_before: live-test in status before the change (slot 27)
+ok   map_changed: maps in status: mp_rust -> mp_crash
+ok   session_restarted: bot guids before ['bot0', 'bot1']..27 vs after ['bot27', 'bot28']..27
 ok   client_followed_change: 2 'Server changing map' line(s) in the client console, last one for mp_crash
 ok   client_reconnected: back in status 72 s after the change (limit 150 s); the server handed the human guid slot 27 again
-ok   client_loaded_map: took the new level's game state 11 s after the notice and was in mp_crash 17 s after it
-                                    (cgame init 5.59 s)
+ok   client_loaded_map: took the new level's game state 11 s after the notice and was in mp_crash 15 s after it
+                                    (cgame init 4.21 s)
 ok   client_no_session_error: 0 session-ending error line(s) after the change; 3 known-benign error line(s)
-PASS - the client followed the change to mp_crash, reconnected after 72 s and finished loading it 17 s after the
+ok   client_high_slot_after: slot 27 before the change, 27 after, needs >= 18
+ok   players_back_after: most 28 of 28 after the change
+PASS - the client followed the change to mp_crash, reconnected after 72 s and finished loading it 15 s after the
        notice | slots: 27 before the change, 27 after (high-slot coverage >= 18: met)
+PASS {'client_disconnected': False, 'client_reconnected': True, 'client_reconnect_s': 72,
+      'client_loaded_map': True, 'client_load_s': 15, 'client_lastmsg_ms': 0, 'client_errors': [],
+      'client_slot_before': 27, 'client_slot_after': 27, 'first_failure': None, ...}
 ```
+
+The four facts the task asked for are in that dict by name - disconnected / reconnected + how long / finished
+loading + how long / errors - with the slots beside them, and `first_failure` names the check that decided it.
 
 The line the last run could not find is there now, and the flush is what put it there:
 
@@ -169,6 +181,28 @@ The line the last run could not find is there now, and the flush is what put it 
 
 `client_console_copies: 2` in the report dict says both copies of the client's console were read; the `say` flood
 ran before the fetch, so the tail of the file is the tail of the story rather than the tail of a 4 KB block.
+
+## 8. Round 2: the push was refused, and why
+
+`git-privacy-check work` exited 1 with 128 findings. Read the findings first, not the summary: every one of them
+was a **machine path in a file round 1 had `git add`ed** - `scratch/gdec-status.txt` and `scratch/gdec2.txt`
+(Ghidra headless logs, full of tool-install and project paths), `scratch/probe-stdout.txt` and the 20
+`scratch/probe-out/snap-*.txt` samples (game folder paths quoted back from the box). Nothing in the source, the
+report or the tool was dirty; the scratch dumps simply got staged, and `git grep` (what the check runs) reads
+everything in the index. Two fixes:
+
+* `git rm --cached -r scratch` and `scratch/` added to `.gitignore` next to the existing `.scratch/` rule (that
+  rule's own comment already says why: these dumps hold machine paths and are never to be committed). The dumps
+  stay on disk for this round's reader, untracked.
+* one genuine hit in `tools/aiboi_test.py`: the rcon `say` marker that pushes the client's 4 KB log buffer out
+  was named after a site term. It is a plain `log-flush-$i` now - nothing parses that string, it only has to be
+  long enough to fill the buffer. The live run below ran with the renamed marker and still pulled the cgame init
+  line out of the client's buffer (`client_console_copies: 2`, `CL_InitCGame: 4.21 seconds`), so the flush works
+  exactly as well under the new name.
+
+Verified three ways, not one: `git-privacy-check work` (rc 0), the same scan run by hand over every tracked file
+(0 hits), and `git-privacy-check tree` over `git stash create` - a commit object of the working state, so it
+proves the tree the queue is about to commit is clean, not just the index as it sits.
 
 ## 6. What the self-test now covers (18 checks)
 
@@ -194,3 +228,14 @@ The rejoin transcripts, all judged by the same code the live run uses:
   snapshot taken mid-join): only a poll well after the change can tell "in the level" from "negotiating".
 * the probe that measured all this is in `scratch/` (untracked, run once, cleaned the box up after itself);
   `scratch/probe-out/probe.log` has the per-5-second samples behind the numbers quoted above.
+
+## 9. Verdict
+
+All four gates pass on the final tree: the privacy check, the offline `--self-test` (18 checks, the three rejoin
+transcripts among them), the build, and the live rejoin run with a client in a high slot (14/14, rejoin 72 s,
+level loaded 15 s after the notice, 0 crash dumps). The judgement now reads the two console logs and the status
+polls and says what happened to the client; the slot number is its own check and only ever context.
+
+NEXT ROUND: no - every CHECK passes on this tree (privacy rc 0, self-test 18/18, build PASS, live PASS 14/14);
+nothing is left to fix. The rejoin bug itself did not reproduce here, which is a result to report, not a gap in
+the tooling: the tool now names a real failure in plain words if one turns up in the field.
