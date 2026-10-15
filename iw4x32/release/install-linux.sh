@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 # IW4x-32 v2.0 install for Linux (Steam Proton / Wine). Put this IW4x-32 folder INSIDE your MW2 / IW4x game folder
 # (the folder with iw4x.exe), then run:  bash install-linux.sh
-# Same steps as "Install IW4x-32.bat": check the official IW4x r5154 iw4x.dll (SHA-256), back it up to
+# Same steps as "Install IW4x-32.bat": check the official IW4x iw4x.dll (SHA-256), back it up to
 # IW4x-32/backup/, install ours, check it. Nothing is downloaded and nothing else is touched.
 # IW4x-32 v2.0 is ONE file: iw4x.exe stays the official IW4x one. If an older IW4x-32 (v1.x) replaced it, the
 # official one is put back from IW4x-32/backup/ first.
 set -euo pipefail
+OFFICIAL_VER=r5168
 OFFICIAL_EXE=49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009
-OFFICIAL_DLL=82819f1a0c8e3758af8acb8773dc2e2f5cc069202b995e79772a23c9551236cd
-OURS_DLL=0d8a8f630df43d25babb847b08f74c9a416a2e05c9336dd40ad0a15460ad9c7c
+OFFICIAL_DLL=e0d8adc473f04f2d0988cffec3ecb8128e9faeba1e169c0acb13118d29aff6ea
+OURS_DLL=f0a247ff84e1307330d43a03c4e8e4f8b8f921a465c6206e0b14a825f736a2d1
 V1_EXE=2609c2687dd2ffb3f32c7687ed04f57b38ef6879c14b1c546faf8bfd8f35ea6b
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GAME="$(dirname "$KIT")"
@@ -24,13 +25,14 @@ fi
 echo "[1/3] Checking your current IW4x files ..."
 if [ "$(sha "$GAME/iw4x.dll")" != "$OFFICIAL_DLL" ] && [ "$(sha "$GAME/iw4x.dll")" != "$OURS_DLL" ]; then
     echo
-    echo " STOPPED: your iw4x.dll is not the official IW4x r5154 file."
+    echo " STOPPED: your iw4x.dll is not the official IW4x $OFFICIAL_VER file."
+    echo "   - Start the official IW4x launcher once so IW4x is up to date (it must be $OFFICIAL_VER), then try again."
     echo "  - If IW4x was updated since this release, wait for a matching IW4x-32 update."
     echo "  - If you modded it yourself, run the IW4x launcher once to repair, then try again."
     echo " Nothing was changed."
     exit 1
 fi
-echo "       OK - official IW4x r5154"
+echo "       OK - official IW4x $OFFICIAL_VER"
 echo "[2/3] Backing up to IW4x-32/backup/ ..."
 mkdir -p "$KIT/backup"
 [ "$(sha "$GAME/iw4x.dll")" = "$OFFICIAL_DLL" ] && cp -f "$GAME/iw4x.dll" "$KIT/backup/iw4x.dll"
