@@ -15,7 +15,7 @@ python3 tools/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 27 --c
 1. git merge-base --is-ancestor r5167 HEAD                     PASS (merge commit b5d7f58b)
 2. build_iw4x_fork.sh . Release                                PASS - build/bin/Win32/Release/iw4x.dll,
                                                                    md5 6fe7fc0c2f97a7a77c37f64002efec4e, REVISION 5167
-3. tools/aiboi_test.py --bots 27 --client --minutes 5 --map-change-at 2   (running)
+3. tools/aiboi_test.py --bots 27 --client --minutes 5 --map-change-at 2   PASS (13/13 checks, run 1, first try)
 ```
 
 The build log has no errors and no new warnings from the merged-in files (`Discord.cpp`, `Companion.cpp`,
@@ -100,11 +100,72 @@ files for the patterns the task names (`MAX_CLIENTS`, `\[18\]`, `< 18`, `clientN
 
 ## Build and live test results
 
-(filled in)
+Build (CHECK 2): clean, no errors, `Discord.cpp` / `Companion.cpp` / `Proxy.cpp` / `Steam.cpp` / `IW4x32.cpp` all
+compiled and linked; `build/bin/Win32/Release/iw4x.dll` = 3,864,064 bytes, md5 `6fe7fc0c2f97a7a77c37f64002efec4e`.
 
-## Open questions
+Live test (CHECK 3), the exact command from the task, on the test box, first run after the merge:
 
-(filled in)
+```
+python3 tools/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 27 --client --minutes 5 --map-change-at 2
+[aiboi_test] ok   server_alive: every status poll answered
+[aiboi_test] ok   no_new_crash_dumps: 0 new minidump(s)
+[aiboi_test] ok   players_in: most 28 of 28 wanted
+[aiboi_test] ok   client_slot_32: highest human slot 27, needs >= 18
+[aiboi_test] ok   client_in_before: live-test in status before the change
+[aiboi_test] ok   map_changed: maps in status: mp_rust -> mp_crash
+[aiboi_test] ok   session_restarted: bot guids before ['bot0','bot1']..27 vs after ['bot27','bot28']..27
+[aiboi_test] ok   client_rejoined: live-test in status again after the change: True
+[aiboi_test] ok   rejoin_within: back after 72 s, limit 150 s
+[aiboi_test] ok   rejoin_slot_32: slot 27 after the change, needs >= 18
+[aiboi_test] ok   client_process_up: client process still up at the end
+[aiboi_test] ok   client_follow_line: 1 'Server changing map mp_crash' line(s) in userraw/console_mp.log*
+[aiboi_test] ok   players_back_after: most 28 of 28 after the change
+[aiboi_test] PASS {'players_max': 28, 'players_wanted': 28, 'client_slot': 27, 'maps_seen': ['mp_crash', 'mp_rust'],
+                   'polls': 9, 'client_follow_lines': 1, 'iw4x32_marker_lines': 1, 'new_crash_dumps': 0}
+```
+
+The server console carried `IW4x32: patched the stock iw4x.exe (md5 9c42ffa4...) - 14 arrays, 701 operands,
+85 code patches (27 layout sites), 14 hooks - 32 players en...` - the 32-player engine patch still applies to the
+stock exe with the merged DLL, and `iw4x32_marker_lines: 1` is the harness seeing that line. The client console
+shows both map-change notices (`Server changing map mp_rust` then `mp_crash`) and the client came back in slot 27.
+
+The `Adding channel: error` lines in the server console tail are the stock voice-channel setup under Wine on the
+test box, present before this merge too - not a new failure.
+
+Offline harness self-check (`python3 tools/aiboi_test.py --self-test`, the probe-sees-a-bad-case proof):
+`ok - 11 checks: good transcript passes, 0 wrong`.
+
+## Notes for the next round (harness, not code)
+
+- `build_iw4x_fork.sh` on a fresh worktree inits every submodule from the main checkout's local clones. If a
+  previous attempt was interrupted, `git submodule update --init -q` can exit 1 printing nothing (the `-q` hides
+  the leftover-lock error) and the build script then dies with no log. Running the same command without `-q`
+  shows the real work and succeeds; after that the build script skips the step (`deps/zlib/zlib.h` exists).
+- Backgrounding the build from this harness (`nohup`/`setsid`) does not survive the tool call - the log stays
+  empty and nothing is left running. Run the build and the live test in the foreground with a long timeout.
+
+## Open questions / release-time follow-ups (not CHECK failures)
+
+1. `iw4x32/tools/make_latest.py` still defaults to `--iw4x r5154` and `latest.json` at the repo root still says
+   `"iw4x": "r5154"`. That file is generated when a kit is cut (it hashes `iw4x32/release/files/iw4x.dll`), so it
+   is deliberately untouched here - but the next kit must be made with `--iw4x r5167`, and
+   `iw4x32/release/files/iw4x.dll` + `SHA256SUMS.txt` regenerated, or installed players keep the pre-sync DLL.
+   `Updater.cpp` compares `REVISION_STR` (now `r5167`) against the upstream release tag, so the in-game
+   "update available" flag is correct already.
+2. Discord rich presence and Steam companion registration are client-side and cannot be judged by the live test
+   (the test box has no Discord client and the LAN run does not go through Steam). They compile, and the client
+   ran the whole session with them in and produced no crash dump; a human with Discord should eyeball the
+   presence on a 32-slot server (`partySize`/`partyMax` should read e.g. 28/32).
+3. Upstream's `snapshot_s` still holds `clients[18]` and the fork does not grow it (`engine_patches.json` has no
+   snapshot array). The Discord presence only reads `numClients`, which sits before that array, so this merge is
+   unaffected - but it is the same 18-wide session/match-data layer the prior task logged as an open issue at
+   match end (`SetClientMatchData("players", "18".."28")` errors). Still open, still not this task.
+
+NEXT ROUND: no - all three CHECKs pass on the merge commit: `r5167` is an ancestor of HEAD, the fork builds clean
+(r5167 DLL), and the live 27-bot + client + map-change test passes 13/13 with the client in slot 27 and 0 crash
+dumps. Nothing in the merged code needed a 32-player edit, so there is no follow-up work that would change a
+CHECK result. What is left is release-time work (regenerate the kit and `latest.json` with `--iw4x r5167`) and a
+human eyeball on Discord rich presence.
 
 ---
 
