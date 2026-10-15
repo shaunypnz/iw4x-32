@@ -16,7 +16,8 @@ Merge commit: `a4b1b214 Merge tag 'r5168' into feat/sync-upstream-r5168`.
                                                                                   no compile errors (only the usual 125 x D9025
                                                                                   /Zi->/Z7 override warnings from the msvc-wine shim)
 3. python3 tools/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll \
-       --bots 27 --client --minutes 5 --map-change-at 2                      PASS 13/13 (see "Live test" below)
+       --bots 27 --client --minutes 5 --map-change-at 2                      PASS 13/13, twice, identical numbers
+                                                                                  (see "Live test" below)
 ```
 
 ## What upstream changed (the 1 commit)
@@ -100,7 +101,8 @@ when old-throws AND new-writes AND the output carries the replacement character.
 ## Live test (the real game, 32-slot server, 27 bots + a client + a forced map change)
 
 `python3 tools/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 27 --client --minutes 5 --map-change-at 2`
--> **PASS 13/13**:
+-> **PASS 13/13**. Run twice on the same DLL; the summary line is identical both times (28/28 players, client
+slot 27 before and after, mp_rust -> mp_crash, rejoin 72 s, 0 crash dumps):
 
 ```
 server_alive, no_new_crash_dumps (0 new minidumps), players_in (28 of 28), client_slot_32 (slot 27 >= 18),
@@ -116,6 +118,10 @@ operands, 85 code patches (27 layout sites), 14 hooks - 32 players en...`, so th
 applies to the stock exe with this DLL. The three `Adding channel: error` lines in the console tail are the
 stock exe's voice-channel setup under Wine (the string is in no file under `src/` or `iw4x32/`) and were
 already there before the merge - not a regression.
+
+Both live runs used the DLL built above. A rebuild from the same sources gives a different file hash (MSVC
+under msvc-wine is not byte-reproducible - the second build of this tree produced `b83b4490aa182218e146fbf7ecfb1e67`
+with the same size and the same REVISION), so do not chase an md5 mismatch between rounds.
 
 Harness self-check (the probe-sees-a-bad-case proof for the live test itself):
 `python3 tools/aiboi_test.py --self-test` -> `ok - 11 checks: good transcript passes, 0 wrong`.
@@ -157,9 +163,10 @@ Harness self-check (the probe-sees-a-bad-case proof for the live test itself):
   (`SetClientMatchData("players", "18".."28")` errors at match end).
 
 NEXT ROUND: no - all three CHECKs pass on the merge commit `a4b1b214`: `r5168` is an ancestor of HEAD, the fork
-builds clean with REVISION 5168, and the live 27-bot + client + map-change test passes 13/13 with the client in
-slot 27 and 0 crash dumps. The merge had no conflicts and the incoming commit contains no 18-player site, so
-there is no follow-up that could change a CHECK result. What is left is human/release work (items 1-3 above).
+builds clean with REVISION 5168, and the live 27-bot + client + map-change test passes 13/13 twice with the
+client in slot 27 and 0 crash dumps. The merge had no conflicts and the incoming commit contains no 18-player
+site, so there is no follow-up that could change a CHECK result. What is left is human/release work (items 1-3
+above).
 
 The report of the previous sync round (r5167) is archived at `runs/QWEN_REPORT-r5167-sync-archived.md`, and the
 map-change rejoin task's report before that at `runs/QWEN_REPORT-mapchange-rejoin-archived.md`.
