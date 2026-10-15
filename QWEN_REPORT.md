@@ -129,8 +129,9 @@ The server console carried `IW4x32: patched the stock iw4x.exe (md5 9c42ffa4...)
 stock exe with the merged DLL, and `iw4x32_marker_lines: 1` is the harness seeing that line. The client console
 shows both map-change notices (`Server changing map mp_rust` then `mp_crash`) and the client came back in slot 27.
 
-The `Adding channel: error` lines in the server console tail are the stock voice-channel setup under Wine on the
-test box, present before this merge too - not a new failure.
+The `Adding channel: error` lines in the server console tail are not from our DLL at all (the string is in no
+file under `src/` or `iw4x32/` - the stock exe prints it while setting up voice channels under Wine), and they
+are not new: the saved pre-merge server logs from the previous task carry the same 3 lines. Not a merge failure.
 
 Offline harness self-check (`python3 tools/aiboi_test.py --self-test`, the probe-sees-a-bad-case proof):
 `ok - 11 checks: good transcript passes, 0 wrong`.
