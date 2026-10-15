@@ -15,7 +15,9 @@ python3 tools/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 27 --c
 1. git merge-base --is-ancestor r5167 HEAD                     PASS (merge commit b5d7f58b)
 2. build_iw4x_fork.sh . Release                                PASS - build/bin/Win32/Release/iw4x.dll,
                                                                    md5 6fe7fc0c2f97a7a77c37f64002efec4e, REVISION 5167
-3. tools/aiboi_test.py --bots 27 --client --minutes 5 --map-change-at 2   PASS (13/13 checks, run 1, first try)
+3. tools/aiboi_test.py --bots 27 --client --minutes 5 --map-change-at 2   PASS 13/13, twice (run 1 on the merge
+                                                              commit's build, run 2 on the committed build -
+                                                              identical numbers, client slot 27, rejoin 72 s)
 ```
 
 The build log has no errors and no new warnings from the merged-in files (`Discord.cpp`, `Companion.cpp`,
@@ -101,9 +103,12 @@ files for the patterns the task names (`MAX_CLIENTS`, `\[18\]`, `< 18`, `clientN
 ## Build and live test results
 
 Build (CHECK 2): clean, no errors, `Discord.cpp` / `Companion.cpp` / `Proxy.cpp` / `Steam.cpp` / `IW4x32.cpp` all
-compiled and linked; `build/bin/Win32/Release/iw4x.dll` = 3,864,064 bytes, md5 `6fe7fc0c2f97a7a77c37f64002efec4e`.
+compiled and linked; `build/bin/Win32/Release/iw4x.dll` = 3,864,064 bytes. Built twice (before and after the
+report commit): md5 `6fe7fc0c2f97a7a77c37f64002efec4e` then `deb20b1b1688c615dc0d2fee1093a9d8` - the two differ
+only because the linker stamps the PE header, and the live test was run against each of them.
 
-Live test (CHECK 3), the exact command from the task, on the test box, first run after the merge:
+Live test (CHECK 3), the exact command from the task, on the test box, once per build - both PASS with the same
+numbers (run 2 below is the committed build):
 
 ```
 python3 tools/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 27 --client --minutes 5 --map-change-at 2
