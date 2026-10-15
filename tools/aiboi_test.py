@@ -647,6 +647,7 @@ def main():
            f"+set sv_lanonly 1 +set net_port {port} +exec server.cfg +set sv_maxclients 32 +set party_maxplayers 32 "
            f"+set party_enable 0 +set logfile 1 +map {a.map} > server.log 2>&1 < /dev/null & echo $! > .srvpid)")
     rcpy = f"python3 rc.py --port {port}"                 # the game folder's rcon helper (password from server.cfg)
+    cli_log_txt = srv_log_txt = ""
     try:
         ssh(host, srv)
         time.sleep(60)
@@ -720,10 +721,9 @@ def main():
             print(f"[aiboi_test] logs copied to {a.save_logs}", flush=True)
         _, tail = ssh(host, f"cd {d} && grep -a -E 'IW4x32:|ERROR|rror|xception|Crash' server.log | tail -8; "
                             f"tail -6 server.log", timeout=60)
-        cli_tail = ""
-        if a.client:
-            cli_grep = "| grep -a -E 'onnect|isconnect|PARTYENDED|hanging map|rror|xception' | tail -16"
-            _, cli_tail = ssh(host, f"cd {d} && cat $(ls -t {CLI_LOG}* 2>/dev/null) 2>/dev/null {cli_grep}", timeout=60)
+        # the client's own last console lines, straight out of the text the verdict was judged on (empty if the
+        # run died before fetch_logs - then there is nothing honest to print for it)
+        cli_tail = "\n".join(cli_log_txt.splitlines()[-16:]) if cli_log_txt else ""
         ssh(host, f"cd {d} && for f in .clipid .srvpid; do [ -f $f ] && kill $(cat $f) 2>/dev/null; done; sleep 5; "
                   f"for p in srv cli; do WINEPREFIX=$HOME/.wine-livetest-$p wineserver -k 2>/dev/null; done; "
                   f"cd ~ && rm -rf {d}", timeout=120)
