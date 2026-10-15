@@ -230,7 +230,7 @@ def case_rejoin(o):
               + (f", last one for {cli['notice']['map']}" if cli["notice"] else "")
               + ("" if cli["lines"] else f" - and no client console log at all ({CLI_LOG}*)"),
               "the client never logged the server's map change - it did not get the notice"
-              + ("" if cli["lines"] else " (its console log is empty: the client process never ran?)"))
+              + ("" if cli["lines"] else " (no client console log to read: the client process never ran?)"))
     if f["reconnected"]:
         yield chk("client_reconnected", True, f"back in status {f['reconnect_s']:.0f} s after the change "
                                               f"(limit {REJOIN_MAX_S:.0f} s)"
@@ -259,7 +259,7 @@ def case_rejoin(o):
               f"{len(f['fatal'])} session-ending error line(s) after the change"
               + (f": '{f['fatal'][0][1][:80]}'" if f["fatal"] else "")
               + f"; {len(f['benign'])} known-benign error line(s) (voice channels, missing menu files)",
-              "the client logged an error after the map change: '" + f["fatal"][0][1][:80] + "'")
+              "" if not f["fatal"] else "the client logged an error after the map change: '" + f["fatal"][0][1][:80] + "'")
     yield chk("client_process_up", bool(f["after"]) and f["after"][-1]["client_up"],
               "client process still up at the end", "the client process is gone by the end of the run")
     yield chk("client_high_slot_after", f["slot_after"] is not None and f["slot_after"] >= SLOT_32,
