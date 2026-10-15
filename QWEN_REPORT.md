@@ -11,7 +11,17 @@ bash $HOME/Projects/IW4x-32/tools-re/build_iw4x_fork.sh . Release
 python3 tools/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 27 --client --minutes 5 --map-change-at 2
 ```
 
-Status: (in progress - filled in below as each one runs)
+```
+1. git merge-base --is-ancestor r5167 HEAD                     PASS (merge commit b5d7f58b)
+2. build_iw4x_fork.sh . Release                                PASS - build/bin/Win32/Release/iw4x.dll,
+                                                                   md5 6fe7fc0c2f97a7a77c37f64002efec4e, REVISION 5167
+3. tools/aiboi_test.py --bots 27 --client --minutes 5 --map-change-at 2   (running)
+```
+
+The build log has no errors and no new warnings from the merged-in files (`Discord.cpp`, `Companion.cpp`,
+`Proxy.cpp`, `Steam.cpp` all compiled). `iw4x32/tools/make_version_h.py` now resolves `r5167` from the merged tag,
+so the DLL reports REVISION 5167 - the fork ships upstream's revision number, which is what `Updater.cpp`
+compares against `latest.json`.
 
 ## What upstream changed (the 10 commits)
 
@@ -30,11 +40,63 @@ Status: (in progress - filled in below as each one runs)
 
 ## Conflicts and how they were resolved
 
-(filled in after `git merge r5167`)
+**There were none.** `git merge r5167` merged clean with the `ort` strategy:
+
+```
+Merge made by the 'ort' strategy.
+ 13 files changed, 1245 insertions(+), 172 deletions(-)
+```
+
+The reason is that the two sides touch disjoint files. Everything the fork changes
+(`git diff --name-only d1b175da..dedab8d5`: `iw4x32/**`, `src/Components/Modules/IW4x32*.{cpp,hpp}`,
+`IW4x32Tables.hpp`, `Loader.cpp`, `Dedicated.*`, `ServerList.cpp`, `Updater.cpp`, `Voice.cpp`, `Vote.cpp`,
+`src/Game/Functions.*`, `src/Game/Server.cpp`, `premake5.lua`, `tools/aiboi_test.py`, `latest.json`, release kit,
+CI) is outside the 13 files upstream touched (`Discord.*`, `Friends.cpp`, `DllMain.cpp`, `Steam/*`, `.gitmodules`,
+`deps/companion`, `deps/premake/companion.lua`).
+
+Verified the merge lost nothing fork-side and added nothing else:
+
+```
+git diff --stat dedab8d5..HEAD   ->  exactly the 13 upstream files, +1245/-172
+```
+
+The one thing the merge did need beyond the merge itself: the new `deps/companion` submodule was not cloned in
+this worktree. `build_iw4x_fork.sh` only inits submodules when `deps/zlib/zlib.h` is missing, and it seeds them
+from the main checkout's local clones (offline), which do not contain `companion` yet. Fetched it once:
+
+```
+git submodule update --init deps/companion     # -> 46d9b47e (heads/main), libcompanion headers only
+```
+
+`deps/premake/companion.lua` only adds `deps/companion/libcompanion` to `includedirs` (header-only,
+`<libcompanion/protocol.hxx>`), and `dependencies.load()` in `premake5.lua` requires every `deps/premake/*.lua`,
+so no project file needed editing.
 
 ## New 18-slot sites in upstream's code, and what was done for 32
 
-(filled in after reading the new code)
+Read every line the merge brought in (`Discord.cpp` 603 lines, `Companion.cpp` 593, `Proxy.cpp`, `Steam.cpp`,
+`Friends.cpp`, `DllMain.cpp`). **No new 18-wide array, no new `< 18` check, no new `Game::MAX_CLIENTS` loop.**
+What the new code does with player counts, site by site:
+
+| site | what it does | 32-player verdict |
+|---|---|---|
+| `Discord.cpp` `Observe()`: `scene.players = Game::cgArray[0].snap ? ...->numClients : 1` | player count for the presence | `numClients` sits in `snapshot_s` before `clients[18]`; the fork's engine patch list (`engine_patches.json` -> `arrays`) does not grow the snapshot struct, so the field reads correctly and simply reports up to 32 |
+| `Discord.cpp` `Build()`: `r.partySize = std::clamp(scene.players, 1, 64)` | Discord party size | clamps at 64, so 32 players pass through unchanged - no edit needed |
+| `Discord.cpp` `Build()`: `r.partyMax = scene.capacity > 0 ? std::clamp(scene.capacity, r.partySize, 64) : 0` with `scene.capacity = Party::GetMaxClients()` | Discord party max | `Party::GetMaxClients()` parses the `sv_maxclients` server-info value, so a 32-slot server publishes `partyMax = 32` (upper clamp 64) - correct as is |
+| `Discord.cpp` `Observe()`: `scene.server = Party::GetHostName()` | server name | reads the server-info container, no slot involvement |
+| `Friends.cpp` `IsClientInParty()`: `clientNum >= ARRAYSIZE(Dedicated::PlayerGuids)` | party/friend check per slot | `ARRAYSIZE` follows the fork's `PlayerGuids[Game::MAX_CLIENTS][2]`, so it already covers 32 slots (this is the site the fork fixed earlier; upstream's edit removed the neighbouring mod-ID block, not this line) |
+| `Steam/Companion.cpp` (whole file) | Steam companion record: file mapping / `/dev/shm` file, `rundll32` attach | no player data at all |
+| `Steam/Proxy.cpp` `SelectOwnedGame()` (replaces `SetMod`/`RunMod`) | picks the app id the account owns | no player data |
+| `Steam/Steam.cpp` `Companion::Register/AppId` | registers the title | no player data |
+| `DllMain.cpp` (removed `Steam::Proxy::RunMod()`) | the old mod re-exec parent wait | gone upstream, nothing fork-side referenced it (`grep -rn "Proxy::RunMod\|Proxy::SetMod" src/` is empty; `ModList::RunMod` is a different function) |
+
+The security fix (`JoinGame`) parses the Discord join secret with `Network::Address` and only accepts a
+non-local `NA_IP` before calling `Party::Connect` - it never hands the secret to the console. Nothing
+32-specific there either.
+
+So: **zero IW4x-32 edits were needed on top of the merge.** I re-checked that claim with a grep over the merged
+files for the patterns the task names (`MAX_CLIENTS`, `\[18\]`, `< 18`, `clientNum`, `playerNames`,
+`playerClientNums`, `svs_`) - the only hits are the `Friends.cpp` `ARRAYSIZE` line above.
 
 ## Build and live test results
 
