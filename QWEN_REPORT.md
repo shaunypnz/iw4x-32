@@ -1,3 +1,53 @@
+# Round 1 (2026-10-15) - sync the IW4x-32 fork with upstream r5167
+
+Branch `feat/sync-upstream-r5167`, fork head `dedab8d5`, upstream release tag `r5167` = `dc315210`.
+Merge base: `d1b175da Add server-side demo recording` - the fork is 10 upstream commits behind.
+
+## CHECK commands (from the worktree root)
+
+```
+git merge-base --is-ancestor r5167 HEAD
+bash $HOME/Projects/IW4x-32/tools-re/build_iw4x_fork.sh . Release
+python3 tools/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 27 --client --minutes 5 --map-change-at 2
+```
+
+Status: (in progress - filled in below as each one runs)
+
+## What upstream changed (the 10 commits)
+
+| commit | subject | files |
+|---|---|---|
+| 9f9667ae | Add companion dependency | `.gitmodules`, `deps/companion` (new submodule), `deps/premake/companion.lua` |
+| 1af6904e | Remove Steam mod presence | `Friends.cpp`, `DllMain.cpp`, `Steam/Proxy.cpp/hpp`, `Steam/Steam.cpp` (-90) |
+| c71d70f1 | Add Steam companion registration | new `Steam/Companion.cpp/hpp` (+653), `Steam/Steam.cpp/hpp` |
+| 731d2607 | **Fix command injection through Discord join secrets** | `Discord.cpp` |
+| dd509ffa | Change Discord rich presence to describe the match with map art | `Discord.cpp/hpp` (+458) |
+| 661fb8b7 | Fix Discord rich presence text in non-Western languages | `Discord.cpp` |
+| b8baff4a | Fix Discord rich presence text with DEL and C1 control characters | `Discord.cpp` |
+| 61ab31ae | Change Steam companion to companion64 and companion launcher | `deps/companion`, `Steam/Companion.cpp/hpp` |
+| e074ef0a | Fix Discord rich presence in private match lobby | `Discord.cpp` |
+| dc315210 | Fix stale relay reference in Discord control character comment | `Discord.cpp` |
+
+## Conflicts and how they were resolved
+
+(filled in after `git merge r5167`)
+
+## New 18-slot sites in upstream's code, and what was done for 32
+
+(filled in after reading the new code)
+
+## Build and live test results
+
+(filled in)
+
+## Open questions
+
+(filled in)
+
+---
+
+# ARCHIVED - prior task report (map-change rejoin, rounds 1-6). Kept for history; it describes a different task.
+
 BROKEN CHECK: `python3 $HOME/Projects/IW4x-32/tools-re/aiboi_test.py --dll build/bin/Win32/Release/iw4x.dll --bots 8 --client --minutes 5 --map-change-at 2`
 
 - The pass rule needs `client_slot >= 18`. The test spawns the `--bots` bots **before** the client and the
