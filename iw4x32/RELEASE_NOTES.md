@@ -3,10 +3,10 @@ top of a normal IW4x install; your `iw4x.exe` stays the official one. Normal 18-
 
 ### You need
 - Call of Duty: Modern Warfare 2 (2009) from **Steam**, with **IW4x** installed by the [official IW4x launcher](https://github.com/iw4x/launcher).
-- Start IW4x once with its launcher so it is up to date - this release is for **official IW4x r5168**.
+- Start IW4x once with its launcher so it is up to date - this release is for **official IW4x @IW4X@**.
 
 ### Play (Windows)
-1. Download **IW4x-32-&lt;version&gt;.zip** below.
+1. Download **IW4x-32-@VERSION@.zip** below.
 2. Extract it so the **`IW4x-32` folder is inside your game folder** (the folder with `iw4x.exe`).
 3. Double-click **`IW4x-32\Install IW4x-32.bat`**.
 4. Start the game with **`IW4x-32\Play IW4x-32.bat`** (not the IW4x launcher's normal start - its file check puts the 18-player DLL back).
