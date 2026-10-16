@@ -110,7 +110,9 @@ if defined DRY goto :server_run
 (set "IW4X32_NO_START=1" & powershell -NoProfile -ExecutionPolicy Bypass -File "%KIT%\iw4x32_update.ps1" --iw4x32 & call "%~f0" %* --no-update) & exit /b
 
 :vserver
-REM a vanilla server runs the official IW4x dll: put it back first, the same rule the vanilla game start follows
+REM a vanilla server runs the official IW4x dll: put it back first, the same rule the vanilla game start
+REM follows. --dry only prints, it changes nothing - same as launcher-linux.sh
+if defined DRY goto :server_run
 call :sha "%GAME%\iw4x.dll" DLL_NOW
 if /i "%DLL_NOW%"=="%OURS_DLL%" if exist "%KIT%\backup\iw4x.dll" (
     echo Putting the official IW4x iw4x.dll back from IW4x-32\backup\ ...

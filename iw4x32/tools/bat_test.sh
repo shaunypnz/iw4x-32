@@ -10,9 +10,9 @@
 # from backup/ and stops without changing anything when that backup is missing; a modded dll is refused;
 # re-running says "already installed"; uninstall puts the official files back. The launcher is then run for
 # real: its four modes, the menu (no "choice" program under Wine -> the set /p fallback), what is remembered in
-# mode.txt, and "IW4x-32 Setup.bat" setting a second game folder up from a folder the player extracted.
-# PowerShell is a stub under Wine, so --dry is used for the paths that would start a game: they must print the
-# command without needing PowerShell.
+# mode.txt (CRLF, so the tests strip the \r), and "IW4x-32 Setup.bat" setting a second game folder up from a
+# folder the player extracted. PowerShell is a stub under Wine, so --dry is used for the paths that would start
+# a game: they print the command without needing PowerShell.
 #
 # Usage: bash iw4x32/tools/bat_test.sh        (needs wine + ~/.msvc; test tree left under .scratch/)
 set -euo pipefail
@@ -106,12 +106,16 @@ out=$( cd "$KIT" && wine cmd /c call "IW4x-32 Launcher.bat" --play --dry +connec
 echo "$out" | grep -q "iw4x.exe" && echo "$out" | grep -q "+connect nowhere" \
     && echo "  OK   --play --dry: the game command with the arguments that were given" || echo "  FAIL --play --dry: $out"
 
-echo "== launcher menu: no mode given (no choice program here -> the set /p fallback) =="
+# --vanilla-server --dry must not touch anything; the real one puts the official dll back - install again
+printf 'OFFICIAL-DLL-CONTENT' > "$GAME/iw4x.dll"
+run_bat "Install IW4x-32.bat"
+
+echo "== launcher menu: no mode given (choice with a 5 s default, Enter = the last mode) =="
 rm -f "$KIT/mode.txt"
 out=$( cd "$KIT" && printf '3\n' | wine cmd /c call "IW4x-32 Launcher.bat" --dry 2>&1 | tr -d '\r' || true )
 echo "$out" | grep -q "\[1\] IW4x-32" && echo "$out" | grep -q "\[4\] IW4x server" \
     && echo "  OK   the menu lists all four" || echo "  FAIL menu: $out"
-echo "$out" | grep -q "sv_maxclients 32" && grep -q "^server$" "$KIT/mode.txt" 2>/dev/null \
+echo "$out" | grep -q "sv_maxclients 32" && tr -d '\r' < "$KIT/mode.txt" 2>/dev/null | grep -q "^server$" \
     && echo "  OK   3 starts the server and is remembered in mode.txt" || echo "  FAIL menu answer 3: $out"
 out=$( cd "$KIT" && printf '\n' | wine cmd /c call "IW4x-32 Launcher.bat" --dry 2>&1 | tr -d '\r' || true )
 echo "$out" | grep -q "sv_maxclients 32" \
