@@ -1,241 +1,235 @@
-# QWEN_REPORT — the rejoin verdict: say what happened, not "slot 8"
+# QWEN_REPORT — aiboi_test.py: assert the client's re-init / re-connection SEQUENCE after a map change
 
-Task: `tools/aiboi_test.py` judged the map-change rejoin by a slot number, which conflates two different things
-(the client-side 32-player layout gap vs a client that does not come back). Rework the rejoin case so it reads
-the server and client console logs and reports what actually happened, and make the slot requirement its own
-clearly named check.
+Task: `tools/aiboi_test.py` must specifically assert the successful client re-initialization / re-connection
+sequence after the forced map change, not only the final game state (the failure analysis for
+`fix/iw4x32-map-change` called out a missing re-connection logic check).
 
 ## 0. Baseline (before any change)
 
 | CHECK | result |
 |---|---|
-| `python3 tools/aiboi_test.py --self-test` | `[self-test] ok - 11 checks: good transcript passes, 0 wrong`, rc 0 |
-| `bash $HOME/Projects/IW4x-32/tools-re/build_iw4x_fork.sh . Release` | PASS - `build/bin/Win32/Release/iw4x.dll`, 3864064 bytes, 4m29s. The worktree's submodules were not initialised and the script's `submodule update --init -q` exits 1 printing nothing (known from the previous round); running the same command without `-q` fetched all 14 deps from the main checkout's local clones, then the build ran clean. |
-| live rejoin run | see §4 (in progress) |
+| `python3 tools/aiboi_test.py --self-test` | `[self-test] ok - 18 checks: good transcript passes, 0 wrong`, rc 0 |
 
-## 1. What the logs actually contain (read off a real run before writing the probe)
+The CHECK passes at the start, so this round is about what the probe does **not** look at, and about proving the
+new assertion can see a bad case.
 
-A passing live run's logs (28 bots + client, `mp_rust` -> `mp_crash`) were read line by line. Both game processes
-log into the **same** `userraw/console_mp.log*` set: the client rotates the file when it starts, so the server's
-lines end up in `console_mp.log.000` and the client's in `console_mp.log`. Each file begins with the command line
-of the process that wrote it - `-dedicated` vs the `iw4x://` join - which is what tells them apart. The engine
-stamps every console line with ms since that process started and the file is append-only, so the lines are in
-event order and the reload timings come off the client's own clock (no clock mapping between the two processes).
+## 1. What the rejoin case asserts today, and the gap
 
-The client's side of a rejoin that worked (`mp_rust` -> `mp_crash`), verbatim:
+Today's rejoin checks: `client_in_before`, `map_changed`, `session_restarted`, `client_followed_change`,
+`client_reconnected` (the client appears in a later `status` poll), `client_loaded_map` (cgame init line **or**
+the server's `lastmsg`), `client_no_session_error`, `client_process_up`, `client_high_slot_after`,
+`players_back_after`.
 
-```
-[    144405] Server changing map mp_crash, gametype dom      <- the server's notice reached it
-[    144412] Loading fastfile mp_crash_load
-[    145664] Unloaded fastfile mp_rust
-[    145671] Loading fastfile mp_crash
-[    156402] Setting state to CA_LOADING in CL_DownloadsComplete
-[    156402] Setting state to CA_LOADING in CL_InitCGame      <- it took the new level's game state
-[    160822] CL_InitCGame:  4.42 seconds                      <- cgame init done: it is in the new level
-[    160822] Com_TouchMemory: 0 msec. Using sum: 1513413627
-```
+The gap the task names: nothing asserts the **chain** the client has to walk to get from the notice back into the
+level. Concretely, three re-connection steps are fetched but never judged:
 
-Notes that changed the design:
+* `Loading fastfile <map_to>` in the client console — it pulled the new level's data.
+* `iw4x32: server is 32-slot - using the 32 player/body layout` — the client re-parsed serverinfo on the new
+  connect and re-applied the 32-player layout. `src/Components/Modules/IW4x32.cpp:325` prints it **every**
+  connect and level restart precisely so this question can be read off a client console; `CLI_EVENT` already
+  greps `iw4x32: ` but no check reads the line.
+* the server's connect handshake after the level restart — `Client 0 connecting with ... challenge ping` and
+  `Going from CS_FREE to CS_CONNECTED for  (num N guid "<human>")`. `server_story()` collects these
+  (`connects`, `human_slots`) and they are only used as decoration in another check's detail.
 
-* A normal map-change rejoin prints **no** `Disconnecting`/`Connecting` line on the client. `CL_Disconnect called
-  for local client 0` appears once, at startup, before the first join - so a drop is only meaningful **after** the
-  map-change notice. The failure signature the field log has is `Disconnecting from <addr> (@XBOXLIVE_PARTYENDED)
-  at time N` and then silence.
-* `Modifying session in CG_ParseServerInfo() to have 32 public and 0 private slots` (the fork's layout line) is
-  printed on the **first** serverinfo parse only, not after a level reload - it cannot be the rejoin signal.
-* Every run has benign `Error:` lines (`Could not load menufile "ui_mp/scriptmenus/kickplayer.menu"`, `Could not
-  load material "gradient_slow_fadein"`) and one `Adding channel: error` (voice, under Wine). They are counted and
-  named, never a failure.
-* The server's side of the same story: `Client 0 connecting with 100 challenge ping from ...` and
-  `Going from CS_FREE to CS_CONNECTED for  (num 28 guid "<human guid>")` - the slot the server handed the human,
-  before and after the change. Bots get `bot<N>` guids, so the human's lines are separable from the bots'.
-* The server's `-stdout` copy lags badly (block-buffered, last chunk lost when it is killed); its
-  `console_mp.log.000` is current. The harness reads the server's story from both.
+So a client that ends up in `status` in the right slot without ever having re-initialized (or one the server
+never took back through the handshake) can pass today. That is the missing re-connection logic check.
 
 ## 2. Plan
 
-1. Fetch the client's and the server's console lines (filtered to the events that matter, on the box, so only a
-   few hundred lines cross the wire), sort them by owner with the command-line marker, and parse them into a
-   "story": notice seen, session dropped (with the `@REASON`), game state taken, level finished, error lines
-   split into session-ending and known-benign, plus the server's slot handouts and level restarts.
-2. Rebuild the rejoin checks in the order the story happens, so the first failure names what went wrong:
-   `client_in_before`, `map_changed`, `session_restarted`, `client_followed_change`, `client_reconnected`,
-   `client_loaded_map`, `client_no_session_error`, `client_process_up`, `client_high_slot_after`,
-   `players_back_after`.
-3. Every check carries a plain-words `reason`; the last line of the run is
-   `FAIL - <first reason> | slots: 28 before the change, None after (high-slot coverage >= 18: not met)` - the
-   slots are context on the right of the bar, never the reason. PASS prints the reconnect and load times.
-4. Slot coverage is its own check, before the change (`client_high_slot`) and after it
-   (`client_high_slot_after`), with the reason text saying it is a layout gap and not a reconnect failure.
-5. `--self-test` gains the recorded transcripts for the three cases the task names (rejoin + reinit PASS;
-   disconnect and never return; reconnect but never finish loading), plus the low-slot case asserting that the
-   rejoin checks pass and the verdict does not talk about reconnecting, a no-client-log case, a notice-never-
-   received case, a session-never-restarted case, and the log-owner split. The transcripts are the real run's
-   event lines with the file lists and dvar dumps dropped - no box paths, no IPs.
-6. Re-run all three CHECKs.
+1. `client_story()` also picks up `Loading fastfile <map_to>` and the `iw4x32: server is ...` line from the
+   client's tail; `client_story_all()` merges them across the two console copies like the other steps.
+2. `server_story()` records the last level restart and the human guid's connect handshake **after** it
+   (challenge ping + `CS_FREE -> CS_CONNECTED`), on the server's own clock — never compared to the client's.
+3. New `reinit_sequence()`: the chain in engine order —
+   `notice -> fastfile -> reinit (Setting state to CA_LOADING in CL_InitCGame) -> layout (iw4x32: server is ...)
+   -> loaded (CL_InitCGame: N seconds) -> server_reconnect (handshake after the restart) -> in_level`
+   — with the last step proven by the cgame init line or by the server's usercmd witness.
+4. New check `client_reinit_sequence` in `case_rejoin`, placed after `client_loaded_map` so the specific checks
+   still name their own failures first; its detail prints the whole chain with the client's own millisecond
+   offsets, and its reason names the first step that is missing or out of order.
+5. `--self-test` gains transcripts that prove the new check is not a probe that always reads "perfect":
+   a layout line missing after the notice (the fork's layout re-init never ran) must fail it, and the good
+   transcript must pass it.
 
-## 3. What is done
+## 3. What was implemented (`tools/aiboi_test.py`)
 
-* `tools/aiboi_test.py`: the whole judging half is rebuilt as described (`console_events`, `client_story`,
-  `server_story`, `rejoin_facts`, `split_logs`, `fetch_logs`, `verdict_line`, `chk(..., reason)`), the rejoin
-  checks are in story order, slot coverage is split out, and the self-test is 16 checks over the recorded
-  transcripts. `[self-test] ok - 16 checks: good transcript passes, 0 wrong`, rc 0.
-* The three verdicts the task asks to prove, as the harness now prints them:
+* `CLI_LAYOUT` / `CLI_FASTFILE` / `CLI_ORDER` next to the other console patterns; `CLI_EVENT` also greps
+  `challenge ping` so the server's connect line is guaranteed to survive the on-box filter.
+* `client_story()` picks up `Loading fastfile <map_to>` and `iw4x32: server is ...` from the tail after the
+  notice, as presence + ms offset; `client_story_all()` merges them across the two console copies (a step counts
+  when any copy printed it, its offset comes from the copy that carries the ms stamps).
+* `server_story()` now returns `join`, `restart_ms`, `handshake`, `human_after` and `post_change` (see §5 for why
+  the naive version of this was wrong): the handshake is a human `CS_FREE -> CS_CONNECTED` line stamped after a
+  level restart that follows the human's first join, `human_after` is any line naming the human's guid or
+  `clientNum` in the window after the change, and `post_change` says whether the server's text reaches into that
+  window at all.
+* `reinit_sequence(cli, srv, playing, map_to)` builds the chain and finds the first break:
+  `notice -> fastfile -> reinit -> layout -> loaded -> server_reconnect`. `loaded` counts as done on the cgame
+  init line or, when neither console copy flushed that far, on the usercmds the server gets from the client (the
+  same two witnesses `client_loaded_map` uses, so the chain cannot fail where that check legitimately passes).
+  `server_reconnect` is graded by what the server's console can actually say (§5). When every step is present,
+  the stamped client steps must also be in engine order — a step stamped before the one that must precede it
+  belongs to the first join, not to the rejoin. The layout line is deliberately not ordered: the real run prints
+  it 1 ms after the game-state line, either side of it is fine.
+* New check `client_reinit_sequence` in `case_rejoin`, placed after `client_loaded_map` so the specific checks
+  still name their own failures first. Its detail prints the whole chain with the client's own offsets; its
+  reason names the first step that broke. The PASS verdict line now carries the chain too, and the live run's
+  report dict gained `client_reinit_chain` / `client_reinit_gap`.
+* Transcripts: `cli_log(layout=False)` and `srv_log(handshake=False)` build the two bad chains, and
+  `srv_log(handshake=False, human_line=True)` the good run whose only server witness is a stats line; the real
+  run's layout line is in `CLI_BOOT` and after the notice, where the live log has it.
+* `--self-test` also checks that **every console line the judgement reads survives `CLI_EVENT`** — the on-box
+  filter that silently hid the server's stats line in live run 2. Dropping that pattern from `CLI_EVENT` makes
+  the self-test fail (verified by patching it out in memory and re-running).
+
+## 4. Proof the new check sees a bad case (`--self-test` 23 checks, rc 0)
+
+Four new self-test cases plus the existing ones re-asserted. What the check prints (from `scratch/show_seq.py`):
 
 ```
-PASS - the client followed the change to mp_crash, reconnected after 20 s and finished loading it 16 s after
-       the notice | slots: 28 before the change, 28 after (high-slot coverage >= 18: met)
-FAIL - client did not reconnect within 150 s after the map change - it left the session with
-       @XBOXLIVE_PARTYENDED and stayed out | slots: 28 before the change, None after (high-slot coverage: not met)
-FAIL - client reconnected but never finished loading mp_crash - its console shows no game state and no cgame
-       init for the new level | slots: 28 before the change, 28 after (high-slot coverage >= 18: met)
+good                    ok   notice -> fastfile -> reinit -> layout -> loaded -> server_reconnect
+                             | client clock: fastfile +1 s, reinit +12 s, layout +12 s, loaded +16 s
+                             | the server handed slot 28 back after a challenge ping
+no layout line          FAIL notice -> fastfile -> reinit -> layout MISSING -> loaded -> server_reconnect
+                             reason: the client's re-init chain after the map change broke at 'layout':
+                             no 'iw4x32: server is ...' line after the notice - it never re-read the
+                             server's layout on the new connect
+                             (client_reconnected, client_loaded_map and client_high_slot_after all still ok:
+                             this is the final-state-blind case the task is about)
+no server handshake     FAIL ... -> loaded -> server_reconnect MISSING
+                             reason: broke at 'server_reconnect': the server logged the window after the change
+                             and never named the human guid or clientNum again - it never took the client back
+                             (status still shows the client in slot 28: the final state looks fine)
+re-init out of order    FAIL reason: broke at 'loaded': its own console stamps it at 140000 ms, before
+                             'notice' at 144405 ms - those lines belong to the first join, not the rejoin
+never rejoins           FAIL notice -> fastfile -> reinit MISSING -> layout MISSING -> loaded MISSING -> ...
+console stops mid-load  ok   ... loaded(usercmd) ... (the server's usercmd witness, as in the live runs)
+stdout copy only        ok   chain judged on presence, no offsets invented
 ```
 
-* and the case that used to read as a rejoin failure:
+The chain check moves on every bad case and stays quiet on the good ones, and the pre-existing verdicts are
+unchanged (`client did not reconnect within 150 s`, `never finished loading mp_crash`, `slot 3`, ...).
+
+## 5. Live run: the chain against real logs (and what it corrected)
+
+Built the branch (`build_iw4x_fork.sh . Release`, rc 0, `iw4x.dll` 3864576 bytes) and ran the tool itself on the
+test box: `--bots 27 --client --minutes 5 --map-change-at 2 --save-logs scratch/live-logs`.
+
+First run: **PASS, 15/15 checks** including the new one —
 
 ```
-FAIL - the client is back but in slot 3, below 18 - the 32-player layout did not survive the reload
-       (a layout gap, not a reconnect failure) | slots: 28 before the change, 3 after (...)
-       (client_reconnected, client_loaded_map and client_no_session_error all ok)
+ok   client_reinit_sequence: notice -> fastfile -> reinit -> layout -> loaded -> server_reconnect
+                             | client clock: fastfile +1 s, reinit +13 s, layout +13 s, loaded +19 s
+                             | the server handed slot 27 back after a challenge ping
 ```
 
-## 4. Round 3: why the live run failed `client_loaded_map`, and what the fix is
-
-The last live run failed one check and one only:
+and the client's own console carries every client-side step verbatim (`mp_rust` -> `mp_crash`):
 
 ```
-FAIL client_loaded_map: no 'Setting state to CA_LOADING in CL_InitCGame' + 'CL_InitCGame: N seconds' pair after
-the notice; it got as far as +13 s (game state) and stopped
+[    191703] Server changing map mp_crash, gametype dom
+[    193067] Loading fastfile mp_crash
+[    205164] Setting state to CA_LOADING in CL_InitCGame
+[    205165] iw4x32: server is 32-slot - using the 32 player/body layout
+[    210966] CL_InitCGame:  5.80 seconds
 ```
 
-**It is a measurement artifact, not a client that failed to load.** The evidence is in `scratch/probe-out/`
-(the instrumented probe the last pass left behind in `scratch/`, untracked - one run on the box, 27 bots +
-client, `mp_rust` -> `mp_crash`, sampled every 5-8 s; its numbers are quoted here):
+**But the server-side step it passed on was wrong, and reading the saved logs caught it.** The server's two
+console copies (`server.log`, `userraw/console_mp.log.000`) each contain exactly **one** `Server Initialization`
+line — the one at process start (ms 5206) — and the human's connect line at ms 80140, i.e. its **first** join.
+The level restarts caused by `map_rotate` are in neither copy: a dedicated server prints almost nothing once the
+level runs, so its console file lags the process by a 4 KB block, and the next stamped line in that file is 130 s
+later (ms 210685). So "the human's slot line after the last restart line" was matching the first join and calling
+it a re-connection — a pass that proves nothing.
 
-* the client's `userraw/console_mp.log` sat at **108730 bytes from +166 s to +300 s** of that run while the client
-  was demonstrably still printing (its `-stdout` copy grew 20413 -> 24192 -> 25562 bytes over the same window).
-  The file only ever grows in steps of ~4150 bytes: the game writes its console through a 4 KB stdio buffer and
-  flushes when the buffer is full. A level reload prints its `CL_InitCGame: N seconds` line and then goes quiet,
-  so that line is the first thing left sitting in the process and missing from the file. The failing run's client
-  console ends **mid-line** (`Error: Could not load menuf`) - the buffer boundary, caught in the act.
-* the post-change line was there all along in the client's `-stdout` copy (`client.log` line 491, `CL_InitCGame:
-  5.58 seconds`, present from +174 s on) - the harness never read that copy because the client was not started
-  with `-stdout`.
-* the probe's `say`-flood question is answered too: 60 `say` lines over rcon took the client's console log from
-  108730 to **112892** bytes and the missing line appeared in it (`2274:[ 95373] CL_InitCGame:  5.58 seconds`).
-  Making the client print is how you get its own buffer onto the disk. Killing it does nothing (sizes unchanged
-  after SIGTERM).
-* the server-side witness the probe was also asking about: the human's `status` row reads `lastmsg 0` while it is
-  in the level and `lastmsg 11400` (ping 999) once its process is gone. A client on a loading screen sends no
-  usercmds, so `lastmsg` is an independent witness that it finished loading - and it moves.
+Corrected, on the evidence:
 
-Fixes, in this order:
+* `server_story()` now works off stamped lines only and separates three things: `join` (the human's first
+  `CS_FREE -> CS_CONNECTED`), `restart_ms` (the last stamped restart **after** that join — None when the copy has
+  no such line, which is the normal case), and `post_change` (whether the text reaches into the window after the
+  change at all, measured from the restart or, when it is missing, from `join + 60 s`).
+* The chain's server step now accepts, in order of strength: the handshake (a human `CS_CONNECTED` after a
+  restart that follows the join), or the weaker witness a real server console does carry — any line naming the
+  human's guid or `clientNum` in that window (`Received packet 0 of stats data from clientNum 27`, ms 210685 in
+  this run) — and it is *not judged* when the server's console never reaches that window. It fails only when the
+  server logged the window, logged other clients coming back through it, and never named the human again.
+* The client's console has no `challenge ping` line (that is a server-side line), so the client-side re-connect
+  witness is the `iw4x32: server is ...` line: `CG_ParseServerinfo` runs on a fresh serverinfo parse, and the
+  real rejoin prints it 1 ms after the game-state line, for every one of the three level changes in the run.
 
-1. start the client with `-stdout` and read **both** copies of its console; the story is what the copies say
-   together (each one lags the process by whatever it has not flushed, so a line missing from one proves nothing).
-2. before fetching the logs, push `say` lines over rcon so the client flushes its own console log.
-3. `client_loaded_map` accepts the console pair as the primary proof and the server's `lastmsg` as the secondary
-   one, and says which one it used; it fails only when neither is there, with both numbers in the reason.
-4. `Server changing map (\w+)` - the old `(\S+)` captured `mp_crash,` with the comma, so the notice never matched
-   `map_to` and the code silently fell back to "the last notice whatever map it names".
+Re-judging the saved logs of that run with the corrected code:
 
-## 5. CHECK results (round 2, all four re-run on the final tree)
+```
+client_reinit_sequence: ok
+  notice -> fastfile -> reinit -> layout -> loaded -> server_reconnect
+  | client clock: fastfile +1 s, reinit +13 s, layout +13 s, loaded +19 s
+  | the server's console names clientNum 27 again after the change
+```
+
+A second live run with the same tool **failed the new check** — a false FAIL, and the saved logs say why:
+
+```
+FAIL client_reinit_sequence: notice -> fastfile -> reinit -> layout -> loaded -> server_reconnect MISSING
+       | the server's console logs that window and never names the human again
+```
+
+The client had re-connected normally (back in slot 27 after 72 s, usercmds, cgame init 4.21 s). Two causes, both
+read off `scratch/live-logs2` before touching the code:
+
+1. **The on-box log filter dropped the witness.** `fetch_logs` greps every console file through `CLI_EVENT`, and
+   the line the server's account rests on — `Received packet 0 of stats data from clientNum 27` — matches none of
+   its alternatives, so it never left the box. My first offline re-judgement fed the *saved raw* logs straight to
+   `split_logs`, bypassing that filter, and told me the witness was there. A re-probe that skips the tool's own
+   filter is worth nothing: the re-judgement now replays `grep -a -E CLI_EVENT` over the saved files first
+   (`scratch/rejudge.py`).
+2. The window fallback (`join + 60 s`) then read "the server logged that window and never named the human" from
+   a log that had simply lost the human's lines to the filter — and accused a client that had re-connected.
+
+Fix: `CLI_EVENT` carries `stats data from clientNum` (a handful of lines per level, and the only server-side line
+that reliably names the human after a change). Re-judging both saved runs through the filter with the fixed tool:
+
+```
+run 1: join 80140 slot 27 | restart_ms 5206 (process start) | handshake no | human_after 210685 | chain complete
+run 2: join 79318 slot 27 | restart_ms 6371 (process start) | handshake no | human_after 208703 | chain complete
+```
+
+A third live run with the fixed tool: **PASS, 15/15 checks** (`scratch/live-logs3`, `scratch/live3.out`) —
+
+```
+ok   client_reinit_sequence: notice -> fastfile -> reinit -> layout -> loaded -> server_reconnect
+                             | client clock: fastfile +1 s, reinit +13 s, layout +13 s, loaded +19 s
+                             | the server's console names clientNum 27 again after the change
+PASS - the client followed the change to mp_crash, reconnected after 72 s and finished loading it 19 s after the
+       notice | re-init chain: notice -> fastfile -> reinit -> layout -> loaded -> server_reconnect
+       | slots: 27 before the change, 27 after (high-slot coverage >= 18: met)
+```
+
+and the report dict now carries the chain itself: `'client_reinit_chain': {'notice': True, 'fastfile': True,
+'reinit': True, 'layout': True, 'loaded': True, 'server_reconnect': True}, 'client_reinit_gap': None`.
+
+## 6. CHECK
 
 | CHECK | result |
 |---|---|
-| `git-privacy-check work` | **PASS** (rc 0, nothing found) - see §8 for what made it fail and the two fixes |
-| `python3 tools/aiboi_test.py --self-test` | `[self-test] ok - 18 checks: good transcript passes, 0 wrong`, rc 0 |
-| `bash $HOME/Projects/IW4x-32/tools-re/build_iw4x_fork.sh . Release` | PASS - `iw4x.vcxproj -> ...\build\bin\Win32\Release\iw4x.dll`, 3864064 bytes (this task touches no C++; rebuilt anyway) |
-| live run `--bots 27 --client --minutes 5 --map-change-at 2` | **PASS**, 14/14 checks |
+| `python3 tools/aiboi_test.py --self-test` | `[self-test] ok - 24 checks: good transcript passes, 0 wrong`, rc 0 |
 
-The live run (t1792102080, 9 polls):
+Also run, because the change is to the live harness itself: three live runs on the test box
+(`--bots 27 --client --minutes 5 --map-change-at 2`) — run 1 PASS 15/15 (with the first version of the server
+step, later shown to be wrong), run 2 FAIL on the new check (false, cause in §5), run 3 **PASS 15/15** with the
+tool as it stands. The branch's C++ is untouched; `build_iw4x_fork.sh . Release` rc 0.
 
-```
-ok   client_in_before: live-test in status before the change (slot 27)
-ok   map_changed: maps in status: mp_rust -> mp_crash
-ok   session_restarted: bot guids before ['bot0', 'bot1']..27 vs after ['bot27', 'bot28']..27
-ok   client_followed_change: 2 'Server changing map' line(s) in the client console, last one for mp_crash
-ok   client_reconnected: back in status 72 s after the change (limit 150 s); the server handed the human guid slot 27 again
-ok   client_loaded_map: took the new level's game state 11 s after the notice and was in mp_crash 15 s after it
-                                    (cgame init 4.21 s)
-ok   client_no_session_error: 0 session-ending error line(s) after the change; 3 known-benign error line(s)
-ok   client_high_slot_after: slot 27 before the change, 27 after, needs >= 18
-ok   players_back_after: most 28 of 28 after the change
-PASS - the client followed the change to mp_crash, reconnected after 72 s and finished loading it 15 s after the
-       notice | slots: 27 before the change, 27 after (high-slot coverage >= 18: met)
-PASS {'client_disconnected': False, 'client_reconnected': True, 'client_reconnect_s': 72,
-      'client_loaded_map': True, 'client_load_s': 15, 'client_lastmsg_ms': 0, 'client_errors': [],
-      'client_slot_before': 27, 'client_slot_after': 27, 'first_failure': None, ...}
-```
+## 7. Open questions
 
-The four facts the task asked for are in that dict by name - disconnected / reconnected + how long / finished
-loading + how long / errors - with the slots beside them, and `first_failure` names the check that decided it.
+* A dedicated server's console never carries its mid-run level restarts in either copy (its output after the
+  level starts is sparse and 4 KB-buffered), so `session_restarted` stays judged off the bot guid change and the
+  chain's server step rests on the stats line. If the server's log ever gets a proper flush, the handshake
+  witness becomes available and is already the first thing the step looks for.
+* `REJOIN_WINDOW_MS = 60 s` assumes the forced map change never lands in the first minute of the server's level;
+  `--map-change-at` is documented as a mid-test change, so that holds for the runs the harness makes.
+* The stats-line witness matches the human's `clientNum`, so a bot re-taking that exact slot after the change
+  could stand in for it; the guid match is tried first and the slot is judged by its own check anyway.
 
-The line the last run could not find is there now, and the flush is what put it there:
-
-```
-[    202745] Setting state to CA_LOADING in CL_InitCGame
-[    202746] iw4x32: server is 32-slot - using the 32 player/body layout
-[    208330] CL_InitCGame:  5.59 seconds
-```
-
-`client_console_copies: 2` in the report dict says both copies of the client's console were read; the `say` flood
-ran before the fetch, so the tail of the file is the tail of the story rather than the tail of a 4 KB block.
-
-## 8. Round 2: the push was refused, and why
-
-`git-privacy-check work` exited 1 with 128 findings. Read the findings first, not the summary: every one of them
-was a **machine path in a file round 1 had `git add`ed** - `scratch/gdec-status.txt` and `scratch/gdec2.txt`
-(Ghidra headless logs, full of tool-install and project paths), `scratch/probe-stdout.txt` and the 20
-`scratch/probe-out/snap-*.txt` samples (game folder paths quoted back from the box). Nothing in the source, the
-report or the tool was dirty; the scratch dumps simply got staged, and `git grep` (what the check runs) reads
-everything in the index. Two fixes:
-
-* `git rm --cached -r scratch` and `scratch/` added to `.gitignore` next to the existing `.scratch/` rule (that
-  rule's own comment already says why: these dumps hold machine paths and are never to be committed). The dumps
-  stay on disk for this round's reader, untracked.
-* one genuine hit in `tools/aiboi_test.py`: the rcon `say` marker that pushes the client's 4 KB log buffer out
-  was named after a site term. It is a plain `log-flush-$i` now - nothing parses that string, it only has to be
-  long enough to fill the buffer. The live run below ran with the renamed marker and still pulled the cgame init
-  line out of the client's buffer (`client_console_copies: 2`, `CL_InitCGame: 4.21 seconds`), so the flush works
-  exactly as well under the new name.
-
-Verified three ways, not one: `git-privacy-check work` (rc 0), the same scan run by hand over every tracked file
-(0 hits), and `git-privacy-check tree` over `git stash create` - a commit object of the working state, so it
-proves the tree the queue is about to commit is clean, not just the index as it sits.
-
-## 6. What the self-test now covers (18 checks)
-
-The rejoin transcripts, all judged by the same code the live run uses:
-
-* good: notice -> reconnect -> cgame init, in both copies of the console (timed), and in the stdout copy only
-  (untimed - that copy carries no ms stamps, and the verdict says so instead of inventing a number)
-* good: the console copies stop mid-reload but the server still gets a usercmd every frame - the check passes on
-  that witness and names it
-* bad: reconnects but never loads - **both** witnesses have to say so (no cgame init line in either copy AND
-  `lastmsg` 45000 ms), which is what keeps a lagging log file from failing a healthy client
-* bad: never comes back, comes back in a low slot, no client console log at all, no level restart, bots not
-  re-added, same map after the change, session-ending error after the change, client process gone
-* plus the baseline transcripts and the two parsers, `split_logs` (three blocks in, three stories out) and
-  `parse_status` over the real `status` text
-
-## 7. Notes for the next reader
-
-* `client_loaded_map` is deliberately the third check, after `client_reconnected`: the task lists the story in
-  that order (disconnect, reconnect, finish loading, error, slots) and the verdict names the first thing that
-  failed in it. A client that never came back is reported as that, not as a load failure.
-* `PLAYING_MIN_S = 30` exists because `lastmsg` is small during the join handshake too (50 ms in a recorded
-  snapshot taken mid-join): only a poll well after the change can tell "in the level" from "negotiating".
-* the probe that measured all this is in `scratch/` (untracked, run once, cleaned the box up after itself);
-  `scratch/probe-out/probe.log` has the per-5-second samples behind the numbers quoted above.
-
-## 9. Verdict
-
-All four gates pass on the final tree: the privacy check, the offline `--self-test` (18 checks, the three rejoin
-transcripts among them), the build, and the live rejoin run with a client in a high slot (14/14, rejoin 72 s,
-level loaded 15 s after the notice, 0 crash dumps). The judgement now reads the two console logs and the status
-polls and says what happened to the client; the slot number is its own check and only ever context.
-
-NEXT ROUND: no - every CHECK passes on this tree (privacy rc 0, self-test 18/18, build PASS, live PASS 14/14);
-nothing is left to fix. The rejoin bug itself did not reproduce here, which is a result to report, not a gap in
-the tooling: the tool now names a real failure in plain words if one turns up in the field.
+NEXT ROUND: no - the CHECK passes (24 self-test checks, rc 0), the new `client_reinit_sequence` check fails on six
+recorded bad cases (missing fastfile / game state / layout re-apply / out-of-order load lines / a server that
+never took the client back / no console at all), and it passes end-to-end on a live run of the real game with
+every step read off real console logs.
