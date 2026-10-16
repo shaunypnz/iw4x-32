@@ -59,6 +59,17 @@ jobs:
       - name: Check the committed kit (hashes, installers, line endings)
         run: python3 iw4x32/tools/check_kit.py
 
+      - name: Release page text (version + the IW4x release it is made for, from latest.json)
+        run: |
+          IW4X=$(python3 -c "import json; print(json.load(open('latest.json'))['iw4x'])")
+          sed -i "s/@VERSION@/${GITHUB_REF_NAME}/g; s/@IW4X@/${IW4X}/g" iw4x32/RELEASE_NOTES.md
+          if grep -n "@[A-Z0-9]*@" iw4x32/RELEASE_NOTES.md; then echo "unfilled placeholder"; exit 1; fi
+
+      - name: Version rule (v2.1, v2.2, ... - see iw4x32/tools/next_version.py)
+        run: |
+          python3 iw4x32/tools/next_version.py --self-test
+          python3 -c "import json,sys,re; v=json.load(open('latest.json'))['version']; sys.exit(0 if v=='${GITHUB_REF_NAME}' and re.fullmatch(r'v2\.\d+', v) else 'tag ${GITHUB_REF_NAME} != latest.json version '+v)"
+
       - name: Pack the kit
         run: |
           mkdir -p stage/IW4x-32
