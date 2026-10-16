@@ -133,20 +133,20 @@ if /i not "%DLL_NOW%"=="%OURS_DLL%" goto :installfail
 
 REM ---- 5. shortcuts ---------------------------------------------------------------------------------------------
 if defined NOSHORT goto :summary
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $k='%DEST%'; $w=New-Object -ComObject WScript.Shell; $d=[Environment]::GetFolderPath('Desktop'); $p=Join-Path ([Environment]::GetFolderPath('Programs')) 'IW4x-32'; New-Item -ItemType Directory -Force -Path $p | Out-Null; foreach($t in @('IW4x-32 - 32 players|--play','IW4x - vanilla|--vanilla','IW4x-32 Server|--server','IW4x Server - vanilla|--vanilla-server')){ $n=$t.Split('|')[0]; $m=$t.Split('|')[1]; foreach($f in @($d,$p)){ $l=$w.CreateShortcut((Join-Path $f ($n+'.lnk'))); $l.TargetPath=$env:ComSpec; $l.Arguments='/c call \"'+$k+'\IW4x-32 Launcher.bat\" '+$m; $l.WorkingDirectory=$k; $l.Description='IW4x-32'; $l.Save() } }; Write-Host ('  '+$d); Write-Host ('  '+$p)" || goto :shortcutsfail
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $k='%DEST%'; $w=New-Object -ComObject WScript.Shell; $d=[Environment]::GetFolderPath('Desktop'); $p=Join-Path ([Environment]::GetFolderPath('Programs')) 'IW4x-32'; New-Item -ItemType Directory -Force -Path $p | Out-Null; foreach($t in @('IW4x-32 (32 players)|--play','IW4x (vanilla)|--vanilla','IW4x-32 Server|--server','IW4x Server (vanilla)|--vanilla-server')){ $n=$t.Split('|')[0]; $m=$t.Split('|')[1]; foreach($f in @($d,$p)){ $l=$w.CreateShortcut((Join-Path $f ($n+'.lnk'))); $l.TargetPath=$env:ComSpec; $l.Arguments='/c call \"'+$k+'\IW4x-32 Launcher.bat\" '+$m; $l.WorkingDirectory=$k; $l.Description='IW4x-32'; $l.Save() } }; Write-Host ('  '+$d); Write-Host ('  '+$p)" || goto :shortcutsfail
 :summary
 echo.
 echo IW4x-32 is set up.
 echo   game folder: %GAME%
 echo   IW4x-32:     %DEST%
 if defined NOSHORT goto :summary_noshort
-echo   shortcuts:   IW4x-32 - 32 players, IW4x - vanilla, IW4x-32 Server, IW4x Server - vanilla
+echo   shortcuts:   IW4x-32 (32 players), IW4x (vanilla), IW4x-32 Server, IW4x Server (vanilla)
 goto :summary_tail
 :summary_noshort
 echo   shortcuts:   skipped - start it with "%DEST%\IW4x-32 Launcher.bat"
 :summary_tail
 echo.
-echo Play: the "IW4x-32 - 32 players" shortcut, or
+echo Play: the "IW4x-32 (32 players)" shortcut, or
 echo     "%DEST%\IW4x-32 Launcher.bat"            it asks what to start
 echo Host a 32-player server: the "IW4x-32 Server" shortcut, or
 echo     "%DEST%\Start IW4x-32 Server.bat"
