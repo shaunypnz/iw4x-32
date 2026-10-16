@@ -17,3 +17,4 @@ PROGRESS: 5% - done: baseline (check_kit ok, sh/upd/bat tests green, wine has no
 - Linux side done: launcher-linux.sh + setup-linux.sh + wrappers + 8 updater runs + setup tests, all green
 PROGRESS: 10% - done: baseline (self-test 18 ok) + read the rejoin checks, found the unjudged re-init steps (fastfile / iw4x32 layout line / server handshake) / next: add reinit_sequence() + client_reinit_sequence check + self-test cases
 PROGRESS: 60% - done: reinit_sequence() chain + client_reinit_sequence check + 4 new self-test cases (self-test 22 ok, chain visibly fails on bad cases) / next: build + one live run to prove the chain steps exist in real logs
+PROGRESS: 80% - done: live run 1 PASS 15/15 with the new chain check; read its saved logs, found the server-side step was matching the first join (the server console never logs a mid-run restart) and re-based it on join/restart/window witnesses (self-test 23 ok) / next: confirm live run 2 with the corrected tool
