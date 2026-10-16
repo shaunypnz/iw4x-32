@@ -79,6 +79,9 @@ never took back through the handshake) can pass today. That is the missing re-co
 * Transcripts: `cli_log(layout=False)` and `srv_log(handshake=False)` build the two bad chains, and
   `srv_log(handshake=False, human_line=True)` the good run whose only server witness is a stats line; the real
   run's layout line is in `CLI_BOOT` and after the notice, where the live log has it.
+* `--self-test` also checks that **every console line the judgement reads survives `CLI_EVENT`** — the on-box
+  filter that silently hid the server's stats line in live run 2. Dropping that pattern from `CLI_EVENT` makes
+  the self-test fail (verified by patching it out in memory and re-running).
 
 ## 4. Proof the new check sees a bad case (`--self-test` 23 checks, rc 0)
 
@@ -190,21 +193,43 @@ run 1: join 80140 slot 27 | restart_ms 5206 (process start) | handshake no | hum
 run 2: join 79318 slot 27 | restart_ms 6371 (process start) | handshake no | human_after 208703 | chain complete
 ```
 
-A third live run with the fixed tool is in `scratch/live-logs3` / `scratch/live3.out`.
+A third live run with the fixed tool: **PASS, 15/15 checks** (`scratch/live-logs3`, `scratch/live3.out`) —
+
+```
+ok   client_reinit_sequence: notice -> fastfile -> reinit -> layout -> loaded -> server_reconnect
+                             | client clock: fastfile +1 s, reinit +13 s, layout +13 s, loaded +19 s
+                             | the server's console names clientNum 27 again after the change
+PASS - the client followed the change to mp_crash, reconnected after 72 s and finished loading it 19 s after the
+       notice | re-init chain: notice -> fastfile -> reinit -> layout -> loaded -> server_reconnect
+       | slots: 27 before the change, 27 after (high-slot coverage >= 18: met)
+```
+
+and the report dict now carries the chain itself: `'client_reinit_chain': {'notice': True, 'fastfile': True,
+'reinit': True, 'layout': True, 'loaded': True, 'server_reconnect': True}, 'client_reinit_gap': None`.
 
 ## 6. CHECK
 
 | CHECK | result |
 |---|---|
-| `python3 tools/aiboi_test.py --self-test` | `[self-test] ok - 23 checks: good transcript passes, 0 wrong`, rc 0 |
+| `python3 tools/aiboi_test.py --self-test` | `[self-test] ok - 24 checks: good transcript passes, 0 wrong`, rc 0 |
+
+Also run, because the change is to the live harness itself: three live runs on the test box
+(`--bots 27 --client --minutes 5 --map-change-at 2`) — run 1 PASS 15/15 (with the first version of the server
+step, later shown to be wrong), run 2 FAIL on the new check (false, cause in §5), run 3 **PASS 15/15** with the
+tool as it stands. The branch's C++ is untouched; `build_iw4x_fork.sh . Release` rc 0.
 
 ## 7. Open questions
 
-* The server's console never logging a mid-run level restart is a harness-visible fact now, but it is also why
-  `session_restarted` is judged off the bot guid change rather than the server's own restart line. Worth a look
-  at whether the server should be started with a bigger logfile flush (out of scope here).
+* A dedicated server's console never carries its mid-run level restarts in either copy (its output after the
+  level starts is sparse and 4 KB-buffered), so `session_restarted` stays judged off the bot guid change and the
+  chain's server step rests on the stats line. If the server's log ever gets a proper flush, the handshake
+  witness becomes available and is already the first thing the step looks for.
 * `REJOIN_WINDOW_MS = 60 s` assumes the forced map change never lands in the first minute of the server's level;
   `--map-change-at` is documented as a mid-test change, so that holds for the runs the harness makes.
+* The stats-line witness matches the human's `clientNum`, so a bot re-taking that exact slot after the change
+  could stand in for it; the guid match is tried first and the slot is judged by its own check anyway.
 
-NEXT ROUND: no - the CHECK passes (23 self-test checks), the new chain check is proven to fail on six recorded
-bad cases, and it passes end-to-end on a live run of the real game with every step read off real console logs.
+NEXT ROUND: no - the CHECK passes (24 self-test checks, rc 0), the new `client_reinit_sequence` check fails on six
+recorded bad cases (missing fastfile / game state / layout re-apply / out-of-order load lines / a server that
+never took the client back / no console at all), and it passes end-to-end on a live run of the real game with
+every step read off real console logs.
