@@ -73,7 +73,8 @@ EOF
 
 for IMPL in "${IMPLS[@]}"; do
     echo "== $IMPL"
-    if [ "$IMPL" = ps1 ] && ! command -v pwsh >/dev/null; then bad "pwsh is not installed - the .ps1 was not tested"; continue; fi
+    PWSH=$(command -v pwsh || ls "$HOME/.local/bin/pwsh" /opt/microsoft/powershell/7/pwsh 2>/dev/null | head -1)
+    if [ "$IMPL" = ps1 ] && [ -z "$PWSH" ]; then bad "pwsh is not installed - the .ps1 was not tested"; continue; fi
     R=$T/$IMPL; mkdir -p "$R"
     STEAM=$R/steam; LIB=$R/lib; GAME="$LIB/steamapps/common/Call of Duty Modern Warfare 2"
     mkdir -p "$STEAM/steamapps"
@@ -91,7 +92,7 @@ for IMPL in "${IMPLS[@]}"; do
     run() {   # run <kit dir> <output file> args...
         local k=$1 o=$2; shift 2
         if [ "$IMPL" = py ]; then python3 "$k/files/iw4x32.py" "$@" </dev/null >"$o" 2>&1
-        else pwsh -NoProfile -NonInteractive -File "$k/files/iw4x32.ps1" "$@" </dev/null >"$o" 2>&1; fi
+        else "$PWSH" -NoProfile -NonInteractive -File "$k/files/iw4x32.ps1" "$@" </dev/null >"$o" 2>&1; fi
     }
     manifest rel20 v2.0; iw4x_latest r5168
 
@@ -160,7 +161,7 @@ for IMPL in "${IMPLS[@]}"; do
     cp "$KIT0/iw4x32_update.py" "$KIT0/iw4x32_update.ps1" "$K/"
     if [ "$IMPL" = py ]; then IW4X32_GAME="$GAME" python3 "$K/iw4x32_update.py" --play </dev/null >"$R/9.out" 2>&1; rc=$?
         [ $rc = 20 ] && ok "v2.0 shim exits 20 (the old play-linux.sh stops)" || bad "v2.0 shim exit $rc"
-    else pwsh -NoProfile -NonInteractive -File "$K/iw4x32_update.ps1" --play </dev/null >"$R/9.out" 2>&1; fi
+    else "$PWSH" -NoProfile -NonInteractive -File "$K/iw4x32_update.ps1" --play </dev/null >"$R/9.out" 2>&1; fi
     [ ! -e "$K/Play IW4x-32.bat" ] && [ ! -e "$K/server" ] && [ ! -e "$K/iw4x32_update.py" ] && ok "migration: the old scripts are gone" || bad "migration: old files left"
     [ -f "$K/files/backup/iw4x.dll" ] && [ ! -e "$K/backup" ] && ok "migration: backup/ moved into files/" || bad "migration: backup not moved"
     has "$R/9.out" "command:" "migration: the game starts"
