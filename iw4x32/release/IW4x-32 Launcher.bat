@@ -7,7 +7,7 @@ REM
 REM    IW4x-32 Launcher.bat                    ask what to start (1-4, Enter = last choice)
 REM    IW4x-32 Launcher.bat --play             IW4x-32 - 32-player servers (and normal ones)
 REM    IW4x-32 Launcher.bat --vanilla          vanilla IW4x - the official IW4x, latest version
-REM    IW4x-32 Launcher.bat --server [port]    a 32-player dedicated server (port 28960)
+REM    IW4x-32 Launcher.bat --server [port]    a 32-player dedicated server, port 28960
 REM    IW4x-32 Launcher.bat --vanilla-server [port]  a normal 18-player IW4x server
 REM
 REM    --dry        only check the install and print the command
@@ -18,8 +18,9 @@ REM  "Play IW4x-32.bat" and "Start IW4x-32 Server.bat" are thin wrappers of this
 REM  shortcuts and habits made before v2.0 keep working. What you pick is remembered in
 REM  IW4x-32\mode.txt. The version check (both GitHub repos, 5 s each, no network = just
 REM  start) is done by iw4x32_update.ps1 - the same steps as iw4x32_update.py on Linux.
-REM  Lines that start the game are one line on purpose: the updater may replace this file
-REM  while it runs, so nothing may be read from here afterwards.
+REM  Lines that start the game are ONE LINE on purpose: the updater may replace this file
+REM  while it runs, so nothing may be read from here afterwards. Brackets are kept out of
+REM  echoed text inside ( ) blocks for the same reason - cmd.exe cannot echo them there.
 REM =====================================================================================
 set "OURS_DLL=f0a247ff84e1307330d43a03c4e8e4f8b8f921a465c6206e0b14a825f736a2d1"
 for %%I in ("%~dp0.") do set "KIT=%%~fI"
@@ -39,10 +40,11 @@ if /i "%~1"=="--vanilla-server" (set "MODE=vanilla-server" & shift & goto :args)
 if /i "%~1"=="--dry" (set "DRY=1" & shift & goto :args)
 if /i "%~1"=="--dry-run" (set "DRY=1" & shift & goto :args)
 if /i "%~1"=="--no-update" (set "NOUN=1" & shift & goto :args)
+REM a bare number is the server port, everything else is an argument for the game
 set "A=%~1"
 set "NOTNUM="
-if not "%A%"=="" for /f "delims=0123456789" %%c in ("%A%") do set "NOTNUM=1"
-if not defined NOTNUM if not "%A%"=="" (set "PORT=%A%" & shift & goto :args)
+for /f "delims=0123456789" %%c in ("%A%") do set "NOTNUM=1"
+if not defined NOTNUM if defined A (set "PORT=%A%" & shift & goto :args)
 shift
 goto :args
 
@@ -51,7 +53,7 @@ if defined NOUN set "IW4X32_NO_UPDATE=1"
 set "IW4X32_KEEP_MODE=1"
 if defined MODE goto :start
 
-REM ---- nothing asked for: the menu (5 s, Enter = what was started last time) ----------------------------------
+REM ---- nothing was asked for: the menu (5 s, Enter = what was started last time) -------------------------------
 set "LAST="
 if exist "%KIT%\mode.txt" for /f "usebackq tokens=1" %%a in ("%KIT%\mode.txt") do if not defined LAST set "LAST=%%a"
 set "KNOWN="
@@ -64,11 +66,11 @@ if /i "%LAST%"=="vanilla" set "DEF=2"
 if /i "%LAST%"=="server" set "DEF=3"
 if /i "%LAST%"=="vanilla-server" set "DEF=4"
 echo Start what?
-echo   [1] IW4x-32  - 32-player servers (and normal ones)
-echo   [2] Vanilla IW4x - the official IW4x, always the latest version
-echo   [3] IW4x-32 server - 32-player dedicated server (port %PORT%)
-echo   [4] IW4x server - normal 18-player dedicated server (port %PORT%)
-choice /c 1234 /n /t 5 /d %DEF% /m "Enter = %LAST% (starts in 5 s): "
+echo   [1] IW4x-32        - 32-player servers, and normal ones
+echo   [2] Vanilla IW4x   - the official IW4x, always the latest version
+echo   [3] IW4x-32 server - 32-player dedicated server, port %PORT%
+echo   [4] IW4x server    - normal 18-player server, port %PORT%
+choice /c 1234 /n /t 5 /d %DEF% /m "Enter = %LAST%, starts in 5 s: "
 if errorlevel 5 goto :menu_prompt
 if errorlevel 4 set "MODE=vanilla-server"
 if errorlevel 3 if not defined MODE set "MODE=server"
@@ -77,9 +79,9 @@ if not defined MODE set "MODE=iw4x32"
 goto :picked
 
 :menu_prompt
-REM no "choice" on this Windows - ask the plain way
+REM no "choice" program on this Windows - ask the plain way
 set "ANSWER="
-set /p "ANSWER=Start what? (1-4, Enter = %LAST%): "
+set /p "ANSWER=Start what? 1-4, Enter = %LAST%: "
 if "%ANSWER%"=="1" set "MODE=iw4x32"
 if "%ANSWER%"=="2" set "MODE=vanilla"
 if "%ANSWER%"=="3" set "MODE=server"
@@ -93,34 +95,22 @@ if not defined MODE set "MODE=%LAST%"
 if "%MODE%"=="vanilla" goto :vanilla
 if "%MODE%"=="server" (set "SLOTS=32" & set "CFG=server_iw4x32.cfg" & set "LABEL=IW4x-32 server" & goto :server)
 if "%MODE%"=="vanilla-server" (set "SLOTS=18" & set "CFG=server_vanilla.cfg" & set "LABEL=IW4x server - vanilla, 18 players" & goto :vserver)
-
-REM ---- IW4x-32: the updater checks GitHub, repairs the install and starts iw4x.exe -----------------------------
-if defined DRY (
-    echo IW4x-32
-    echo   game folder: %GAME%
-    echo   command:     iw4x.exe %*
-    echo   first:       iw4x32_update.ps1 checks both GitHub repos and installs a new IW4x-32 when one is out
-    goto :end
-)
+if defined DRY goto :dry_play
 (powershell -NoProfile -ExecutionPolicy Bypass -File "%KIT%\iw4x32_update.ps1" --iw4x32 %* || (echo. & echo IW4x-32 could not start - try "Play IW4x-32 (no update).bat" & pause)) & exit /b
 
 :vanilla
-if defined DRY (
-    echo Vanilla IW4x
-    echo   game folder: %GAME%
-    echo   command:     "%GAME%\iw4x-launcher.exe" - the official IW4x launcher: it updates IW4x and starts the game
-    echo   before that: IW4x-32's iw4x.dll is put back to the official one from IW4x-32\backup\
-    goto :end
-)
+if defined DRY goto :dry_vanilla
 (powershell -NoProfile -ExecutionPolicy Bypass -File "%KIT%\iw4x32_update.ps1" --vanilla %* || echo IW4x did not start - is the official IW4x launcher in "%GAME%"?) & exit /b
 
 :server
+REM --dry and --no-update start straight away; otherwise the updater runs first and a fresh run of this
+REM file (same line, --no-update) starts the server - the updater may replace this file while it runs
 if defined NOUN goto :server_run
-REM the updater may replace this file, so the server is started by a fresh run of it (same line, --no-update)
+if defined DRY goto :server_run
 (set "IW4X32_NO_START=1" & powershell -NoProfile -ExecutionPolicy Bypass -File "%KIT%\iw4x32_update.ps1" --iw4x32 & call "%~f0" %* --no-update) & exit /b
 
 :vserver
-REM a vanilla server runs the official IW4x dll: put it back first (the same rule the vanilla game start uses)
+REM a vanilla server runs the official IW4x dll: put it back first, the same rule the vanilla game start follows
 call :sha "%GAME%\iw4x.dll" DLL_NOW
 if /i "%DLL_NOW%"=="%OURS_DLL%" if exist "%KIT%\backup\iw4x.dll" (
     echo Putting the official IW4x iw4x.dll back from IW4x-32\backup\ ...
@@ -129,7 +119,7 @@ if /i "%DLL_NOW%"=="%OURS_DLL%" if exist "%KIT%\backup\iw4x.dll" (
 goto :server_run
 
 :server_run
-REM SLOTS / CFG / LABEL come from the :start dispatch above
+REM SLOTS / CFG / LABEL are set by the :start dispatch above
 if not exist "%GAME%\iw4x.exe" goto :nogame
 if "%SLOTS%"=="32" (
     call :sha "%GAME%\iw4x.dll" DLL_NOW
@@ -151,6 +141,20 @@ cd /d "%GAME%"
 %CMD%
 echo.
 echo The server stopped.
+goto :end
+
+:dry_play
+echo IW4x-32
+echo   game folder: %GAME%
+echo   command:     iw4x.exe %*
+echo   before that: iw4x32_update.ps1 checks both GitHub repos and installs a new IW4x-32 when one is out
+goto :end
+
+:dry_vanilla
+echo Vanilla IW4x
+echo   game folder: %GAME%
+echo   command:     "%GAME%\iw4x-launcher.exe" - the official IW4x launcher updates IW4x and starts the game
+echo   before that: IW4x-32's iw4x.dll is put back to the official one from IW4x-32\backup\
 goto :end
 
 :sha
