@@ -174,6 +174,7 @@ def client_story(text, map_to):
     benign = [(ms, line) for ms, line in tail if re.search(r"Error:|Adding channel: error", line)
               and not CLI_FATAL.search(line)]
     reinit = next((ms for ms, line in tail if CLI_REINIT in line), None)
+    ping = next((ms for ms, line in tail if "challenge ping from" in line), None)
     fastfile = next((ms for ms, line in tail if (g := CLI_FASTFILE.match(line)) and g.group(1) == map_to), None)
     layout = next((ms for ms, line in tail if CLI_LAYOUT in line), None)
     done = next(((ms, float(CLI_LOADED.match(line).group(1))) for ms, line in tail if CLI_LOADED.match(line)), None)
@@ -184,6 +185,7 @@ def client_story(text, map_to):
             "notice": None if at is None else {"ms": at[1], "map": at[2]},
             "dropped": drop, "fatal": fatal, "benign": benign,
             "reinit_ms": reinit if stamped else None, "reinit": reinit is not None,
+            "ping_ms": ping if stamped else None, "ping": ping is not None,
             "fastfile_ms": fastfile if stamped else None, "fastfile": fastfile is not None,
             "layout_ms": layout if stamped else None, "layout": layout is not None,
             "loaded_ms": done[0] if (done and stamped) else None,
@@ -213,9 +215,9 @@ def client_story_all(texts, map_to):
         out[key] = sorted(merged, key=lambda e: e[0])
     # a re-init step counts when any copy printed it (each copy lags the process by whatever it has not
     # flushed), and its offset comes from whichever copy carries the engine's ms stamps next to it
-    for key in ("fastfile", "reinit", "layout", "loaded"):
+    for key in ("fastfile", "reinit", "ping", "layout", "loaded"):
         out[key] = any(s[key] for s in stories)
-    for key in ("fastfile_ms", "reinit_ms", "layout_ms", "loaded_ms"):
+    for key in ("fastfile_ms", "reinit_ms", "ping_ms", "layout_ms", "loaded_ms"):
         if out[key] is None:
             out[key] = next((s[key] for s in stories if s[key] is not None), None)
     return out
@@ -224,30 +226,37 @@ def client_story_all(texts, map_to):
 def server_story(text):
     """the server's console lines: level restarts, and every slot the non-bot (human) guid was given or took
     back - `Going from CS_FREE to CS_CONNECTED for  (num 28 guid "<human>")` is the server handing out a slot.
-    `handshake` is the slot the server handed the human guid AFTER its last level restart: the restart drops
-    everyone, so a client that came back through that line re-connected, and one that only still shows up in a
-    later `status` poll did not necessarily. It wants two restarts in the text - the client's first connect sits
-    between the first and the last of them, and counting it as the re-connection would prove nothing."""
+    `handshake` is the slot it handed the human guid back AFTER a level restart that came after the client's
+    first join: the restart drops everyone, so a client that came through that line re-connected, and one that
+    only still shows up in a later `status` poll did not necessarily. `restart_ms` is None when the copy has no
+    stamped restart after that join - a dedicated server prints almost nothing once the level is running, so its
+    console file lags the process by a 4 KB block and the restart lines of a mid-run map change are often not in
+    either copy (box-checked: one live run had a single 'Server Initialization' line, at process start, and its
+    next stamped line 130 s later). `post_restart` says whether the text reaches past the restart at all, which
+    is what separates 'the server never took the client back' from 'the server console did not get that far'."""
     ev = console_events(text)
-    restarts, restart_ms, slots, drops, connects, ping_ms = 0, None, [], [], 0, None
+    restarts, slots, drops, connects = 0, [], [], 0
     for ms, line in ev:
         if "Server Initialization" in line:
-            restarts, restart_ms = restarts + 1, ms
+            restarts += 1
         if "challenge ping from" in line and "connecting" in line:
             connects += 1
-            ping_ms = ms
         g = SV_SLOT.search(line)
         if not g or g.group(5).lower().startswith("bot"):
             continue
         (drops if g.group(2) != "CS_CONNECTED" else slots).append((ms, int(g.group(4)), g.group(5), g.group(2)))
-    again = [e for e in slots if restart_ms is not None and e[0] > restart_ms]
-    handshake = None if restarts < 2 or not again else {"ms": again[0][0], "slot": again[0][1],
-                                                        "guid": again[0][2],
-                                                        "ping_ms": ping_ms if (ping_ms is not None
-                                                                                and ping_ms > restart_ms)
-                                                        else None}
+    join = next(((ms, slot, guid) for ms, slot, guid, _to in slots if ms), None)
+    restart_ms = max((ms for ms, line in ev if "Server Initialization" in line and ms), default=None)
+    if join is None or restart_ms is None or restart_ms <= join[0]:
+        handshake = post_restart = None
+    else:
+        again = next((e for e in slots if e[0] > restart_ms), None)
+        ping = next((ms for ms, line in ev if ms > restart_ms and "challenge ping from" in line), None)
+        handshake = None if again is None else {"ms": again[0], "slot": again[1], "guid": again[2], "ping_ms": ping}
+        post_restart = next((ms for ms, _line in ev if ms > restart_ms), None)
     return {"lines": len(ev), "restarts": restarts, "connects": connects, "restart_ms": restart_ms,
-            "handshake": handshake, "human_slots": [s for s in slots], "human_drops": drops}
+            "join": join, "handshake": handshake, "post_restart": post_restart,
+            "human_slots": [s for s in slots], "human_drops": drops}
 
 
 def reinit_sequence(cli, srv, playing, map_to):
