@@ -5,20 +5,22 @@
 
 ## Install - play or host 32-player IW4x
 
-**[Download the latest release](https://github.com/shaunypnz/iw4x-32/releases/latest)** (`IW4x-32-<version>.zip`), then:
+**[Download the latest release](https://github.com/shaunypnz/iw4x-32/releases/latest)** (`IW4x-32-<version>.zip`), extract
+it anywhere, then:
 
-| | Windows | Linux (Wine / Proton) |
-|---|---|---|
-| **Before** | MW2 from Steam + IW4x from the [official IW4x launcher](https://github.com/iw4x/launcher), started once so it is up to date | same |
-| **1. Unpack** | put the `IW4x-32` folder **inside your game folder** (where `iw4x.exe` is) | same |
-| **2. Install** | `IW4x-32\Install IW4x-32.bat` | `./install-linux.sh` |
-| **Play** | `IW4x-32\Play IW4x-32.bat` | `./play-linux.sh` |
-| **Host a server** | `IW4x-32\Start IW4x-32 Server.bat [port]` | `./start-server-linux.sh [port]` |
-| **Undo** | `IW4x-32\Uninstall IW4x-32.bat` | `./uninstall-linux.sh` |
+| Windows | Linux / Steam Deck (Proton or Wine) |
+|---|---|
+| double-click **`IW4x-32.bat`** | run **`./IW4x-32.sh`** |
 
-Servers: the first start makes `userraw\server_iw4x32.cfg` in the game folder (server name, rcon password, map
-rotation); forward the port (UDP, default 28960) for internet players; `spawnBot 10` in the console adds bots.
-Full steps: the release page and `README.txt` in the zip.
+That's it. You only need Modern Warfare 2 (2009) from Steam. The first start finds the game, installs official IW4x with
+the [official IW4x launcher](https://github.com/iw4x/launcher), installs IW4x-32 and makes an **IW4x-32** shortcut. After
+that it is a menu: **play IW4x-32 / play vanilla IW4x / host a 32-player server / host a normal server / uninstall**,
+and it keeps IW4x-32 and IW4x up to date. `IW4x-32.bat` (or `.sh`) also works downloaded on its own from the release
+page - it fetches the rest itself.
+
+Servers: pick "host" in the menu, or `IW4x-32.bat --server 28961`. The first start makes `userraw\server_iw4x32.cfg`
+in the game folder (server name, rcon password, map rotation); forward the port (UDP, default 28960); `spawnBot 10` in
+the console adds bots. More: `README.txt` in the zip.
 
 ## About
 
@@ -26,10 +28,10 @@ Full steps: the release page and `README.txt` in the zip.
 |---|---|
 | **What it is** | The real IW4x client source, with the IW4x-32 changes applied on top as ordinary commits (search the code for `IW4x-32:`), so it stays easy to follow and to rebase on new IW4x releases. |
 | **What's different** | Up to **32 players** per server (bots included); the scoreboard, minimap, voice, clan tags, card titles and server browser all handle 32. Joining normal 18-player IW4x servers keeps working. |
-| **Goal of v2.0** | **One `iw4x.dll` does everything**: no patched `iw4x.exe`. The engine's 18-player limits are lifted in memory at start-up by the `IW4x32` component - drop the DLL into a normal IW4x install and you have 32-player IW4x - the release zip's installers do exactly that. |
+| **Goal of v2.0** | **One `iw4x.dll` does everything**: no patched `iw4x.exe`. The engine's 18-player limits are lifted in memory at start-up by the `IW4x32` component - drop the DLL into a normal IW4x install and you have 32-player IW4x - `IW4x-32.bat` / `IW4x-32.sh` do exactly that. |
 | **Where v1.x lives** | The original binary-patched releases (v1.0-v1.2), installers and the IW4x integration kit: **[shaunypnz/iw4x-32-old](https://github.com/shaunypnz/iw4x-32-old)**. Installed players keep auto-updating; nothing to do. |
 | **Branches** | `iw4x-32` (default) = upstream IW4x + IW4x-32. `main` = the updater channel (`latest.json` only). |
-| **Releases** | Published by GitHub Actions from version tags (`v2.0`, ...): `IW4x-32-<version>.zip` (client + server kit) + `iw4x.dll`. |
+| **Releases** | Published by GitHub Actions from version tags (`v2.0`, ...): `IW4x-32-<version>.zip` (client + server kit), the two launcher scripts on their own, `latest.json` and `iw4x.dll`. |
 
 ### For the IW4x team
 Every change is tagged `IW4x-32:` in the source; the engine changes are described entry by entry in

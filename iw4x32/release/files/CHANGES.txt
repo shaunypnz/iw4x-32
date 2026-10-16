@@ -11,9 +11,12 @@ THE FILES
                    exact file that passed the live 32-player test; sha256 in SHA256SUMS.txt and latest.json.
                    Made for official IW4x r5168 (the installer checks your iw4x.dll is that release first).
   iw4x.exe         NOT touched. Your official IW4x iw4x.exe (unchanged since r5154) stays exactly where it is.
-  Start IW4x-32 Server.bat, start-server-linux.sh, server/server_iw4x32.cfg
-                   the 32-player dedicated server starter (Windows / Linux under Wine) and its settings template.
-  everything else in this folder is installers, start scripts and documentation.
+  IW4x-32.bat / IW4x-32.sh (next to files/)
+                   the only things a player runs: setup on the first start, then the menu (play, vanilla IW4x,
+                   host a 32-player or normal server, uninstall) and the auto-update. They run files/iw4x32.ps1
+                   (Windows) / files/iw4x32.py (Linux), which do the same steps.
+  files/server_iw4x32.cfg, files/server_vanilla.cfg
+                   server settings templates, copied to the game folder's userraw/ on a server's first start.
 
 WHAT THE DLL DOES
   IW4x already rewrites parts of the MW2 engine at start-up - that is what a client mod for a closed-source

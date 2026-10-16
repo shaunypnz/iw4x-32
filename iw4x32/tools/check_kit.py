@@ -10,10 +10,11 @@ check_kit.py - the IW4x-32 player kit must be installable as it stands:
     (an unlisted file would never reach a player);
   - no installer or updater installs an iw4x.exe: the kit carries no files/iw4x.exe, nothing refers to one,
     and the only iw4x.exe any of them writes is a restore from backup/ (v1.x leftovers);
-  - the one-click entry points are there: "IW4x-32 Setup.bat" and "IW4x-32 Launcher.bat" for Windows,
-    setup-linux.sh and launcher-linux.sh for Linux, and the Linux ones are executable in git;
-  - the OURS_DLL= constants match the kit's files/iw4x.dll, and README.txt line 1 states latest.json's version
-    (the updater reads it to know what it has);
+  - the layout a player sees is IW4x-32.bat, IW4x-32.sh, README.txt and files/ - nothing else at the top (the
+    v2.0 shims iw4x32_update.ps1/.py are the only exception: listed as "legacy" in latest.json, left out of the
+    zip); the launchers files/iw4x32.ps1 and files/iw4x32.py are there, .sh/.py executable in git;
+  - the OFFICIAL_DLL/EXE/VER constants in the launchers match latest.json's official IW4x release, and README.txt
+    line 1 states latest.json's version (the updater reads it to know what it has);
   - .bat/.ps1/.txt keep CRLF, .sh/.py keep LF, and .gitattributes keeps the kit's bytes verbatim
     (GitHub raw serves them as-is and the updater checks those hashes);
   - .github/workflows/iw4x32-release.yml parses and triggers on a v* tag, builds Release|Win32 on
@@ -30,12 +31,14 @@ except ImportError:
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_ROOT = os.path.dirname(os.path.dirname(HERE))
 REPO = "shaunypnz/iw4x-32"
-SUMS = "SHA256SUMS.txt"
+SUMS = "files/SHA256SUMS.txt"
+TOP = {"IW4x-32.bat", "IW4x-32.sh", "README.txt", "files"}
+LEGACY = {"iw4x32_update.ps1", "iw4x32_update.py"}
 SCRIPTS = (".bat", ".sh", ".ps1", ".py")
 CRLF_EXT, LF_EXT = (".bat", ".ps1", ".txt"), (".sh", ".py")
 # a line that writes an iw4x.exe into the game folder: only a restore from backup/ is allowed
 COPY = re.compile(r"(?<![\w/])(copy|cp|mv)\b|Copy-Item|shutil\.copy|Move-Item", re.I)
-GAME_EXE = re.compile(r"""GAME%?["']?\s*[\\/]\s*iw4x\.exe|GAME\s*,\s*["']iw4x\.exe|Game\s+["']iw4x\.exe""")
+GAME_EXE = re.compile(r"""GAME%?["']?\s*[\\/]\s*iw4x\.exe|GAME\s*,\s*["']iw4x\.exe|Game\s+["']iw4x\.exe|\bG\(?\s*["']iw4x\.exe""")
 KIT_EXE = re.compile(r"files[\\/][\"']?iw4x\.exe", re.I)
 
 
@@ -55,8 +58,8 @@ def kit_files(kit):
 
 
 JUNK = re.compile(r"(^|/)(__pycache__|\.git|\.DS_Store|Thumbs\.db)|\.pyc$|~$")
-# what a player gets when they unzip: one setup and one launcher per OS, plus the thin wrappers
-ENTRY = ("IW4x-32 Setup.bat", "IW4x-32 Launcher.bat", "setup-linux.sh", "launcher-linux.sh")
+# what a player gets when they unzip: one script per OS, and the launcher each one runs
+ENTRY = ("IW4x-32.bat", "IW4x-32.sh", "files/iw4x32.ps1", "files/iw4x32.py")
 
 
 def check_no_junk(files, bad):
@@ -71,6 +74,10 @@ def check_entry_points(kit, files, bad):
     for p in ENTRY:
         if p not in files:
             bad.append(f"kit: {p} is missing - the kit is not one-click without it")
+    for p in sorted({f.split("/")[0] for f in files}):
+        if p not in TOP and p not in LEGACY:
+            bad.append(f"kit: {p} at the top of the kit - players see only IW4x-32.bat, IW4x-32.sh, README.txt and "
+                       "files/; put it in files/")
     for p in files:
         if p.endswith((".sh", ".py")) and not os.access(os.path.join(kit, p), os.X_OK):
             bad.append(f"kit: {p} is not executable - git stores that mode, and ./<name> is how players run it")
@@ -104,6 +111,8 @@ def check_manifest(root, kit, files, bad):
     for p in files:
         if p not in listed:
             bad.append(f"latest.json: kit file {p} is not listed - players would never get it")
+    if set(m.get("legacy") or []) != LEGACY & set(files):
+        bad.append(f"latest.json: legacy {m.get('legacy')} != the v2.0 shims in the kit {sorted(LEGACY & set(files))}")
     for f in ("iw4x.dll", "iw4x.exe"):
         if not re.fullmatch(r"[0-9a-f]{64}", str((m.get("official") or {}).get(f, ""))):
             bad.append(f"latest.json: official[{f!r}] must be a sha256 - the updater repairs to it")
@@ -126,21 +135,25 @@ def check_no_exe_install(kit, files, bad):
                            f"is allowed): {line.strip()[:90]}")
 
 
-def check_hashes_match(kit, files, bad):
-    dll = os.path.join(kit, "files", "iw4x.dll")
-    if not os.path.isfile(dll):
+def check_hashes_match(kit, files, manifest, bad):
+    """the launchers' OFFICIAL_* constants describe the official IW4x release latest.json is made for"""
+    if not os.path.isfile(os.path.join(kit, "files", "iw4x.dll")):
         bad.append("kit: files/iw4x.dll is missing - build Release and copy it in (make_latest.py --dll)")
         return
-    digest = sha(open(dll, "rb").read())
-    for p in files:
-        if not p.endswith(SCRIPTS):
+    if not manifest:
+        return
+    want = {"DLL": (manifest.get("official") or {}).get("iw4x.dll"), "EXE": (manifest.get("official") or {}).get("iw4x.exe"),
+            "VER": manifest.get("iw4x")}
+    for p in ("files/iw4x32.ps1", "files/iw4x32.py"):
+        if p not in files:
             continue
-        for n, line in enumerate(open(os.path.join(kit, p), encoding="utf-8", errors="replace").read().splitlines(), 1):
-            m = re.match(r"\s*(?:set \"?)?OURS_DLL=([0-9A-Za-z_]*)", line)
-            if m and m.group(1) != digest:
-                bad.append(f"{p}:{n}: OURS_DLL={m.group(1)!r} is not the SHA-256 of files/iw4x.dll "
-                           f"({digest[:16]}...) - run make_latest.py")
-    return digest
+        text = open(os.path.join(kit, p), encoding="utf-8", errors="replace").read()
+        for k, v in want.items():
+            m = re.search(rf"^\$?OFFICIAL_{k} = [\"']([0-9A-Za-z_]*)", text, re.M)
+            if not m:
+                bad.append(f"{p}: no OFFICIAL_{k} constant")
+            elif m.group(1) != v:
+                bad.append(f"{p}: OFFICIAL_{k} = {m.group(1)!r}, latest.json says {v!r} - run make_latest.py")
 
 
 def check_line_endings(kit, files, bad):
@@ -201,6 +214,9 @@ def check_workflow(root, bad):
         bad.append("iw4x32-release.yml: no ncipollo/release-action@v1 step")
     if "iw4x32/release" not in text or not re.search(r"IW4x-32-[^\n]*ref_name[^\n]*\.zip", text, re.I):
         bad.append("iw4x32-release.yml: does not zip iw4x32/release/ as IW4x-32-<tag>.zip")
+    if not re.search(r"iw4x32_update", text) or "latest.json" not in re.sub(r"(?s).*artifacts:", "", text):
+        bad.append("iw4x32-release.yml: the zip must leave out iw4x32_update.ps1/.py, and latest.json must be a release "
+                   "asset (the launchers and the standalone IW4x-32.bat read releases/latest/download/latest.json)")
     if not yaml:
         print("check_kit: note - PyYAML is not installed, the workflow was checked as text only")
 
@@ -227,7 +243,7 @@ def main():
     check_no_junk(files, bad)
     check_entry_points(kit, files, bad)
     check_no_exe_install(kit, files, bad)
-    check_hashes_match(kit, files, bad)
+    check_hashes_match(kit, files, manifest, bad)
     check_line_endings(kit, files, bad)
     check_readme(kit, manifest, bad)
     check_workflow(a.root, bad)

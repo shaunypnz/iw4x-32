@@ -1,7 +1,8 @@
 name: IW4x-32 release
 
-# IW4x-32 kit: cut a v* tag (v2.0, v2.1, ...) and this publishes the kit COMMITTED in that tag (client + server
-# installers and the iw4x.dll that was tested live) as a public GitHub Release: IW4x-32-<tag>.zip + iw4x.dll.
+# IW4x-32 kit: cut a v* tag (v2.1, v2.2, ...) and this publishes the kit COMMITTED in that tag (IW4x-32.bat,
+# IW4x-32.sh, README.txt, files/ with the iw4x.dll that was tested live) as a public GitHub Release:
+# IW4x-32-<tag>.zip, the two launcher scripts on their own, latest.json and iw4x.dll.
 # The zip, the tag's iw4x32/release/ (what the installed players' auto-update downloads, latest.json's base_url)
 # and latest.json are therefore the same bytes. CI still compiles the tagged source first, as a build check -
 # a tag whose source does not build is never published.
@@ -74,6 +75,8 @@ jobs:
         run: |
           mkdir -p stage/IW4x-32
           cp -a iw4x32/release/. stage/IW4x-32/
+          # the v2.0 compatibility shims are for v2.0 updaters only (latest.json "legacy"), not for new players
+          rm -f stage/IW4x-32/iw4x32_update.ps1 stage/IW4x-32/iw4x32_update.py
           find stage -name __pycache__ -prune -exec rm -rf {} +
           (cd stage && zip -qr "../IW4x-32-${GITHUB_REF_NAME}.zip" IW4x-32)
           cp iw4x32/release/files/iw4x.dll iw4x.dll
@@ -86,7 +89,9 @@ jobs:
         with:
           name: "IW4x-32 ${{ github.ref_name }} - 32-player IW4x"
           bodyFile: iw4x32/RELEASE_NOTES.md
-          artifacts: "IW4x-32-*.zip,iw4x.dll,iw4x32/release/SHA256SUMS.txt"
+          # latest.json: what every IW4x-32 launcher reads (releases/latest/download/latest.json); IW4x-32.bat /
+          # IW4x-32.sh also work downloaded on their own - they fetch the rest of the release
+          artifacts: "IW4x-32-*.zip,iw4x32/release/IW4x-32.bat,iw4x32/release/IW4x-32.sh,latest.json,iw4x.dll,iw4x32/release/files/SHA256SUMS.txt"
           artifactErrorsFailBuild: true
           allowUpdates: true
           draft: false

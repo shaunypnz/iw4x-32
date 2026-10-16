@@ -9,12 +9,13 @@
   --iw4x       the official IW4x release this kit is made for
 
 What it writes:
-  - the OURS_DLL= constants in the kit's installers/start scripts are set to the SHA-256 of the kit's
-    files/iw4x.dll, so an installer can never carry a hash of a DLL that is not in the kit;
-  - <kit>/SHA256SUMS.txt: "sha256  path" for every kit file (CRLF, plain sha256sum format, for players);
+  - the OFFICIAL_DLL / OFFICIAL_EXE / OFFICIAL_VER constants in the launchers (files/iw4x32.ps1, files/iw4x32.py)
+    are set to the official IW4x release the kit is made for;
+  - <kit>/files/SHA256SUMS.txt: "sha256  path" for every kit file (CRLF, plain sha256sum format, for players);
   - latest.json at the repo root: what the installed players' auto-update reads (see iw4x32_update.py/.ps1) -
     version, the official IW4x hashes it repairs to, base_url (the tag's copy of the kit on GitHub raw) and the
-    SHA-256 of every kit file.
+    SHA-256 of every kit file. "legacy" names the v2.0 compatibility shims (top-level iw4x32_update.ps1/.py): they
+    are listed so that a v2.0 updater fetches them, the zip leaves them out and v2.1+ launchers skip them.
 Bytes are hashed exactly as they sit in the tree: GitHub raw serves them unchanged (see the -text rule for the
 kit in .gitattributes), and the updater compares those bytes' SHA-256 with what is written here."""
 import argparse, hashlib, json, os, re, shutil, sys
@@ -29,8 +30,10 @@ OFFICIAL_BY_IW4X = {
     "r5168": {"iw4x.dll": "e0d8adc473f04f2d0988cffec3ecb8128e9faeba1e169c0acb13118d29aff6ea",
               "iw4x.exe": "49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009"},
 }
-OURS_CONST = re.compile(r"^(\s*(?:set \"?)?OURS_DLL=)[0-9A-Za-z_]*", re.M)
-OFFICIAL_CONST = {k: re.compile(rf"^(\s*(?:set \"?)?OFFICIAL_{k}=)[0-9A-Za-z_]*", re.M) for k in ("DLL", "EXE", "VER")}
+# the constants as the launchers write them:  $OFFICIAL_DLL = '...'  (ps1)  /  OFFICIAL_DLL = "..."  (py)
+OFFICIAL_CONST = {k: re.compile(rf"^(\$?OFFICIAL_{k} = [\"'])[0-9A-Za-z_]*", re.M) for k in ("DLL", "EXE", "VER")}
+SUMS = "files/SHA256SUMS.txt"
+LEGACY = ["iw4x32_update.ps1", "iw4x32_update.py"]   # v2.0 shims: in the manifest, not in the zip
 
 
 def sha(b):
@@ -49,24 +52,9 @@ def kit_files(kit):
         sub[:] = sorted(dn for dn in sub if not JUNK.search(dn))
         for n in sorted(names):
             p = os.path.relpath(os.path.join(d, n), kit).replace(os.sep, "/")
-            if p != "SHA256SUMS.txt" and not JUNK.search(p):
+            if p != SUMS and not JUNK.search(p):
                 out.append(p)
     return sorted(out)
-
-
-def sync_ours_dll(kit, digest):
-    """set the OURS_DLL= constant every installer/start script checks against, to the kit's dll"""
-    done = []
-    for p in kit_files(kit):
-        if not p.endswith((".bat", ".sh")):
-            continue
-        raw = open(os.path.join(kit, p), "rb").read()
-        text = raw.decode("utf-8")
-        new = OURS_CONST.sub(lambda m: m.group(1) + digest, text)
-        if new != text:
-            open(os.path.join(kit, p), "wb").write(new.encode("utf-8"))
-            done.append(p)
-    return done
 
 
 def sync_official(kit, iw4x, off):
@@ -74,7 +62,7 @@ def sync_official(kit, iw4x, off):
     done = []
     want = {"DLL": off["iw4x.dll"], "EXE": off["iw4x.exe"], "VER": iw4x}
     for p in kit_files(kit):
-        if not p.endswith((".bat", ".sh")):
+        if not p.endswith((".ps1", ".py")):
             continue
         text = open(os.path.join(kit, p), "rb").read().decode("utf-8")
         new = text
@@ -111,19 +99,18 @@ def main():
     for p in sync_official(a.kit, a.iw4x, OFFICIAL):
         print(f"make_latest: official IW4x {a.iw4x} hashes set in {p}")
     digest = sha(open(dll, "rb").read())
-    for p in sync_ours_dll(a.kit, digest):
-        print(f"make_latest: OURS_DLL set in {p}")
 
     files = {p: sha(open(os.path.join(a.kit, p), "rb").read()) for p in kit_files(a.kit)}
-    sums = os.path.join(a.kit, "SHA256SUMS.txt")
+    sums = os.path.join(a.kit, *SUMS.split("/"))
     with open(sums, "wb") as f:
         for p, h in files.items():
-            f.write(f"{h}  {p}\r\n".encode())
-    files["SHA256SUMS.txt"] = sha(open(sums, "rb").read())
+            if p not in LEGACY:
+                f.write(f"{h}  {p}\r\n".encode())
+    files[SUMS] = sha(open(sums, "rb").read())
 
     manifest = {"version": a.version, "iw4x": a.iw4x, "official": OFFICIAL,
                 "base_url": f"https://raw.githubusercontent.com/{REPO}/{a.version}/iw4x32/release/",
-                "files": files}
+                "files": files, "legacy": [p for p in LEGACY if p in files]}
     with open(a.out, "w", newline="\n") as f:
         json.dump(manifest, f, indent=1)
         f.write("\n")
