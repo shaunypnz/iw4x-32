@@ -10,6 +10,8 @@ check_kit.py - the IW4x-32 player kit must be installable as it stands:
     (an unlisted file would never reach a player);
   - no installer or updater installs an iw4x.exe: the kit carries no files/iw4x.exe, nothing refers to one,
     and the only iw4x.exe any of them writes is a restore from backup/ (v1.x leftovers);
+  - the one-click entry points are there: "IW4x-32 Setup.bat" and "IW4x-32 Launcher.bat" for Windows,
+    setup-linux.sh and launcher-linux.sh for Linux, and the Linux ones are executable in git;
   - the OURS_DLL= constants match the kit's files/iw4x.dll, and README.txt line 1 states latest.json's version
     (the updater reads it to know what it has);
   - .bat/.ps1/.txt keep CRLF, .sh/.py keep LF, and .gitattributes keeps the kit's bytes verbatim
@@ -53,6 +55,8 @@ def kit_files(kit):
 
 
 JUNK = re.compile(r"(^|/)(__pycache__|\.git|\.DS_Store|Thumbs\.db)|\.pyc$|~$")
+# what a player gets when they unzip: one setup and one launcher per OS, plus the thin wrappers
+ENTRY = ("IW4x-32 Setup.bat", "IW4x-32 Launcher.bat", "setup-linux.sh", "launcher-linux.sh")
 
 
 def check_no_junk(files, bad):
@@ -60,6 +64,16 @@ def check_no_junk(files, bad):
     for p in files:
         if JUNK.search(p):
             bad.append(f"kit: {p} is not a kit file - it would be zipped, listed and downloaded; delete it")
+
+
+def check_entry_points(kit, files, bad):
+    """one-click: the kit must carry its own setup and launcher, and Linux players must be able to run them"""
+    for p in ENTRY:
+        if p not in files:
+            bad.append(f"kit: {p} is missing - the kit is not one-click without it")
+    for p in files:
+        if p.endswith((".sh", ".py")) and not os.access(os.path.join(kit, p), os.X_OK):
+            bad.append(f"kit: {p} is not executable - git stores that mode, and ./<name> is how players run it")
 
 
 def check_manifest(root, kit, files, bad):
@@ -211,6 +225,7 @@ def main():
     bad = []
     manifest = check_manifest(a.root, kit, files, bad)
     check_no_junk(files, bad)
+    check_entry_points(kit, files, bad)
     check_no_exe_install(kit, files, bad)
     check_hashes_match(kit, files, bad)
     check_line_endings(kit, files, bad)
