@@ -91,8 +91,8 @@ if not defined MODE set "MODE=%LAST%"
 
 :start
 if "%MODE%"=="vanilla" goto :vanilla
-if "%MODE%"=="server" goto :server
-if "%MODE%"=="vanilla-server" goto :vserver
+if "%MODE%"=="server" (set "SLOTS=32" & set "CFG=server_iw4x32.cfg" & set "LABEL=IW4x-32 server" & goto :server)
+if "%MODE%"=="vanilla-server" (set "SLOTS=18" & set "CFG=server_vanilla.cfg" & set "LABEL=IW4x server - vanilla, 18 players" & goto :vserver)
 
 REM ---- IW4x-32: the updater checks GitHub, repairs the install and starts iw4x.exe -----------------------------
 if defined DRY (
@@ -129,10 +129,7 @@ if /i "%DLL_NOW%"=="%OURS_DLL%" if exist "%KIT%\backup\iw4x.dll" (
 goto :server_run
 
 :server_run
-REM %1 is unused here: the two callers set SLOTS / CFG / LABEL before jumping in
-if "%SLOTS%"=="" set "SLOTS=32"
-if "%CFG%"=="" set "CFG=server_iw4x32.cfg"
-if "%LABEL%"=="" set "LABEL=IW4x-32 server"
+REM SLOTS / CFG / LABEL come from the :start dispatch above
 if not exist "%GAME%\iw4x.exe" goto :nogame
 if "%SLOTS%"=="32" (
     call :sha "%GAME%\iw4x.dll" DLL_NOW

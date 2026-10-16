@@ -37,6 +37,9 @@ foreach ($a in $args) {
     elseif ($a -eq '--iw4x32') { $ModeFlag = 'iw4x32' }
     elseif ($a -eq '--install-official' -or $a -eq '-InstallOfficial') { $InstallOfficial = $true }
     elseif ($a -eq '--restore-official' -or $a -eq '-RestoreOfficial') { $RestoreOfficial = $true }
+    # "IW4x-32 Launcher.bat" passes its own arguments through; they are not for the game
+    elseif ($a -in '--play', '--server', '--vanilla-server', '--dry', '--dry-run', '--no-update', '--direct') { }
+    elseif ($a -match '^[0-9]+$') { }
     else { $GameArgs += $a }
 }
 
