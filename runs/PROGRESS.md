@@ -16,3 +16,4 @@ PROGRESS: 100% - done: all four gates green on the final tree (git-privacy-check
 PROGRESS: 5% - done: baseline (check_kit ok, sh/upd/bat tests green, wine has no powershell so the .bat setup/launcher paths must stay cmd-only) / next: launcher-linux.sh + setup-linux.sh + the .bat twins
 - Linux side done: launcher-linux.sh + setup-linux.sh + wrappers + 8 updater runs + setup tests, all green
 PROGRESS: 10% - done: baseline (self-test 18 ok) + read the rejoin checks, found the unjudged re-init steps (fastfile / iw4x32 layout line / server handshake) / next: add reinit_sequence() + client_reinit_sequence check + self-test cases
+PROGRESS: 60% - done: reinit_sequence() chain + client_reinit_sequence check + 4 new self-test cases (self-test 22 ok, chain visibly fails on bad cases) / next: build + one live run to prove the chain steps exist in real logs

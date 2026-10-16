@@ -29,9 +29,10 @@ judges one observation record - what the run saw - and prints one line per check
             that console has flushed that far - a live usercmd stream on the server), it logged no
             session-ending error, its process is up, and the bots are back. The way back is asserted as a chain,
             not as an end state (`client_reinit_sequence`): notice -> the new level's fastfile -> game state
-            taken -> the fork's 32-player layout re-applied on the new connect -> cgame init done -> the server
-            handing the human guid a slot again after its level restart -> in the level; the first step that is
-            missing, or stamped out of order, is named. The slot it had before and after is
+            taken -> the fork's 32-player layout re-applied on the new connect -> level loaded (cgame init line,
+            or the server's usercmd witness) -> the server handing the human guid a slot again after its level
+            restart; the first step that is missing, or stamped out of order, is named. The slot it had before
+            and after is
             reported next to all of this and judged by its own check (high-slot coverage) - a client sitting in
             a low slot is a layout gap, it is not a failed rejoin. This is the case for the "client does not come
             back after a map change" bug, and the last line it prints names the FIRST thing that went wrong in
@@ -225,12 +226,13 @@ def server_story(text):
     back - `Going from CS_FREE to CS_CONNECTED for  (num 28 guid "<human>")` is the server handing out a slot.
     `handshake` is the slot the server handed the human guid AFTER its last level restart: the restart drops
     everyone, so a client that came back through that line re-connected, and one that only still shows up in a
-    later `status` poll did not necessarily."""
+    later `status` poll did not necessarily. It wants two restarts in the text - the client's first connect sits
+    between the first and the last of them, and counting it as the re-connection would prove nothing."""
     ev = console_events(text)
-    restart_ms, slots, drops, connects, ping_ms = None, [], [], 0, None
+    restarts, restart_ms, slots, drops, connects, ping_ms = 0, None, [], [], 0, None
     for ms, line in ev:
         if "Server Initialization" in line:
-            restart_ms = ms
+            restarts, restart_ms = restarts + 1, ms
         if "challenge ping from" in line and "connecting" in line:
             connects += 1
             ping_ms = ms
@@ -239,18 +241,19 @@ def server_story(text):
             continue
         (drops if g.group(2) != "CS_CONNECTED" else slots).append((ms, int(g.group(4)), g.group(5), g.group(2)))
     again = [e for e in slots if restart_ms is not None and e[0] > restart_ms]
-    handshake = None if not again else {"ms": again[0][0], "slot": again[0][1], "guid": again[0][2],
-                                        "ping_ms": ping_ms if (ping_ms is not None and ping_ms > restart_ms)
-                                        else None}
-    return {"lines": len(ev), "restarts": sum(1 for ms, line in ev if "Server Initialization" in line),
-            "connects": connects, "restart_ms": restart_ms, "handshake": handshake,
-            "human_slots": [s for s in slots], "human_drops": drops}
+    handshake = None if restarts < 2 or not again else {"ms": again[0][0], "slot": again[0][1],
+                                                        "guid": again[0][2],
+                                                        "ping_ms": ping_ms if (ping_ms is not None
+                                                                                and ping_ms > restart_ms)
+                                                        else None}
+    return {"lines": len(ev), "restarts": restarts, "connects": connects, "restart_ms": restart_ms,
+            "handshake": handshake, "human_slots": [s for s in slots], "human_drops": drops}
 
 
 def reinit_sequence(cli, srv, playing, map_to):
     """the client's re-initialization / re-connection chain after the map change, step by step, in the order the
     engine runs it - not just the state at the end of it. The client's steps come off its own console tail (the
-    last notice for `map_to`), the last two off the server's console: the level restart drops every client, so
+    last notice for `map_to`), the last one off the server's console: the level restart drops every client, so
     the client has to come back through the connect handshake and be in the level to send anything. The server's
     lines are only placed after its own restart - the two processes have separate clocks, so their ms are never
     compared. The last client step counts as done on its cgame init line or, when neither console copy flushed
@@ -283,9 +286,9 @@ def reinit_sequence(cli, srv, playing, map_to):
         for n, ms in timed:
             early = next((e for e in timed if CLI_ORDER.index(e[0]) < CLI_ORDER.index(n) and ms <= e[1]), None)
             if early:
-                gap = next(s for s in steps if s[0] == n)[:2] + (ms, f"its own console stamps it at {ms} ms, "
-                                                                 f"before '{early[0]}' at {early[1]} ms - those "
-                                                                 "lines belong to the first join, not the rejoin")
+                name, _ok, ms, _note = next(s for s in steps if s[0] == n)
+                gap = (name, False, ms, f"its own console stamps it at {ms} ms, before '{early[0]}' at "
+                                        f"{early[1]} ms - those lines belong to the first join, not the rejoin")
                 break
     return steps, gap
 
@@ -662,7 +665,8 @@ def self_test():
     stdout_only, change_t = transcript("mp_rust", 120.0, 28)
     expect("the load line is only in the stdout copy", ["rejoin"],
            obs(stdout_only, 29, map_change_t=change_t, client_log=cli_log(loaded=False),
-               client_stdout=cli_stdout(), server_log=srv_log()), True, want_reason="finished loading")
+               client_stdout=cli_stdout(), server_log=srv_log()), True, want_reason="finished loading",
+           want_ok_checks=("client_reinit_sequence",))
     # bad: it rejoins in a low slot - a layout gap, and NOT a reconnect failure (the confusion this file exists
     # to stop: the rejoin checks must all pass and the verdict must not talk about reconnecting)
     low, change_t = transcript("mp_rust", 120.0, 3)
@@ -679,7 +683,7 @@ def self_test():
     nolog, change_t = transcript("mp_rust", 120.0, 28)
     expect("no client console log", ["rejoin"], obs(nolog, 29, map_change_t=change_t, client_log="",
                                                    server_log=srv_log()),
-           False, ("client_followed_change",), want_reason="no client console log")
+           False, ("client_followed_change", "client_reinit_sequence"), want_reason="no client console log")
     # bad: it came back with a session-ending error in its console
     errored, change_t = transcript("mp_rust", 120.0, 28)
     expect("client rejoins with an error", ["rejoin"],
@@ -698,7 +702,7 @@ def self_test():
     none_left, change_t = transcript("mp_rust", 120.0, 28, restarted=False)
     expect("session never restarted", ["rejoin"],
            obs(none_left, 29, map_change_t=change_t, client_log=cli_log(), server_log=srv_log(restarts=1)),
-           False, ("session_restarted",))
+           False, ("session_restarted", "client_reinit_sequence"))
     # bad: the map never changed (the change command landed on the map we were already on)
     same = [(t, status_text("mp_rust", table(28, 28)), True) for t in (20, 40, 60, 80, 100, 120, 140, 160, 200)]
     expect("same map after the change", ["rejoin"],
@@ -974,6 +978,8 @@ def main():
                            "client_lastmsg_ms": facts["lastmsg"],
                            "client_errors": [l[:90] for _ms, l in facts["fatal"]],
                            "client_slot_before": facts["slot_before"], "client_slot_after": facts["slot_after"],
+                           "client_reinit_chain": {n: ok for n, ok, _ms, _note in facts["seq"][0]},
+                           "client_reinit_gap": facts["seq"][1][0] if facts["seq"][1] else None,
                            "first_failure": next((c["name"] for c in res if not c["ok"]), None)})
     finally:
         if a.save_logs:
