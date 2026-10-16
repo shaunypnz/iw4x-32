@@ -798,6 +798,20 @@ def self_test():
                      "- wanted the map-change notice on the client side, its stdout copy in the middle and the "
                      "level restarts on the server side")
 
+    # every console line the rejoin judgement reads has to survive the on-box `grep -a -E CLI_EVENT` filter: a
+    # witness that never leaves the box is a witness that does not exist (a live run lost the server's stats line,
+    # and the chain blamed a client that had re-connected perfectly - see the round's report)
+    n += 1
+    needed = ["Server changing map mp_crash, gametype dom", "Loading fastfile mp_crash", CLI_REINIT,
+              "iw4x32: server is 32-slot - using the 32 player/body layout", "CL_InitCGame:  4.42 seconds",
+              "Client 0 connecting with 100 challenge ping from 0:<LAN-IP>",
+              'Going from CS_FREE to CS_CONNECTED for  (num 28 guid "AB12cd34EF567890")',
+              "------ Server Initialization ------", "Received packet 0 of stats data from clientNum 28",
+              "Disconnecting from 00000000.000000000000:0 (@XBOXLIVE_PARTYENDED) at time 147405"]
+    lost = [l for l in needed if not re.search(CLI_EVENT, l)]
+    if lost:
+        fails.append("CLI_EVENT drops lines the judgement reads: " + " | ".join(lost))
+
     # the rejoin case must refuse a setup it cannot judge, not silently pass
     n += 1
     ok, res = verdict(["rejoin"], obs(good, 29))

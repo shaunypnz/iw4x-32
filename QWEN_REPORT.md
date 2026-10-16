@@ -163,7 +163,34 @@ client_reinit_sequence: ok
   | the server's console names clientNum 27 again after the change
 ```
 
-A second live run with the corrected tool is in `scratch/live-logs2` / `scratch/live2.out`.
+A second live run with the same tool **failed the new check** — a false FAIL, and the saved logs say why:
+
+```
+FAIL client_reinit_sequence: notice -> fastfile -> reinit -> layout -> loaded -> server_reconnect MISSING
+       | the server's console logs that window and never names the human again
+```
+
+The client had re-connected normally (back in slot 27 after 72 s, usercmds, cgame init 4.21 s). Two causes, both
+read off `scratch/live-logs2` before touching the code:
+
+1. **The on-box log filter dropped the witness.** `fetch_logs` greps every console file through `CLI_EVENT`, and
+   the line the server's account rests on — `Received packet 0 of stats data from clientNum 27` — matches none of
+   its alternatives, so it never left the box. My first offline re-judgement fed the *saved raw* logs straight to
+   `split_logs`, bypassing that filter, and told me the witness was there. A re-probe that skips the tool's own
+   filter is worth nothing: the re-judgement now replays `grep -a -E CLI_EVENT` over the saved files first
+   (`scratch/rejudge.py`).
+2. The window fallback (`join + 60 s`) then read "the server logged that window and never named the human" from
+   a log that had simply lost the human's lines to the filter — and accused a client that had re-connected.
+
+Fix: `CLI_EVENT` carries `stats data from clientNum` (a handful of lines per level, and the only server-side line
+that reliably names the human after a change). Re-judging both saved runs through the filter with the fixed tool:
+
+```
+run 1: join 80140 slot 27 | restart_ms 5206 (process start) | handshake no | human_after 210685 | chain complete
+run 2: join 79318 slot 27 | restart_ms 6371 (process start) | handshake no | human_after 208703 | chain complete
+```
+
+A third live run with the fixed tool is in `scratch/live-logs3` / `scratch/live3.out`.
 
 ## 6. CHECK
 
