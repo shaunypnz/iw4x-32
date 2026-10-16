@@ -27,7 +27,11 @@ judges one observation record - what the run saw - and prints one line per check
             the status polls: it got the server's map-change notice, it came back on its own (in how long), it
             finished loading the new level (game state + cgame init in its own console, or - when neither copy of
             that console has flushed that far - a live usercmd stream on the server), it logged no
-            session-ending error, its process is up, and the bots are back. The slot it had before and after is
+            session-ending error, its process is up, and the bots are back. The way back is asserted as a chain,
+            not as an end state (`client_reinit_sequence`): notice -> the new level's fastfile -> game state
+            taken -> the fork's 32-player layout re-applied on the new connect -> cgame init done -> the server
+            handing the human guid a slot again after its level restart -> in the level; the first step that is
+            missing, or stamped out of order, is named. The slot it had before and after is
             reported next to all of this and judged by its own check (high-slot coverage) - a client sitting in
             a low slot is a layout gap, it is not a failed rejoin. This is the case for the "client does not come
             back after a map change" bug, and the last line it prints names the FIRST thing that went wrong in
@@ -68,7 +72,7 @@ CLI_FOLLOW = "Server changing map"        # the client got the server's map-chan
 CLI_EVENT = (r"iw4x://|-dedicated|Server changing map|Setting state to CA_|CL_InitCGame|CL_Disconnect|Disconnecting"
              r"|Server disconnected|Connection lost|Com_Error|Sys_Error|Exception|Modifying session|Loading fastfile"
              r"|Unloaded fastfile|newSnap|Error:|Adding channel: error|Going from CS_|Client [0-9]+ connecting"
-             r"|Server Initialization|iw4x32: |IW4x32: |timed out")
+             r"|challenge ping|Server Initialization|iw4x32: |IW4x32: |timed out")
 
 
 # ---------------------------------------------------------------- the judging half (no box, no game)
@@ -131,6 +135,9 @@ def client_lastmsg(rows):
 CLI_NOTICE = re.compile(r"^Server changing map (\w+)")   # the engine writes "map mp_crash, gametype dom"
 CLI_LOADED = re.compile(r"^CL_InitCGame:\s+([\d.]+) seconds")
 CLI_REINIT = "Setting state to CA_LOADING in CL_InitCGame"   # the client is taking the new level's game state
+CLI_LAYOUT = "iw4x32: server is"    # the client re-read sv_iw4x32 on the new connect and re-applied the layout
+CLI_FASTFILE = re.compile(r"^Loading fastfile (\w+)$")        # the new level's data reached the client
+CLI_ORDER = ("notice", "fastfile", "reinit", "loaded")       # the client steps whose ms stamps must be ordered
 CLI_DROP = re.compile(r"Disconnecting from |Disconnecting: |Server disconnected|Connection lost|CL_Disconnect"
                       r"|Com_Error|Sys_Error|Exception|timed out")
 CLI_WHY = re.compile(r"\(@([A-Z_]+)\)")
@@ -166,6 +173,8 @@ def client_story(text, map_to):
     benign = [(ms, line) for ms, line in tail if re.search(r"Error:|Adding channel: error", line)
               and not CLI_FATAL.search(line)]
     reinit = next((ms for ms, line in tail if CLI_REINIT in line), None)
+    fastfile = next((ms for ms, line in tail if (g := CLI_FASTFILE.match(line)) and g.group(1) == map_to), None)
+    layout = next((ms for ms, line in tail if CLI_LAYOUT in line), None)
     done = next(((ms, float(CLI_LOADED.match(line).group(1))) for ms, line in tail if CLI_LOADED.match(line)), None)
     # a copy without the engine's ms stamps (the -stdout one) still proves a line was printed, but every one of
     # its lines would read as ms 0: keep the order, drop the timings rather than invent them
@@ -173,7 +182,10 @@ def client_story(text, map_to):
     return {"lines": len(ev), "stamped": stamped, "notices": [n[2] for n in notices],
             "notice": None if at is None else {"ms": at[1], "map": at[2]},
             "dropped": drop, "fatal": fatal, "benign": benign,
-            "reinit_ms": reinit if stamped else None, "loaded_ms": done[0] if (done and stamped) else None,
+            "reinit_ms": reinit if stamped else None, "reinit": reinit is not None,
+            "fastfile_ms": fastfile if stamped else None, "fastfile": fastfile is not None,
+            "layout_ms": layout if stamped else None, "layout": layout is not None,
+            "loaded_ms": done[0] if (done and stamped) else None,
             "loaded": done is not None, "load_secs": done[1] if done else None,
             "since_notice": lambda ms: None if at is None or ms is None or not stamped else (ms - at[1]) / 1000.0,
             "last": ev[-1][1] if ev else ""}
@@ -198,24 +210,84 @@ def client_story_all(texts, map_to):
                     seen.add(line)
                     merged.append((ms, line))
         out[key] = sorted(merged, key=lambda e: e[0])
+    # a re-init step counts when any copy printed it (each copy lags the process by whatever it has not
+    # flushed), and its offset comes from whichever copy carries the engine's ms stamps next to it
+    for key in ("fastfile", "reinit", "layout", "loaded"):
+        out[key] = any(s[key] for s in stories)
+    for key in ("fastfile_ms", "reinit_ms", "layout_ms", "loaded_ms"):
+        if out[key] is None:
+            out[key] = next((s[key] for s in stories if s[key] is not None), None)
     return out
 
 
 def server_story(text):
     """the server's console lines: level restarts, and every slot the non-bot (human) guid was given or took
-    back - `Going from CS_FREE to CS_CONNECTED for  (num 28 guid "<human>")` is the server handing out a slot."""
+    back - `Going from CS_FREE to CS_CONNECTED for  (num 28 guid "<human>")` is the server handing out a slot.
+    `handshake` is the slot the server handed the human guid AFTER its last level restart: the restart drops
+    everyone, so a client that came back through that line re-connected, and one that only still shows up in a
+    later `status` poll did not necessarily."""
     ev = console_events(text)
-    restarts = sum(1 for _ms, line in ev if "Server Initialization" in line)
-    slots, drops, connects = [], [], 0
+    restart_ms, slots, drops, connects, ping_ms = None, [], [], 0, None
     for ms, line in ev:
+        if "Server Initialization" in line:
+            restart_ms = ms
         if "challenge ping from" in line and "connecting" in line:
             connects += 1
+            ping_ms = ms
         g = SV_SLOT.search(line)
         if not g or g.group(5).lower().startswith("bot"):
             continue
         (drops if g.group(2) != "CS_CONNECTED" else slots).append((ms, int(g.group(4)), g.group(5), g.group(2)))
-    return {"lines": len(ev), "restarts": restarts, "connects": connects,
+    again = [e for e in slots if restart_ms is not None and e[0] > restart_ms]
+    handshake = None if not again else {"ms": again[0][0], "slot": again[0][1], "guid": again[0][2],
+                                        "ping_ms": ping_ms if (ping_ms is not None and ping_ms > restart_ms)
+                                        else None}
+    return {"lines": len(ev), "restarts": sum(1 for ms, line in ev if "Server Initialization" in line),
+            "connects": connects, "restart_ms": restart_ms, "handshake": handshake,
             "human_slots": [s for s in slots], "human_drops": drops}
+
+
+def reinit_sequence(cli, srv, playing, map_to):
+    """the client's re-initialization / re-connection chain after the map change, step by step, in the order the
+    engine runs it - not just the state at the end of it. The client's steps come off its own console tail (the
+    last notice for `map_to`), the last two off the server's console: the level restart drops every client, so
+    the client has to come back through the connect handshake and be in the level to send anything. The server's
+    lines are only placed after its own restart - the two processes have separate clocks, so their ms are never
+    compared. The last client step counts as done on its cgame init line or, when neither console copy flushed
+    that far, on the usercmds the server gets from it. Returns (steps, gap): steps is [(name, ok, ms, note), ...]
+    in the order they must happen, gap the first step that is missing or out of order (None when the whole chain
+    is there)."""
+    steps = []
+
+    def add(name, ok, ms, note):
+        steps.append((name, bool(ok), ms, note))
+
+    add("notice", cli["notice"] is not None, None if cli["notice"] is None else cli["notice"]["ms"],
+        f"no '{CLI_FOLLOW} {map_to}' line in its console")
+    add("fastfile", cli["fastfile"], cli["fastfile_ms"], f"no 'Loading fastfile {map_to}' line after the notice")
+    add("reinit", cli["reinit"], cli["reinit_ms"], f"no '{CLI_REINIT}' line after the notice")
+    add("layout", cli["layout"], cli["layout_ms"],
+        f"no '{CLI_LAYOUT} ...' line after the notice - it never re-read the server's layout on the new connect")
+    add("loaded", cli["loaded"] or playing, cli["loaded_ms"],
+        "no 'CL_InitCGame: N seconds' line after the notice and no usercmd reaching the server - it never got "
+        "into the level")
+    add("server_reconnect", srv["handshake"] is not None, srv["handshake"]["ms"] if srv["handshake"] else None,
+        "the server never handed the human guid a slot again after its level restart")
+
+    gap = next((s for s in steps if not s[1]), None)
+    if gap is None:
+        # all there - the stamped client steps must also sit in the order the engine runs them (the layout line
+        # prints inside the reload window, 1 ms either side of the game-state line, so it is not ordered here).
+        # A step stamped before the one that must precede it belongs to the first join, not to the rejoin.
+        timed = [(n, ms) for n, _ok, ms, _note in steps if n in CLI_ORDER and ms is not None]
+        for n, ms in timed:
+            early = next((e for e in timed if CLI_ORDER.index(e[0]) < CLI_ORDER.index(n) and ms <= e[1]), None)
+            if early:
+                gap = next(s for s in steps if s[0] == n)[:2] + (ms, f"its own console stamps it at {ms} ms, "
+                                                                 f"before '{early[0]}' at {early[1]} ms - those "
+                                                                 "lines belong to the first join, not the rejoin")
+                break
+    return steps, gap
 
 
 def rejoin_facts(o):
@@ -238,7 +310,8 @@ def rejoin_facts(o):
             "reinit_s": cli["since_notice"](cli["reinit_ms"]), "load_s": cli["since_notice"](cli["loaded_ms"]),
             "loaded_console": cli["loaded"], "lastmsg": lastmsg, "playing_s": playing_s, "playing": playing,
             "loaded": cli["loaded"] or playing,
-            "disconnected": bool(cli["dropped"]), "fatal": cli["fatal"], "benign": cli["benign"]}
+            "disconnected": bool(cli["dropped"]), "fatal": cli["fatal"], "benign": cli["benign"],
+            "seq": reinit_sequence(cli, srv, playing, o["map_to"])}
 
 
 def secs(v):
@@ -346,6 +419,21 @@ def case_rejoin(o):
                      if f["lastmsg"] is not None else "; it is not on the server in any later poll either"),
                   f"client reconnected but never finished loading {o['map_to']} - no game state and no cgame "
                   "init in its console, and no usercmd reaching the server")
+    # the chain itself, not just its endpoints: a client that ends up in status in the right slot without having
+    # re-initialized for the new level (or that the server never took back through the connect handshake) is a
+    # rejoin that did not happen, whatever the final state looks like
+    steps, gap = f["seq"]
+    chain = " -> ".join(n + ("(usercmd)" if n == "loaded" and not cli["loaded"] and f["playing"] else "")
+                        + ("" if ok else " MISSING") for n, ok, _ms, _note in steps)
+    clock = (", ".join(f"{n} {(ms - cli['notice']['ms']) / 1000.0:+.0f} s" for n, ok, ms, _note in steps
+                       if ok and ms is not None and n not in ("notice", "server_reconnect"))
+             if cli["notice"] else "")
+    hand = (f"the server handed slot {srv['handshake']['slot']} back"
+            + (" after a challenge ping" if srv["handshake"]["ping_ms"] is not None else "")
+            if srv["handshake"] else "no connect for the human guid after the level restart")
+    yield chk("client_reinit_sequence", gap is None, chain + (f" | client clock: {clock}" if clock else "")
+              + f" | {hand}",
+              "" if not gap else f"the client's re-init chain after the map change broke at '{gap[0]}': {gap[3]}")
     yield chk("client_no_session_error", not f["fatal"],
               f"{len(f['fatal'])} session-ending error line(s) after the change"
               + (f": '{f['fatal'][0][1][:80]}'" if f["fatal"] else "")
@@ -384,7 +472,8 @@ def verdict_line(cases, o, ok, res):
                    "finished loading it" if f["loaded_console"] else
                    f"is in it - the server gets a usercmd from it every frame ({f['lastmsg']} ms since the last)")
             return (f"PASS - the client followed the change to {o['map_to']}, reconnected after "
-                    f"{f['reconnect_s']:.0f} s and {how} | {slot_context(f)}")
+                    f"{f['reconnect_s']:.0f} s and {how} | re-init chain: "
+                    + " -> ".join(n for n, _ok, _ms, _note in f["seq"][0]) + f" | {slot_context(f)}")
         return f"FAIL - {(first['reason'] or first['detail']) if first else ''} | {slot_context(f)}"
     if ok:
         return "PASS - " + ", ".join(f"{c['name']} ok" for c in res)
@@ -453,15 +542,17 @@ CLI_BOOT = [(1131, "'+set r_fullscreen 0 +set r_mode 1280x720 +set name live-tes
             (17889, "Setting state to CA_LOADING in CL_DownloadsComplete"),
             (17892, "Setting state to CA_LOADING in CL_InitCGame"),
             (17894, "Modifying session in CG_ParseServerInfo() to have 32 public and 0 private slots"),
+            (17895, "iw4x32: server is 32-slot - using the 32 player/body layout"),
             (21999, 'Error: Could not load menufile "ui_mp/scriptmenus/callvote.menu".'),
             (22782, "CL_InitCGame:  4.89 seconds"),
             (22940, "oldMessageNum is 15, newSnap.messageNum is 47 - not clearing it because they overlap")]
 
 
-def cli_log(map_to="mp_crash", notice=True, dropped=None, reinit=True, loaded=True, t_notice=144405):
+def cli_log(map_to="mp_crash", notice=True, dropped=None, reinit=True, loaded=True, layout=True, t_notice=144405):
     """the client's console across the forced map change: notice = it got the server's line, dropped = the line
-    it left the session with (and nothing after it), reinit = it took the new level's game state, loaded = it
-    finished the level (cgame init done). Offsets are the real run's, in ms on the client's own clock."""
+    it left the session with (and nothing after it), reinit = it took the new level's game state, layout = it
+    re-read the server's layout on the new connect, loaded = it finished the level (cgame init done). Offsets are
+    the real run's, in ms on the client's own clock."""
     out = list(CLI_BOOT)
     if notice:
         out.append((t_notice, f"Server changing map {map_to}, gametype dom"))
@@ -475,6 +566,10 @@ def cli_log(map_to="mp_crash", notice=True, dropped=None, reinit=True, loaded=Tr
         if reinit:
             out.append((t_notice + 11997, "Setting state to CA_LOADING in CL_DownloadsComplete"))
             out.append((t_notice + 11997, "Setting state to CA_LOADING in CL_InitCGame"))
+        if layout:
+            # the fork prints this on every connect and every level restart, so a rejoin that re-parsed
+            # serverinfo says so - and the layout it picked with it
+            out.append((t_notice + 11998, "iw4x32: server is 32-slot - using the 32 player/body layout"))
         if loaded:
             out.append((t_notice + 16010, 'Error: Could not load menufile "ui_mp/scriptmenus/kickplayer.menu".'))
             out.append((t_notice + 16417, "CL_InitCGame:  4.42 seconds"))
@@ -489,9 +584,10 @@ def cli_stdout(map_to="mp_crash", **kw):
     return "\n".join(re.sub(r"^\[\s*\d+\]\s?", "", l) for l in cli_log(map_to, **kw).splitlines() if l.strip())
 
 
-def srv_log(map_to="mp_crash", restarts=2, human_slot=28, reconnects=True):
+def srv_log(map_to="mp_crash", restarts=2, human_slot=28, reconnects=True, handshake=True):
     """the server console of the same run: the two level restarts, the bots the re-add named, and the human's
-    slot being handed out again after the change."""
+    slot being handed out again after the change (handshake=False = the restart happened but the server never
+    took the human guid back: no challenge ping, no slot line for it after the restart)."""
     out = [(1885, "------ Server Initialization ------"),
            (1890, "iw4x32: 32-slot server - 32-player layout, patched clients only")]
     for i in range(28):
@@ -503,7 +599,7 @@ def srv_log(map_to="mp_crash", restarts=2, human_slot=28, reconnects=True):
         out.append((91105, "iw4x32: 32-slot server - 32-player layout, patched clients only"))
         for i in range(28):
             out.append((259000 + i * 500, f'Going from CS_FREE to CS_CONNECTED for  (num {i} guid "bot{28 + i}")'))
-        if reconnects:
+        if reconnects and handshake:
             out.append((262000, "Client 0 connecting with 100 challenge ping from 0:<LAN-IP>"))
             out.append((262001, f'Going from CS_FREE to CS_CONNECTED for  (num {human_slot} guid "AB12cd34EF567890")'))
     return "\n".join(f"[{ms:>9}] {line}" for ms, line in out)
@@ -537,7 +633,7 @@ def self_test():
     good, change_t = transcript("mp_rust", 120.0, 28)
     expect("good run", ["baseline", "rejoin"], obs(good, 29, map_change_t=change_t, client_log=cli_log(),
                                                   server_log=srv_log()), True,
-           want_reason="reconnected after")
+           want_reason="reconnected after", want_ok_checks=("client_reinit_sequence",))
 
     # bad: the client disconnects at the change and never comes back - the verdict must say it did not reconnect
     lost, change_t = transcript("mp_rust", 120.0, None)
@@ -608,6 +704,32 @@ def self_test():
     expect("same map after the change", ["rejoin"],
            obs(same, 29, map_change_t=120.0, client_log=cli_log(notice=False), server_log=srv_log(restarts=1)),
            False, ("map_changed", "session_restarted"))
+    # bad: it is back in status and in the level, but its console never shows the fork re-applying the 32-player
+    # layout on the new connect - the re-initialization chain stopped halfway, which a final-state check cannot see
+    nolayout, change_t = transcript("mp_rust", 120.0, 28)
+    expect("rejoin with no layout re-init after the change", ["rejoin"],
+           obs(nolayout, 29, map_change_t=change_t, client_log=cli_log(layout=False),
+               client_stdout=cli_stdout(layout=False), server_log=srv_log()),
+           False, ("client_reinit_sequence",), want_reason="broke at 'layout'",
+           want_ok_checks=("client_reconnected", "client_loaded_map", "client_high_slot_after"))
+    # bad: status shows it back, but the server's console has no connect for the human guid after its level
+    # restart - nobody re-connected, the slot was simply never dropped in what the logs show
+    nohand, change_t = transcript("mp_rust", 120.0, 28)
+    expect("no server-side connect after the restart", ["rejoin"],
+           obs(nohand, 29, map_change_t=change_t, client_log=cli_log(), server_log=srv_log(handshake=False)),
+           False, ("client_reinit_sequence",), want_reason="broke at 'server_reconnect'")
+    # bad: the only cgame init line after the notice is stamped BEFORE the notice - the load lines belong to the
+    # first join, not to the rejoin, so the chain is out of order
+    mixed, change_t = transcript("mp_rust", 120.0, 28)
+    expect("re-init lines out of order", ["rejoin"],
+           obs(mixed, 29, map_change_t=change_t,
+               client_log=cli_log(loaded=False) + "\n[   140000] CL_InitCGame:  4.42 seconds",
+               client_stdout=cli_stdout(loaded=False), server_log=srv_log()),
+           False, ("client_reinit_sequence",), want_reason="broke at 'loaded'")
+    # good: the chain is complete - every step present, in order, and the server took the human guid back
+    expect("good run chain", ["rejoin"], obs(good, 29, map_change_t=change_t, client_log=cli_log(),
+                                             server_log=srv_log()), True,
+           want_ok_checks=("client_reinit_sequence",))
     # bad: the server itself went down at the change - baseline must see it
     expect("server died", ["baseline"], obs([(20, status_text("mp_rust", table(28, 28)), True)], 29,
            server_alive=False), False, ("server_alive",))
