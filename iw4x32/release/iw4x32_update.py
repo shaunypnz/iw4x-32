@@ -130,8 +130,6 @@ def repair(m, latest):
         shutil.copy2(os.path.join(GAME, "iw4x.dll"), os.path.join(KIT, "backup", "iw4x.dll"))
         install_ours()
         return True
-    if m and not latest and vtuple(m["version"]) > vtuple(installed_version()):
-        latest = iw4x_latest()
     if m and latest and vtuple(latest) <= vtuple(m["iw4x"]) and update_iw4x(m, latest):
         say("your IW4x was not the version IW4x-32 is made for - it is updated now")
         install_ours()
