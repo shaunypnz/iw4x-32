@@ -10,12 +10,12 @@
   "AI_CREDITS.txt": "442018a8201b3e7ca9f2da4a3bbf60bc3f8ac4a3b6e5601e7ce415f545e0bde8",
   "CHANGES.txt": "bfecb9737a267b6ac74887477750c6a8c1039028e6f1f8979bb70efcbae65214",
   "IW4x-32 Launcher.bat": "f2ebd03926bef37b4a2339ecedb762bca2603b4239c7b4c094722ac07fd4e1bd",
-  "IW4x-32 Setup.bat": "5865c4dcfff1632b8909c360d8a829aaaf14b1c7defa66803c5dda16a2beec9c",
+  "IW4x-32 Setup.bat": "f74939e118ac54f7d2c08be78e5316e6b0868ff786ed2b15c6ca3d9d486741c1",
   "Install IW4x-32.bat": "437d143d4a41ee831350ad275ec6f127f70d3fba32112214e531943f0085e5eb",
   "Play IW4x-32 (IW4x launcher, no file check).bat": "b4f910d431b47853b7f8136f739b26747a41eda5dd4b89d4b5fd4c5fe827977f",
   "Play IW4x-32 (no update).bat": "8c49f87a9bb84982ce9205404bca749ac3299880da1b4f00b5b55fa1dbdd9236",
   "Play IW4x-32.bat": "456fd15fbffac9df9dace16bf176421206b0c839b628a9ac55cb8a7611216f8e",
-  "README.txt": "75d81471b0faeeb10c9248374cc6723e02f68eac6c0760bfa6ad4e6fc81797ed",
+  "README.txt": "a8523a44f0f8d62b7dcdc7f902d7aca1f092edb9b92f91f56f059ce36084071e",
   "Start IW4x-32 Server.bat": "2723c76d6b9ad8695a1dcfd9e7a184e3505558953f3f7d2befc8c7cb601652ac",
   "Uninstall IW4x-32.bat": "02c46f750b420a0bb7c3dea036fcf036188b181e7989fab1809c34a755919008",
   "files/iw4x.dll": "f0a247ff84e1307330d43a03c4e8e4f8b8f921a465c6206e0b14a825f736a2d1",
@@ -29,6 +29,6 @@
   "setup-linux.sh": "fa58729974ad5c7a03f0d338ed48edb3357e56ce8600bb772a0da43aef320d18",
   "start-server-linux.sh": "4f07fc99425ac98b3c339e73d6ff9cdca2aeeb52498515b6575a4ef9e1a7e0f7",
   "uninstall-linux.sh": "d7026117543aadbbd500b4f9e03a25584ab6594e953b6fe43bfdcc546dee23d2",
-  "SHA256SUMS.txt": "8916545d2940ebb577707329dc15520c57db7c86527da837dc5f4f883543e027"
+  "SHA256SUMS.txt": "954f4cde30f3ac20cc5b58d91250fb9c1a650e6e112e993df7bd06b48ba99482"
  }
 }
