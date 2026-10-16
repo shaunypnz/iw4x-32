@@ -88,7 +88,7 @@ mkdir -p "$H/.steam/steam/steamapps/common/Counter-Strike" "$MW2" "$T/zip" "$T/l
 printf '"libraryfolders"\n{\n\t"0"\n\t{\n\t\t"path"\t\t"%s"\n\t}\n}\n' "$LIB2" > "$H/.steam/steam/steamapps/libraryfolders.vdf"
 printf 'PLAIN-MW2' > "$MW2/iw4mp.exe"
 cp -a "$KIT"/. "$T/zip/IW4x-32" && rm -rf "$T/zip/IW4x-32/backup"     # the zip as a player extracts it
-printf '#!/bin/sh\nprintf "OFFICIAL-DLL-CONTENT" > "$PWD/iw4x.dll"\nprintf "%%s\\n" "$*" > "$PWD/launcher-args.txt"\n' \
+printf '#!/bin/sh\nprintf "OFFICIAL-DLL-CONTENT" > "$PWD/iw4x.dll"\nprintf "OFFICIAL-EXE-CONTENT" > "$PWD/iw4x.exe"\nprintf "%%s\\n" "$*" > "$PWD/launcher-args.txt"\n' \
     > "$T/launcher/pkg/iw4x-launcher"; chmod +x "$T/launcher/pkg/iw4x-launcher"
 tar -cJf "$T/launcher/iw4x-launcher.tar.xz" -C "$T/launcher/pkg" iw4x-launcher
 printf '{"tag_name":"r9999","assets":[{"name":"iw4x-launcher-x86_64-linux-glibc.tar.xz","browser_download_url":"file://%s","digest":"sha256:%s"}]}\n' \
@@ -106,7 +106,7 @@ same "$MW2/iw4x-launcher" "$T/launcher/pkg/iw4x-launcher" "the official launcher
 same "$MW2/IW4x-32/install-linux.sh" "$KIT/install-linux.sh" "the kit was copied into the game folder"
 same "$MW2/iw4x.dll" "$V/ours.dll" "setup installed IW4x-32"
 same "$MW2/IW4x-32/backup/iw4x.dll" "$V/official.dll" "backup holds the official dll the fake launcher wrote"
-n=$(ls "$H/.local/share/applications"/iw4x32-*.desktop 2>/dev/null | wc -l)
+n=$(ls "$H/.local/share/applications"/iw4x32-*.desktop 2>/dev/null | wc -l || true)
 [ "$n" = 4 ] && grep -q -- "--play" "$H/.local/share/applications/iw4x32-play.desktop" \
     && grep -q -- "--vanilla-server" "$H/.local/share/applications/iw4x32-vanilla-server.desktop" \
     && echo "  OK   4 .desktop entries (play, vanilla, server, vanilla server)" || echo "  FAIL shortcuts: $n file(s)"
@@ -115,13 +115,13 @@ echo "== setup --no-shortcuts: nothing in ~/.local/share/applications =="
 rm -rf "$MW2/IW4x-32" "$MW2/iw4x.dll" "$MW2/iw4x-launcher" "$MW2/launcher-args.txt" "$H/.local/share"
 out=$(setup "$H" --no-shortcuts)
 same "$MW2/iw4x.dll" "$V/ours.dll" "still installs without shortcuts"
-n=$(ls "$H/.local/share/applications"/iw4x32-*.desktop 2>/dev/null | wc -l)
+n=$(ls "$H/.local/share/applications"/iw4x32-*.desktop 2>/dev/null | wc -l || true)
 [ "$n" = 0 ] && echo "  OK   no .desktop entries written" || echo "  FAIL $n .desktop file(s) with --no-shortcuts"
 
 echo "== setup with a launcher download that is not what the release says: must refuse it =="
 rm -rf "$MW2/IW4x-32" "$MW2/iw4x.dll" "$MW2/iw4x-launcher" "$MW2/launcher-args.txt"
 sed -i 's/"digest":"sha256:[0-9a-f]*/"digest":"sha256:0000000000000000000000000000000000000000000000000000000000000000/' "$T/launcher-release.json"
-out=$(setup "$H")
+out=$(setup "$H" || true)
 echo "$out" | grep -qi "download check failed" && echo "  OK   a launcher download with the wrong digest is refused" \
     || echo "  FAIL the digest was not checked: $out"
 [ ! -e "$MW2/iw4x.dll" ] && echo "  OK   nothing was installed over a bad download" || echo "  FAIL it installed anyway"
@@ -134,7 +134,8 @@ echo "$out" | grep -qi "could not find Modern Warfare 2" && echo "  OK   it asks
 echo "$out" | grep -q "Nothing was changed" && [ ! -e "$T/emptyhome/.local/share" ] \
     && echo "  OK   Enter stops with nothing changed" || echo "  FAIL Enter changed something"
 
-echo "== launcher: the menu takes Enter = the last choice, and the modes print their command =="
+echo "== launcher: the modes print their command, Enter takes what was started last time =="
+setup "$H" > /dev/null 2>&1            # set the game up again after the two refusal cases
 out=$(cd "$MW2/IW4x-32" && IW4X32_GAME="$MW2" bash launcher-linux.sh --server --dry 28961 2>&1)
 echo "$out" | grep -q "sv_maxclients 32" && echo "$out" | grep -q "net_port 28961" \
     && echo "  OK   --server --dry: 32 slots on the port asked for" || echo "  FAIL --server --dry: $out"
@@ -149,6 +150,5 @@ printf 'vanilla-server\n' > "$MW2/IW4x-32/mode.txt"
 out=$(cd "$MW2/IW4x-32" && IW4X32_GAME="$MW2" bash launcher-linux.sh --dry < /dev/null 2>&1)
 echo "$out" | grep -q "sv_maxclients 18" && echo "  OK   mode.txt is remembered for the next start" \
     || echo "  FAIL remembered mode ignored: $out"
-grep -q "^server$" "$MW2/IW4x-32/mode.txt" || true
 
 echo "test tree: $T"
