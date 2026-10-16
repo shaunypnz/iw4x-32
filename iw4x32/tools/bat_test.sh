@@ -51,14 +51,14 @@ run_bat() {   # the .bat ends in pause: feed it a key
 same() { cmp -s "$1" "$2" && echo "  OK   $3" || echo "  FAIL $3"; }
 
 echo "== server start before install: must refuse =="
-out=$( cd "$KIT" && wine cmd /c call "Start IW4x-32 Server.bat" --dry 2>&1 || true )
+out=$( cd "$KIT" && wine cmd /c call "Start IW4x-32 Server.bat" --dry 2>&1 | tr -d '\r' || true )
 echo "$out" | grep -q "not installed" && [ ! -e "$GAME/userraw/server_iw4x32.cfg" ] \
     && echo "  OK   server refuses a game without IW4x-32" || echo "  FAIL server start without install: $out"
 
 echo "== install: official dll in place, v1.x iw4x.exe left over =="
 run_bat "Install IW4x-32.bat"
 echo "== server start after install (dry run, port 28961) =="
-out=$( cd "$KIT" && wine cmd /c call "Start IW4x-32 Server.bat" --dry 28961 2>&1 || true )
+out=$( cd "$KIT" && wine cmd /c call "Start IW4x-32 Server.bat" --dry 28961 2>&1 | tr -d '\r' || true )
 echo "$out" | grep -q "net_port 28961" && echo "$out" | grep -q "sv_maxclients 32" && echo "$out" | grep -q "+exec server_iw4x32.cfg" \
     && echo "  OK   server command: port 28961, 32 slots, its settings file" || echo "  FAIL server command: $out"
 same "$GAME/userraw/server_iw4x32.cfg" "$KIT/server/server_iw4x32.cfg" "server settings made in userraw\\"
@@ -88,31 +88,36 @@ run_bat "Install IW4x-32.bat"
 same "$GAME/iw4x.dll" "$V/official.dll" "nothing installed"
 same "$GAME/iw4x.exe" "$V/v1.exe" "v1.x exe left alone"
 
+# the tests above left the game uninstalled - put IW4x-32 back, the launcher tests need it installed
+cp "$V/official.exe" "$KIT/backup/iw4x.exe"
+printf 'OFFICIAL-DLL-CONTENT' > "$GAME/iw4x.dll"
+run_bat "Install IW4x-32.bat"
+
 # ---- the launcher: the same four modes as launcher-linux.sh, and the menu ------------------------------------
 echo "== launcher --server / --vanilla-server / --play (dry) =="
-out=$( cd "$KIT" && wine cmd /c call "IW4x-32 Launcher.bat" --server --dry 28961 2>&1 || true )
+out=$( cd "$KIT" && wine cmd /c call "IW4x-32 Launcher.bat" --server --dry 28961 2>&1 | tr -d '\r' || true )
 echo "$out" | grep -q "sv_maxclients 32" && echo "$out" | grep -q "net_port 28961" \
     && echo "  OK   --server --dry: 32 slots on the port asked for" || echo "  FAIL --server --dry: $out"
-out=$( cd "$KIT" && wine cmd /c call "IW4x-32 Launcher.bat" --vanilla-server --dry 28962 2>&1 || true )
+out=$( cd "$KIT" && wine cmd /c call "IW4x-32 Launcher.bat" --vanilla-server --dry 28962 2>&1 | tr -d '\r' || true )
 echo "$out" | grep -q "sv_maxclients 18" && echo "$out" | grep -q "+exec server_vanilla.cfg" \
     && echo "  OK   --vanilla-server --dry: 18 slots, its own settings file" || echo "  FAIL --vanilla-server --dry: $out"
 same "$GAME/userraw/server_vanilla.cfg" "$KIT/server/server_vanilla.cfg" "userraw/server_vanilla.cfg made"
-out=$( cd "$KIT" && wine cmd /c call "IW4x-32 Launcher.bat" --play --dry +connect nowhere 2>&1 || true )
+out=$( cd "$KIT" && wine cmd /c call "IW4x-32 Launcher.bat" --play --dry +connect nowhere 2>&1 | tr -d '\r' || true )
 echo "$out" | grep -q "iw4x.exe" && echo "$out" | grep -q "+connect nowhere" \
     && echo "  OK   --play --dry: the game command with the arguments that were given" || echo "  FAIL --play --dry: $out"
 
 echo "== launcher menu: no mode given (no choice program here -> the set /p fallback) =="
 rm -f "$KIT/mode.txt"
-out=$( cd "$KIT" && printf '3\n' | wine cmd /c call "IW4x-32 Launcher.bat" --dry 2>&1 || true )
+out=$( cd "$KIT" && printf '3\n' | wine cmd /c call "IW4x-32 Launcher.bat" --dry 2>&1 | tr -d '\r' || true )
 echo "$out" | grep -q "\[1\] IW4x-32" && echo "$out" | grep -q "\[4\] IW4x server" \
     && echo "  OK   the menu lists all four" || echo "  FAIL menu: $out"
 echo "$out" | grep -q "sv_maxclients 32" && grep -q "^server$" "$KIT/mode.txt" 2>/dev/null \
     && echo "  OK   3 starts the server and is remembered in mode.txt" || echo "  FAIL menu answer 3: $out"
-out=$( cd "$KIT" && printf '\n' | wine cmd /c call "IW4x-32 Launcher.bat" --dry 2>&1 || true )
+out=$( cd "$KIT" && printf '\n' | wine cmd /c call "IW4x-32 Launcher.bat" --dry 2>&1 | tr -d '\r' || true )
 echo "$out" | grep -q "sv_maxclients 32" \
     && echo "  OK   Enter takes what was started last time" || echo "  FAIL Enter: $out"
 printf 'vanilla-server\n' > "$KIT/mode.txt"
-out=$( cd "$KIT" && printf '\n' | wine cmd /c call "IW4x-32 Launcher.bat" --dry 2>&1 || true )
+out=$( cd "$KIT" && printf '\n' | wine cmd /c call "IW4x-32 Launcher.bat" --dry 2>&1 | tr -d '\r' || true )
 echo "$out" | grep -q "sv_maxclients 18" \
     && echo "  OK   the remembered mode is the default" || echo "  FAIL remembered mode: $out"
 
@@ -123,14 +128,14 @@ cp -a "$KIT"/. "$ZIP"; rm -rf "$ZIP/backup" "$ZIP/mode.txt" "$ZIP/userraw"   # t
 printf 'PLAIN-MW2' > "$G2/iw4mp.exe"
 printf 'OFFICIAL-DLL-CONTENT' > "$G2/iw4x.dll"
 printf 'official-exe-backup' > "$G2/iw4x.exe"
-out=$( cd "$T/zip" && printf '\n' | wine cmd /c call "IW4x-32 Setup.bat" "$(winepath -w "$G2")" --no-shortcuts 2>&1 || true )
+out=$( cd "$ZIP" && printf '\n' | wine cmd /c call "IW4x-32 Setup.bat" "$(winepath -w "$G2")" --no-shortcuts 2>&1 | tr -d '\r' || true )
 echo "$out" | grep -q "IW4x-32 is set up" && echo "  OK   setup finished" || echo "  FAIL setup: $out"
 same "$G2/IW4x-32/Install IW4x-32.bat" "$KIT/Install IW4x-32.bat" "the kit was copied into the game folder"
 same "$G2/iw4x.dll" "$V/ours.dll" "setup installed IW4x-32"
 same "$G2/IW4x-32/backup/iw4x.dll" "$V/official.dll" "backup holds the official dll"
 
 echo "== setup with a folder that is not the game: stops, changes nothing =="
-out=$( cd "$T/zip" && printf '\n' | wine cmd /c call "IW4x-32 Setup.bat" "$(winepath -w "$T/notagame")" --no-shortcuts 2>&1 || true )
+out=$( cd "$ZIP" && printf '\n' | wine cmd /c call "IW4x-32 Setup.bat" "$(winepath -w "$T/notagame")" --no-shortcuts 2>&1 | tr -d '\r' || true )
 echo "$out" | grep -qi "no iw4mp.exe" && [ ! -e "$T/notagame" ] \
     && echo "  OK   a folder without the game is refused" || echo "  FAIL bad game folder: $out"
 

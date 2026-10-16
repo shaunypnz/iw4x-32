@@ -132,7 +132,7 @@ call :sha "%GAME%\iw4x.dll" DLL_NOW
 if /i not "%DLL_NOW%"=="%OURS_DLL%" goto :installfail
 
 REM ---- 5. shortcuts ---------------------------------------------------------------------------------------------
-if defined NOSHORT goto :summary
+if defined NOSHORT goto :summary_noshort
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $k='%DEST%'; $w=New-Object -ComObject WScript.Shell; $d=[Environment]::GetFolderPath('Desktop'); $p=Join-Path ([Environment]::GetFolderPath('Programs')) 'IW4x-32'; New-Item -ItemType Directory -Force -Path $p | Out-Null; foreach($t in @('IW4x-32 - 32 players|--play','IW4x - vanilla|--vanilla','IW4x-32 Server|--server','IW4x Server - vanilla|--vanilla-server')){ $n=$t.Split('|')[0]; $m=$t.Split('|')[1]; foreach($f in @($d,$p)){ $l=$w.CreateShortcut((Join-Path $f ($n+'.lnk'))); $l.TargetPath=$env:ComSpec; $l.Arguments='/c call \"'+$k+'\IW4x-32 Launcher.bat\" '+$m; $l.WorkingDirectory=$k; $l.Description='IW4x-32'; $l.Save() } }; Write-Host ('  '+$d); Write-Host ('  '+$p)" || goto :shortcutsfail
 
 echo.
