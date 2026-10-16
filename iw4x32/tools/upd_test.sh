@@ -6,6 +6,9 @@
 #   - a newer manifest updates the kit (README v2.0 -> v2.1); a second run changes nothing
 #   - if the IW4x launcher put the official dll back, the next start puts ours back
 #   - a download whose bytes do not match latest.json's SHA-256 installs nothing at all
+#   - a newer IW4x than this IW4x-32 is made for: a warning, IW4x-32 still starts (warn, never block)
+#   - an older IW4x: the official IW4x launcher updates it (--skip-launch) before ours goes in
+#   - no network: no check, no warning, the game starts
 # Usage: bash iw4x32/tools/upd_test.sh          (test tree left under .scratch/, printed at the end)
 set -euo pipefail
 KIT_SRC=${KIT_SRC:-iw4x32/release}
@@ -19,7 +22,8 @@ rm -f "$KIT/mode.txt"
 printf 'OFFICIAL-DLL-CONTENT' > "$GAME/iw4x.dll"
 printf 'V1-EXE-CONTENT' > "$GAME/iw4x.exe"
 printf 'official-exe-backup' > "$KIT/backup/iw4x.exe"
-printf '#!/bin/sh\nexit 0\n' > "$GAME/iw4x-launcher"; chmod +x "$GAME/iw4x-launcher"
+printf '#!/bin/sh\nprintf "OFFICIAL-DLL-CONTENT" > "$PWD/iw4x.dll"\nprintf "official-exe-backup" > "$PWD/iw4x.exe"\nprintf "%%s\\n" "$*" > "$PWD/launcher-args.txt"\n' \
+    > "$GAME/iw4x-launcher"; chmod +x "$GAME/iw4x-launcher"
 
 # point the updater's v1.x-exe constant at our fake file
 V1=$(sha256sum "$GAME/iw4x.exe" | cut -d' ' -f1)
@@ -66,10 +70,18 @@ sed -i '1s/IW4x-32 v[0-9.]*/IW4x-32 v2.0/' "$KIT/README.txt"                  # 
 mkdir -p "$T/bin"; printf '#!/bin/sh\nexit 1\n' > "$T/bin/pgrep"; chmod +x "$T/bin/pgrep"
 export PATH="$T/bin:$PATH"
 
-run_upd() {   # the updater's exit code is information (0 current, 10 kit updated, 1 error): set -e must not eat it
-    env IW4X32_GAME="$GAME" IW4X32_NO_MENU=1 IW4X32_NO_START=1 \
+run_upd() {   # the updater's exit code is information (0 = start IW4x-32, 10 = kit updated, 20 = vanilla, 1 = error)
+    UPD_OUT=$(env IW4X32_GAME="$GAME" IW4X32_NO_MENU=1 IW4X32_NO_START=1 \
         IW4X32_UPDATE_URL="file://$WEB/latest.json" IW4X32_IW4X_LATEST_URL="file://$WEB/iw4x-latest.json" \
-        python3 "$KIT/iw4x32_update.py" --iw4x32 || echo "  updater exit=$?"
+        python3 "$KIT/iw4x32_update.py" --iw4x32 2>&1) && UPD_RC=0 || UPD_RC=$?
+    echo "$UPD_OUT"; echo "  updater exit=$UPD_RC"
+}
+run_offline() {   # the same with both GitHub addresses gone (a player on a train, GitHub down, a captive portal)
+    UPD_OUT=$(env IW4X32_GAME="$GAME" IW4X32_NO_MENU=1 IW4X32_NO_START=1 \
+        IW4X32_UPDATE_URL="file://$WEB/nothing/latest.json" IW4X32_IW4X_LATEST_URL="file://$WEB/nothing/iw4x.json" \
+        IW4X32_LAUNCHER_RELEASE_URL="file://$WEB/nothing/launcher.json" \
+        python3 "$KIT/iw4x32_update.py" --iw4x32 2>&1) && UPD_RC=0 || UPD_RC=$?
+    echo "$UPD_OUT"; echo "  updater exit=$UPD_RC"
 }
 same() { cmp -s "$1" "$2" && echo "  OK   $3" || echo "  FAIL $3"; }
 ver() { head -1 "$KIT/README.txt" | grep -oE 'v[0-9]+(\.[0-9]+)*' | head -1; }
@@ -97,5 +109,40 @@ manifest --version v2.2 --wrong README.txt
 run_upd
 same "$GAME/iw4x.dll" "$KIT/files/iw4x.dll" "game folder untouched"
 [ "$(ver)" = v2.1 ] && echo "  OK   kit still at v2.1 (nothing swapped in)" || echo "  FAIL kit is at $(ver)"
+sed -i '1s/IW4x-32 v[0-9.]*/IW4x-32 v2.1/' "$WEB/iw4x32/release/README.txt"; manifest --version v2.1
+
+echo "== run 5: a newer IW4x is out than this IW4x-32 is made for: warn, and IW4x-32 still starts =="
+printf '{"tag_name": "r9999"}\n' > "$WEB/iw4x-latest.json"
+out=$(run_upd)
+echo "$out" | grep "WARNING" | grep -q "r9999" && echo "$out" | grep "WARNING" | grep -q "r5154" \
+    && echo "  OK   it warns: IW4x r9999 is out, IW4x-32 is made for r5154" || echo "  FAIL no warning: $out"
+echo "$out" | grep -q "updater exit=20" && echo "  FAIL vanilla IW4x was started instead" \
+    || echo "  OK   no vanilla fallback"
+same "$GAME/iw4x.dll" "$KIT/files/iw4x.dll" "IW4x-32 is installed and starts"
+
+echo "== run 6: the game folder has that newer IW4x: it becomes the backup, IW4x-32 goes in over it =="
+printf 'NEWER-OFFICIAL-DLL' > "$GAME/iw4x.dll"
+out=$(run_upd)
+same "$GAME/iw4x.dll" "$KIT/files/iw4x.dll" "ours is installed over the newer IW4x"
+same <(printf 'NEWER-OFFICIAL-DLL') "$KIT/backup/iw4x.dll" "the newer IW4x is the backup - the vanilla shortcut goes back to it"
+echo "$out" | grep -q "updater exit=20" && echo "  FAIL vanilla IW4x was started instead" \
+    || echo "  OK   it still starts IW4x-32"
+
+echo "== run 7: the player's IW4x is OLDER than IW4x-32 is made for -> the official launcher updates it =="
+printf '{"tag_name": "r5154"}\n' > "$WEB/iw4x-latest.json"
+printf 'OLD-OFFICIAL-DLL' > "$GAME/iw4x.dll"; rm -f "$KIT/backup/iw4x.dll" "$GAME/launcher-args.txt"
+out=$(run_upd)
+grep -q -- "--skip-launch" "$GAME/launcher-args.txt" 2>/dev/null \
+    && echo "  OK   the official IW4x launcher ran with --skip-launch (it updates IW4x, we never do)" \
+    || echo "  FAIL the official launcher did not run: $out"
+same "$GAME/iw4x.dll" "$KIT/files/iw4x.dll" "IW4x-32 installed on top of the updated IW4x"
+same <(printf 'OFFICIAL-DLL-CONTENT') "$KIT/backup/iw4x.dll" "the updated official dll is the backup now"
+
+echo "== run 8: no network: no check, no warning, IW4x-32 starts =="
+out=$(run_offline)
+echo "$out" | grep -qi "no update check" && echo "  OK   it says there was no update check" || echo "  FAIL: $out"
+echo "$out" | grep -q "WARNING" && echo "  FAIL it warns without knowing anything" || echo "  OK   no warning without network"
+echo "$out" | grep -q "updater exit=0" && echo "  OK   exit 0 = start the game" || echo "  FAIL: $out"
+same "$GAME/iw4x.dll" "$KIT/files/iw4x.dll" "nothing changed offline"
 
 echo "test tree: $T"

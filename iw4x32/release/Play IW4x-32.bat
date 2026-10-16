@@ -1,11 +1,8 @@
 @echo off
-REM Starts IW4x-32. First iw4x32_update.ps1 brings IW4x + IW4x-32 to the newest tested pair: it downloads only when a
-REM new IW4x-32 release is out, checks every file's SHA-256, never updates IW4x past what IW4x-32 supports, and puts
-REM IW4x-32 back if the IW4x launcher's file check replaced iw4x.dll. Then it starts iw4x.exe like the official IW4x
-REM launcher does.
-REM Skip the update: set IW4X32_NO_UPDATE=1, or use "Play IW4x-32 (no update).bat".
-REM It asks which game to start: IW4x-32 or vanilla IW4x (the official launcher). Add --vanilla or --iw4x32 to
-REM answer without asking; the answer is remembered (IW4x-32\mode.txt).
-REM Extra arguments go to the game, e.g.:  "Play IW4x-32.bat" +connect <server address>
-REM The next line is the whole script on purpose: the updater may replace this file while it runs.
-(powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0iw4x32_update.ps1" %* || (echo. & echo IW4x-32 could not start - try "Play IW4x-32 (no update).bat" & pause)) & exit /b
+REM IW4x-32 - start playing. A thin wrapper around "IW4x-32 Launcher.bat --play", so shortcuts and habits
+REM made before v2.0 keep working; the launcher is where the modes live (it also takes --vanilla, --server,
+REM --vanilla-server, --dry and --no-update). Extra arguments go to the game, e.g.:
+REM     "Play IW4x-32.bat" +connect <server address>
+REM Skip the version check: "Play IW4x-32 (no update).bat", or set IW4X32_NO_UPDATE=1.
+REM One line on purpose: the updater may replace files while it runs.
+call "%~dp0IW4x-32 Launcher.bat" --play %*
