@@ -1,29 +1,29 @@
 **IW4x-32: Modern Warfare 2 multiplayer with up to 32 players instead of 18 (bots included).** One file, `iw4x.dll`, on
 top of a normal IW4x install; your `iw4x.exe` stays the official one. Normal 18-player IW4x servers keep working.
 
-### You need
-- Call of Duty: Modern Warfare 2 (2009) from **Steam**, with **IW4x** installed by the [official IW4x launcher](https://github.com/iw4x/launcher).
-- Start IW4x once with its launcher so it is up to date - this release is for **official IW4x @IW4X@**.
+### Install
+You need **Call of Duty: Modern Warfare 2 (2009) from Steam**. Nothing else - IW4x is installed for you.
 
-### Play (Windows)
-1. Download **IW4x-32-@VERSION@.zip** below.
-2. Extract it so the **`IW4x-32` folder is inside your game folder** (the folder with `iw4x.exe`).
-3. Double-click **`IW4x-32\Install IW4x-32.bat`**.
-4. Start the game with **`IW4x-32\Play IW4x-32.bat`** (not the IW4x launcher's normal start - its file check puts the 18-player DLL back).
+| Windows | Linux / Steam Deck |
+|---|---|
+| Download **IW4x-32-@VERSION@.zip**, extract it, double-click **`IW4x-32.bat`** | same zip, run **`./IW4x-32.sh`** |
 
-### Play (Linux - Wine / Proton)
-Same steps 1-2, then in the `IW4x-32` folder: `./install-linux.sh`, and start with `./play-linux.sh`.
+The first start finds your game, lets the official IW4x launcher install IW4x (made for **IW4x @IW4X@**), installs
+IW4x-32 and puts an **IW4x-32** shortcut on your desktop (Linux: applications menu). From then on the shortcut opens a
+menu: **play IW4x-32, play vanilla IW4x, host a 32-player server, host a normal server, uninstall** - press a number or
+wait 5 s. Updates install themselves.
+
+Only want one file? **`IW4x-32.bat`** / **`IW4x-32.sh`** below work on their own: they download the rest of this
+release (every file SHA-256 checked against `latest.json`).
 
 ### Host a 32-player server
-1. Install exactly as above (steps 1-3, or `./install-linux.sh`).
-2. Start it: **`IW4x-32\Start IW4x-32 Server.bat`** (Windows) or **`./start-server-linux.sh`** (Linux, runs under Wine).
-   Another port: `Start IW4x-32 Server.bat 28961` / `./start-server-linux.sh 28961` (default 28960).
-3. The first start makes **`userraw\server_iw4x32.cfg`** in your game folder: set the server name, an rcon password and
-   the map rotation there, then restart. For players on the internet, forward the port (**UDP**) on your router.
-4. Bots: type `spawnBot 10` in the server console.
+Pick **3** in the menu (or `IW4x-32.bat --server 28961` for another port). The first start makes
+**`userraw\server_iw4x32.cfg`** in your game folder: set the server name, an rcon password and the map rotation there,
+then restart. Forward the port (**UDP**, default 28960). Bots: `spawnBot 10` in the server console.
 
-### Undo
-`Uninstall IW4x-32.bat` / `./uninstall-linux.sh` puts your original `iw4x.dll` back.
+Upgrading from v2.0: your next start updates as usual, and the start after that tidies the old scripts away
+(`Play IW4x-32.bat` etc.) and makes the new shortcut.
 
-Every file's SHA-256 is in `SHA256SUMS.txt`. What changed and why: `CHANGES.txt` in the zip. Source: this repository
-(the IW4x client with the IW4x-32 changes as ordinary commits - search the code for `IW4x-32:`), GPL-3.0 like IW4x.
+Every file's SHA-256 is in `files/SHA256SUMS.txt` and `latest.json`. What changed and why: `files/CHANGES.txt`.
+Source: this repository (the IW4x client with the IW4x-32 changes as ordinary commits - search the code for
+`IW4x-32:`), GPL-3.0 like IW4x.
