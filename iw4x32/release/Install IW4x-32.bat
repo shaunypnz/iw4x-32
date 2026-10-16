@@ -106,4 +106,5 @@ echo ERROR: the installed iw4x.dll does not match IW4x-32\files (antivirus?). Ru
 goto :end
 :end
 echo.
-pause
+REM called from "IW4x-32 Setup.bat" it must not stop and wait - the setup says the rest
+if not defined IW4X32_QUIET pause

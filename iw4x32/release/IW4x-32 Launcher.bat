@@ -121,10 +121,12 @@ goto :server_run
 :server_run
 REM SLOTS / CFG / LABEL are set by the :start dispatch above
 if not exist "%GAME%\iw4x.exe" goto :nogame
-if "%SLOTS%"=="32" (
-    call :sha "%GAME%\iw4x.dll" DLL_NOW
-    if /i not "%DLL_NOW%"=="%OURS_DLL%" goto :notinstalled
-)
+REM a 32-slot server needs our dll; the hash is read on its own line - inside a ( ) block cmd would
+REM expand %DLL_NOW% before the hash was taken
+if not "%SLOTS%"=="32" goto :server_slots
+call :sha "%GAME%\iw4x.dll" DLL_NOW
+if /i not "%DLL_NOW%"=="%OURS_DLL%" goto :notinstalled
+:server_slots
 if not exist "%GAME%\userraw" mkdir "%GAME%\userraw"
 if not exist "%GAME%\userraw\%CFG%" (
     copy /y "%KIT%\server\%CFG%" "%GAME%\userraw\%CFG%" >nul || goto :copyfail
