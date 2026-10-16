@@ -33,12 +33,14 @@ $MW2 = 'Call of Duty Modern Warfare 2'
 $Files = Split-Path -Parent $MyInvocation.MyCommand.Path      # <kit>\files: the program, backup\ and mode.txt
 $Kit = Split-Path -Parent $Files                              # the IW4x-32 folder
 $Game = $null
-# what IW4x-32 v2.0 and the v2.1 test builds had in the IW4x-32 folder; everything is IW4x-32.bat + files\ now
+# what IW4x-32 v1.x, v2.0 and the v2.1 test builds had in the IW4x-32 folder; everything is IW4x-32.bat + files\ now
 $Legacy = @('AI_CREDITS.txt', 'CHANGES.txt', 'SHA256SUMS.txt', 'IW4x-32 Launcher.bat', 'IW4x-32 Setup.bat',
     'Install IW4x-32.bat', 'Play IW4x-32 (IW4x launcher, no file check).bat', 'Play IW4x-32 (no update).bat',
     'Play IW4x-32.bat', 'Start IW4x-32 Server.bat', 'Uninstall IW4x-32.bat', 'install-linux.sh', 'iw4x32_update.ps1',
     'iw4x32_update.py', 'launcher-linux.sh', 'play-linux.sh', 'setup-linux.sh', 'start-server-linux.sh',
-    'uninstall-linux.sh', 'server/server_iw4x32.cfg', 'server/server_vanilla.cfg')
+    'uninstall-linux.sh', 'server/server_iw4x32.cfg', 'server/server_vanilla.cfg',
+    'latest.json', 'files/iw4x.exe')                                         # the last two: v1.x kits
+$LegacyDirs = @('source')                                                    # v1.x: the patch manifests
 
 $Mode = $null; $Port = '28960'; $Dry = $false; $NoUpdate = ($env:IW4X32_NO_UPDATE -eq '1'); $Setup = $false
 $SetupPath = $null; $GameArgs = @(); $Warned = $false
@@ -373,6 +375,7 @@ function Migrate-Legacy {
         if (Test-Path -LiteralPath (F $n)) { Remove-Item -LiteralPath $old -Recurse -Force } else { Move-Item -LiteralPath $old -Destination (F $n) }
     }
     foreach ($n in $Legacy) { Remove-Item -LiteralPath (P $Kit $n) -Force -ErrorAction SilentlyContinue }
+    foreach ($n in $LegacyDirs) { Remove-Item -LiteralPath (P $Kit $n) -Recurse -Force -ErrorAction SilentlyContinue }
     if (-not @(Get-ChildItem -LiteralPath (P $Kit 'server') -Force -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath (P $Kit 'server') -Force -ErrorAction SilentlyContinue }
     Say 'tidied up the IW4x-32 folder - everything starts from IW4x-32.bat now'
     return $true
