@@ -73,7 +73,7 @@ CLI_FOLLOW = "Server changing map"        # the client got the server's map-chan
 CLI_EVENT = (r"iw4x://|-dedicated|Server changing map|Setting state to CA_|CL_InitCGame|CL_Disconnect|Disconnecting"
              r"|Server disconnected|Connection lost|Com_Error|Sys_Error|Exception|Modifying session|Loading fastfile"
              r"|Unloaded fastfile|newSnap|Error:|Adding channel: error|Going from CS_|Client [0-9]+ connecting"
-             r"|challenge ping|Server Initialization|iw4x32: |IW4x32: |timed out")
+             r"|challenge ping|stats data from clientNum|Server Initialization|iw4x32: |IW4x32: |timed out")
 
 
 # ---------------------------------------------------------------- the judging half (no box, no game)
@@ -228,11 +228,13 @@ def server_story(text):
     back - `Going from CS_FREE to CS_CONNECTED for  (num 28 guid "<human>")` is the server handing out a slot.
     `handshake` is the slot it handed the human guid back AFTER a level restart that came after the client's
     first join: the restart drops everyone, so a client that came through that line re-connected, and one that
-    only still shows up in a later `status` poll did not necessarily. That line is often not in either copy of
-    the server's console - a dedicated server prints almost nothing once the level runs, so its file lags the
-    process by a 4 KB block (box-checked: a live run had one 'Server Initialization' line, at process start, and
-    its next stamped line 130 s later) - so `human_after` is the weaker witness: any line naming the human's guid
-    or clientNum in the window after the change (`Received packet 0 of stats data from clientNum 27`).
+    only still shows up in a later `status` poll did not necessarily. That line is often in neither copy of the
+    server's console - a dedicated server prints almost nothing once the level runs, so its file lags the process
+    by a 4 KB block (box-checked: a live run had one 'Server Initialization' line, at process start, and its next
+    stamped line 130 s later) - so `human_after` is the weaker witness: any line naming the human's guid or
+    clientNum in the window after the change (`Received packet 0 of stats data from clientNum 27` - the client
+    sends its stats in a burst of seven packets every time it lands in a level, and CLI_EVENT has to carry that
+    pattern or it never leaves the box).
     `post_change` says whether the text reaches into that window at all, which is what separates "the server never
     took the client back" from "the server console did not get that far". The server's clock is its own: the
     window starts at the restart, or a minute after the join when the restart line is missing (a run's map change
