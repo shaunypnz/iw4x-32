@@ -128,8 +128,8 @@ def check_no_exe_install(kit, files, bad):
             continue
         text = open(os.path.join(kit, p), encoding="utf-8", errors="replace").read()
         for n, line in enumerate(text.splitlines(), 1):
-            if KIT_EXE.search(line):
-                bad.append(f"{p}:{n}: refers to the kit's own iw4x.exe: {line.strip()[:90]}")
+            if KIT_EXE.search(line) and COPY.search(line):      # naming it to delete it (v1.x leftovers) is fine
+                bad.append(f"{p}:{n}: copies the kit's own iw4x.exe: {line.strip()[:90]}")
             if COPY.search(line) and GAME_EXE.search(line) and "backup" not in line.lower():
                 bad.append(f"{p}:{n}: writes an iw4x.exe into the game folder (only a restore from backup/ "
                            f"is allowed): {line.strip()[:90]}")

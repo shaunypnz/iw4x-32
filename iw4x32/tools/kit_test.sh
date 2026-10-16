@@ -158,12 +158,14 @@ for IMPL in "${IMPLS[@]}"; do
 
     # 9. a v2.0 folder started through its old entry point
     mv "$K/files/backup" "$K/backup"; printf 'old' > "$K/Play IW4x-32.bat"; mkdir -p "$K/server"; printf 'x' > "$K/server/server_iw4x32.cfg"
+    mkdir -p "$K/source"; printf '{}' > "$K/source/manifest.json"; printf '{}' > "$K/latest.json"; printf 'V1' > "$K/files/iw4x.exe"   # v1.x leftovers
     cp "$KIT0/iw4x32_update.py" "$KIT0/iw4x32_update.ps1" "$K/"
     if [ "$IMPL" = py ]; then IW4X32_GAME="$GAME" python3 "$K/iw4x32_update.py" --play </dev/null >"$R/9.out" 2>&1; rc=$?
         [ $rc = 20 ] && ok "v2.0 shim exits 20 (the old play-linux.sh stops)" || bad "v2.0 shim exit $rc"
     else "$PWSH" -NoProfile -NonInteractive -File "$K/iw4x32_update.ps1" --play </dev/null >"$R/9.out" 2>&1; fi
     [ ! -e "$K/Play IW4x-32.bat" ] && [ ! -e "$K/server" ] && [ ! -e "$K/iw4x32_update.py" ] && ok "migration: the old scripts are gone" || bad "migration: old files left"
     [ -f "$K/files/backup/iw4x.dll" ] && [ ! -e "$K/backup" ] && ok "migration: backup/ moved into files/" || bad "migration: backup not moved"
+    [ ! -e "$K/source" ] && [ ! -e "$K/latest.json" ] && [ ! -e "$K/files/iw4x.exe" ] && ok "migration: v1.x leftovers gone" || bad "migration: v1.x leftovers left"
     has "$R/9.out" "command:" "migration: the game starts"
 
     # 10. uninstall

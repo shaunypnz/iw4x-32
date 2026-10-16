@@ -42,12 +42,14 @@ FILES = os.path.dirname(os.path.abspath(__file__))        # <kit>/files: the pro
 KIT = os.path.dirname(FILES)                              # the IW4x-32 folder
 GAME = None
 MODES = ["iw4x32", "vanilla", "server", "vanilla-server", "uninstall"]
-# what IW4x-32 v2.0 and the v2.1 test builds had in the IW4x-32 folder; everything is IW4x-32.sh + files/ now
+# what IW4x-32 v1.x, v2.0 and the v2.1 test builds had in the IW4x-32 folder; everything is IW4x-32.sh + files/ now
 LEGACY = ["AI_CREDITS.txt", "CHANGES.txt", "SHA256SUMS.txt", "IW4x-32 Launcher.bat", "IW4x-32 Setup.bat",
           "Install IW4x-32.bat", "Play IW4x-32 (IW4x launcher, no file check).bat", "Play IW4x-32 (no update).bat",
           "Play IW4x-32.bat", "Start IW4x-32 Server.bat", "Uninstall IW4x-32.bat", "install-linux.sh",
           "iw4x32_update.ps1", "iw4x32_update.py", "launcher-linux.sh", "play-linux.sh", "setup-linux.sh",
-          "start-server-linux.sh", "uninstall-linux.sh", "server/server_iw4x32.cfg", "server/server_vanilla.cfg"]
+          "start-server-linux.sh", "uninstall-linux.sh", "server/server_iw4x32.cfg", "server/server_vanilla.cfg",
+          "latest.json", "files/iw4x.exe"]                                   # the last two: v1.x kits
+LEGACY_DIRS = ["source"]                                                    # v1.x: the patch manifests
 DESKTOP = ["iw4x32.desktop", "iw4x32-server.desktop", "iw4x32-vanilla.desktop",
            "iw4x32-play.desktop", "iw4x32-vanilla-server.desktop"]    # the last two: made by the v2.1 test builds
 
@@ -542,9 +544,11 @@ def migrate_legacy():
             os.replace(old, F(n))
     for n in LEGACY:
         try:
-            os.remove(os.path.join(KIT, n))
+            os.remove(os.path.join(KIT, *n.split("/")))
         except OSError:
             pass
+    for n in LEGACY_DIRS:
+        shutil.rmtree(os.path.join(KIT, n), ignore_errors=True)
     try:
         os.rmdir(os.path.join(KIT, "server"))
     except OSError:
