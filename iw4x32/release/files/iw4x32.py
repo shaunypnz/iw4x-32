@@ -29,8 +29,8 @@ import glob, hashlib, io, json, os, re, select, shlex, shutil, subprocess, sys, 
 import urllib.parse, urllib.request
 
 REPO = "shaunypnz/iw4x-32"
-OFFICIAL_VER = "r5168"
-OFFICIAL_DLL = "e0d8adc473f04f2d0988cffec3ecb8128e9faeba1e169c0acb13118d29aff6ea"
+OFFICIAL_VER = "r5250"
+OFFICIAL_DLL = "4c895880fabdd627e071c8f2b558d90286a4bd088373f57ca4a7d59aa9cb59a0"
 OFFICIAL_EXE = "49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009"
 V1_EXE = "2609c2687dd2ffb3f32c7687ed04f57b38ef6879c14b1c546faf8bfd8f35ea6b"   # iw4x.exe of an IW4x-32 v1.x install
 MANIFEST = os.environ.get("IW4X32_UPDATE_URL") or f"https://github.com/{REPO}/releases/latest/download/latest.json"

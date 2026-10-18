@@ -1,4 +1,6 @@
 v2.2: IW4x r5168 (kit / launcher update) - this kit is built for official IW4x r5168 and passed the live 32-player test.
+v2.3: IW4x r5250 - this kit is built for official IW4x r5250 and passed the live 32-player test.
+
 
 IW4x-32 v2.1 - what this release changes (player build)
 v2.1: IW4x r5168 (kit / launcher update) - this kit is built for official IW4x r5168 and passed the live 32-player test.
