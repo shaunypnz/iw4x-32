@@ -39,6 +39,25 @@ namespace Utils
     std::string get(bool* success = nullptr);
 
     WebIO* setTimeout(DWORD msec);
+    // Fail the request if the response body exceeds size bytes. Zero means
+    // no limit.
+    //
+    WebIO* setMaxResponseSize(std::size_t size);
+
+    // Follow HTTP redirects (the default) or fail the request on one.
+    //
+    WebIO* setFollowRedirects(bool follow);
+
+    // Allow (the default) or refuse requests to hosts that resolve to
+    // loopback, private, link-local, or similar addresses. See
+    // IsPrivateHost() for details.
+    //
+    WebIO* setAllowPrivateHosts(bool allow);
+
+    // Return true if host resolves to an address that isn't publicly
+    // routable. Also return true if we fail to resolve it.
+    //
+    [[nodiscard]] static bool IsPrivateHost(const std::string& host);
 
     // FTP
     bool connect();
@@ -96,6 +115,10 @@ namespace Utils
     HINTERNET hFile_;
 
     DWORD timeout_;
+
+    std::size_t maxResponseSize_;
+    bool followRedirects_;
+    bool allowPrivateHosts_;
 
     Slot<void(size_t, size_t)> progressCallback;
 

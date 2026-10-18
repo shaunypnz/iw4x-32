@@ -11,6 +11,10 @@ namespace Components
   std::vector<std::size_t> RCon::RConAddresses;
 
   std::string RCon::Password;
+  Network::Address RCon::PasswordTarget;
+
+  int RCon::FailedWindowStart;
+  int RCon::FailedWindowCount;
 
   Dvar::Var RCon::RConPassword;
   Dvar::Var RCon::RConLogRequests;
@@ -29,12 +33,14 @@ namespace Components
       {
         if (params->size() < 3) return;
         Password = params->get(2);
+        PasswordTarget = {}; // Bound on first use, see below.
         return;
       }
 
       if (std::strcmp(operation, "logout") == 0)
       {
         Password.clear();
+        PasswordTarget = {};
         return;
       }
 
@@ -52,6 +58,23 @@ namespace Components
 
       if (target.isValid())
       {
+        // Bind the password to the first server we use it with. It's sent in
+        // cleartext, so we don't want to hand it to whatever other server we
+        // happen to target later (say, the one we are connected to).
+        //
+        if (!Password.empty())
+        {
+          if (!PasswordTarget.isValid())
+          {
+            PasswordTarget = target;
+          }
+          else if (PasswordTarget != target)
+          {
+            Logger::Print("Your rcon password was used with {}, use 'rcon login' again to use it with {}\n", PasswordTarget.getString(), target.getString());
+            return;
+          }
+        }
+
         Network::SendCommand(target, "rcon", Password + " " + params->join(1));
         return;
       }
@@ -179,8 +202,32 @@ namespace Components
       return;
     }
 
-    if (svPassword != password)
+    // Enforce a global budget for failed attempts. The per-address limit
+    // alone can be bypassed with many (or spoofed) addresses. Note that during
+    // such an attack this also locks out legitimate requests, which feels like
+    // the lesser evil.
+    //
+    constexpr auto failedWindowLength = 1000;
+    constexpr auto maxFailedPerWindow = 10;
+
+    const auto time = Game::Sys_Milliseconds();
+    if ((time - FailedWindowStart) >= failedWindowLength)
     {
+      FailedWindowStart = time;
+      FailedWindowCount = 0;
+    }
+
+    if (FailedWindowCount >= maxFailedPerWindow)
+    {
+      Logger::PrintFail2Ban("Invalid packet from IP address: {}\n", Network::AdrToString(address));
+      Logger::Print(Game::CON_CHANNEL_NETWORK, "RCon request from {} dropped. Too many failed attempts!\n", Network::AdrToString(address));
+      return;
+    }
+
+    if (!Utils::Cryptography::CompareConstantTime(svPassword, password))
+    {
+      ++FailedWindowCount;
+
       Logger::PrintFail2Ban("Invalid packet from IP address: {}\n", Network::AdrToString(address));
       Logger::Print(Game::CON_CHANNEL_NETWORK, "Invalid RCon password sent from {}\n", Network::AdrToString(address));
       return;

@@ -1,6 +1,7 @@
 #include <zlib.h>
 
 #include "FastFiles.hpp"
+#include "Sentry.hpp"
 
 namespace Components
 {
@@ -241,7 +242,7 @@ namespace Components
     return (Game::Sys_IsDatabaseReady() && Game::Sys_IsDatabaseReady2());
   }
 
-  const char* FastFiles::GetZoneLocation(const char* file)
+  std::optional<std::string> FastFiles::GetInstalledZoneLocation(const char* file)
   {
     std::vector<std::string> paths;
     const std::string fsGame = (*Game::fs_gameDirVar)->current.string;
@@ -249,27 +250,6 @@ namespace Components
     if ((file == "mod"s || file == "mod.ff"s) && !fsGame.empty())
     {
       paths.push_back(std::format("{}\\", fsGame));
-    }
-
-    {
-      std::string zone = file;
-      if (Utils::String::EndsWith(zone, ".ff"))
-      {
-        Utils::String::Replace(zone, ".ff", "");
-      }
-
-      std::string filename = zone;
-
-      if (Utils::String::EndsWith(zone, "_load"))
-      {
-        Utils::String::Replace(zone, "_load", "");
-      }
-
-      // Only check for usermaps on our working directory
-      if (Utils::IO::FileExists(std::format("usermaps\\{}\\{}.ff", zone, filename)))
-      {
-        return Utils::String::Format("usermaps\\{}\\", zone);
-      }
     }
 
     Utils::Merge(&paths, FastFiles::ZonePaths);
@@ -291,7 +271,47 @@ namespace Components
       // Check if FastFile exists
       if (Utils::IO::FileExists(absoluteFile))
       {
-        return Utils::String::Format("{}", path);
+        return path;
+      }
+    }
+
+    return std::nullopt;
+  }
+
+  bool FastFiles::IsInstalledZone(const std::string& zone)
+  {
+    return GetInstalledZoneLocation(zone.data()).has_value();
+  }
+
+  const char* FastFiles::GetZoneLocation(const char* file)
+  {
+    // See if the zone ships with the install (or the mod) first. Usermaps are
+    // downloaded from remote servers, so they must never be able to shadow a
+    // stock or core zone.
+    //
+    if (const auto path = GetInstalledZoneLocation(file))
+    {
+      return Utils::String::Format("{}", *path);
+    }
+
+    {
+      std::string zone = file;
+      if (Utils::String::EndsWith(zone, ".ff"))
+      {
+        Utils::String::Replace(zone, ".ff", "");
+      }
+
+      std::string filename = zone;
+
+      if (Utils::String::EndsWith(zone, "_load"))
+      {
+        Utils::String::Replace(zone, "_load", "");
+      }
+
+      // Only check for usermaps on our working directory
+      if (Utils::IO::FileExists(std::format("usermaps\\{}\\{}.ff", zone, filename)))
+      {
+        return Utils::String::Format("usermaps\\{}\\", zone);
       }
     }
 
@@ -347,6 +367,8 @@ namespace Components
 
   void FastFiles::ReadHeaderStub(unsigned int* header, int size)
   {
+    Sentry::Leave(::Sentry::trail::fastfile, SENTRY_LEVEL_INFO, std::format("loading fastfile {}", FastFiles::Current()));
+
     FastFiles::IsIW4xZone = false;
     FastFiles::LastByteRead = 0;
     Game::DB_ReadXFileUncompressed(header, size);

@@ -10,6 +10,67 @@
 
 namespace Components
 {
+  namespace
+  {
+    // The size of the buffer SV_DirectConnect() copies argv[2] into (with
+    // I_strncpyz()) before reading it. We only check what the engine will
+    // actually see.
+    //
+    constexpr std::size_t ENGINE_USERINFO_SIZE = 1024;
+
+    // Return true if info repeats a key, ignoring case.
+    //
+    // The engine's Info_ValueForKey() returns the first key that matches
+    // ignoring case. If a key is repeated, the value we check may not be the
+    // one the engine uses, so we reject such userinfo outright.
+    //
+    bool HasDuplicateInfoKeys(const std::string& info)
+    {
+      std::unordered_set<std::string> keys;
+      std::size_t pos = (!info.empty() && info[0] == '\\') ? 1 : 0;
+
+      while (pos < info.size())
+      {
+        const auto keyEnd = info.find('\\', pos);
+        if (keyEnd == std::string::npos)
+        {
+          break; // The engine never matches a key without a value.
+        }
+
+        if (!keys.insert(Utils::String::ToLower(info.substr(pos, keyEnd - pos))).second)
+        {
+          return true;
+        }
+
+        const auto valueEnd = info.find('\\', keyEnd + 1);
+        if (valueEnd == std::string::npos)
+        {
+          break;
+        }
+
+        pos = valueEnd + 1;
+      }
+
+      return false;
+    }
+
+    // Parse an id the same way the engine does ("%8x%8x"). Note that the
+    // engine writes xuid high dword first and steamid low dword first, so
+    // lowFirst says which one value is.
+    //
+    bool ParseEngineId(const std::string& value, const bool lowFirst, std::uint64_t* id)
+    {
+      unsigned int first{}, second{};
+      if (value.empty() || sscanf_s(value.data(), "%8x%8x", &first, &second) != 2)
+      {
+        return false;
+      }
+
+      *id = lowFirst ? ((static_cast<std::uint64_t>(second) << 32) | first) : ((static_cast<std::uint64_t>(first) << 32) | second);
+      return true;
+    }
+  }
+
   Auth::TokenIncrementing Auth::TokenContainer;
 
   Utils::Cryptography::Token Auth::GuidToken;
@@ -208,22 +269,34 @@ namespace Components
         return;
       }
 
-      // Parse the infostring
-      Utils::InfoString infostr(params.get(2));
+      // Truncate the userinfo the same way the engine will and make sure no
+      // key is ambiguous.
+      //
+      std::string userInfo = params.get(2);
+      if (userInfo.size() >= ENGINE_USERINFO_SIZE)
+      {
+        userInfo.resize(ENGINE_USERINFO_SIZE - 1);
+      }
 
-      // Read the required data
-      const auto steamId = infostr.get("xuid");
-      const auto challenge = infostr.get("challenge");
-
-      if (steamId.empty() || challenge.empty())
+      if (HasDuplicateInfoKeys(userInfo))
       {
         Logger::PrintFail2Ban("Failed connect attempt from IP address: {}\n", Network::AdrToString(address));
         Network::Send(address, "error\nInvalid connect data!");
         return;
       }
 
+      // Read the required data
+      const std::string steamId = Game::Info_ValueForKey(userInfo.data(), "xuid");
+      const std::string challenge = Game::Info_ValueForKey(userInfo.data(), "challenge");
+
       // Parse the id
-      const auto xuid = std::strtoull(steamId.data(), nullptr, 16);
+      std::uint64_t xuid{};
+      if (challenge.empty() || !ParseEngineId(steamId, false, &xuid))
+      {
+        Logger::PrintFail2Ban("Failed connect attempt from IP address: {}\n", Network::AdrToString(address));
+        Network::Send(address, "error\nInvalid connect data!");
+        return;
+      }
 
       SteamID guid;
       guid.bits = xuid;
@@ -245,6 +318,26 @@ namespace Components
       {
         Network::Send(address, "error\nXUID doesn't match the certificate!");
         return;
+      }
+
+      // Make sure the other identity fields match the certificate as well.
+      //
+      // The engine also takes the player GUID from argv[1] (its first 16
+      // characters) and client_t::steamID from the 'steamid' key. Legitimate
+      // clients fill both from the same id as 'xuid', so anything else is a
+      // spoofing attempt.
+      //
+      {
+        const auto playerGuid = std::string(params.get(1)).substr(0, 16);
+        const std::string steamIdKey = Game::Info_ValueForKey(userInfo.data(), "steamid");
+
+        std::uint64_t steamIdValue{};
+        if (playerGuid != std::format("{:016x}", xuid) || !ParseEngineId(steamIdKey, true, &steamIdValue) || steamIdValue != xuid)
+        {
+          Logger::PrintFail2Ban("Failed connect attempt from IP address: {}\n", Network::AdrToString(address));
+          Network::Send(address, "error\nConnect identity doesn't match the certificate!");
+          return;
+        }
       }
 
       // Verify the signature
@@ -287,6 +380,29 @@ namespace Components
       popad
 
       push 6265FEh
+      retn
+    }
+  }
+
+  const char* Auth::ProtocolMismatchMessage(const int clientProtocol)
+  {
+    // Tell the player what to do about it. Note that we can't say which side
+    // is out of date: the protocol number went down once (0x96 to 0x95 in
+    // 2020, see 9047e7be), so a higher number doesn't necessarily mean a newer
+    // version. So we cover both cases instead.
+    //
+    return Utils::String::VA("error\n\x15Your IW4x version does not match this server's (protocol %i, server %i). "
+                             "Update IW4x and try again. If you are already on the latest version, the server is out of date.\n",
+                             clientProtocol, PROTOCOL);
+  }
+
+  __declspec(naked) void Auth::ProtocolMismatchStub()
+  {
+    __asm
+    {
+      push esi // Client protocol, as parsed by SV_DirectConnect.
+      call ProtocolMismatchMessage
+      add esp, 4
       retn
     }
   }
@@ -384,7 +500,11 @@ namespace Components
   {
     GuidToken.clear();
     ComputeToken.clear();
-    GuidKey = Utils::Cryptography::ECC::GenerateKey(512, GetMachineEntropy());
+    // Generate the identity key from the CSPRNG only. Hardware identifiers
+    // are neither secret nor random enough: if we derived the key from them,
+    // anyone who learns them could rebuild it.
+    //
+    GuidKey = Utils::Cryptography::ECC::GenerateKey(512);
     StoreKey();
   }
 
@@ -410,14 +530,6 @@ namespace Components
 
     if (GuidKey.isValid())
     {
-#ifdef REGENERATE_INVALID_KEY
-      auto machineKey = Utils::Cryptography::ECC::GenerateKey(512, GetMachineEntropy());
-      if (GetKeyHash(machineKey.getPublicKey()) != GetKeyHash())
-      {
-      // kill! The user has changed machine or copied files from another
-      Auth::GenerateKey();
-      }
-#endif
       //All good, nothing to do
     }
     else
@@ -613,6 +725,13 @@ namespace Components
     Utils::Hook(0x460EF5, Info_ValueForKeyStub, HOOK_CALL).install()->quick();
     Utils::Hook(0x460FAD, DirectConnectPrivateClientStub, HOOK_JUMP).install()->quick();
     Utils::Hook::Nop(0x460FAD + 5, 1);
+
+    // Replace the protocol mismatch error SV_DirectConnect sends. Its stock
+    // message is EXE_SERVER_IS_DIFFERENT_VER with a hardcoded "1.0" argument,
+    // which tells the player nothing. We keep the engine's check and only
+    // change what it says.
+    //
+    Utils::Hook(0x46058E, ProtocolMismatchStub, HOOK_CALL).install()->quick();
 
     Utils::Hook(0x41D3E3, SendConnectDataStub, HOOK_CALL).install()->quick();
 
