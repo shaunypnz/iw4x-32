@@ -42,6 +42,10 @@ namespace Components
     static std::vector<std::size_t> RConAddresses;
 
     static std::string Password;
+    static Network::Address PasswordTarget;
+
+    static int FailedWindowStart;
+    static int FailedWindowCount;
 
     static std::string RConOutputBuffer;
 

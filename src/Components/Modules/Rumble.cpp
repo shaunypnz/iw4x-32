@@ -2,6 +2,7 @@
 #include "ConfigStrings.hpp"
 #include "Controller.hpp"
 #include "Events.hpp"
+#include "RawFiles.hpp"
 
 #include "../../Controller/Engine/Rumble.hpp"
 
@@ -305,13 +306,16 @@ namespace Components
 
     const auto logError = [&](const std::string& view)
       {
+        // Note that view may contain server-supplied text, so we never use it
+        // as a format string.
+        //
         if ((*Game::sv_running)->current.value)
         {
-          Components::Logger::Error(Game::ERR_DROP, view);
+          Components::Logger::Error(Game::ERR_DROP, "{}", view);
         }
         else
         {
-          Components::Logger::Warning(Game::CON_CHANNEL_SCRIPT, view);
+          Components::Logger::Warning(Game::CON_CHANNEL_SCRIPT, "{}", view);
         }
       };
 
@@ -544,13 +548,16 @@ namespace Components
     assert(graph);
     assert(rumbleFileName);
 
-    char buff[256]{};
+    // Size the buffer for whatever Com_LoadInfoString() may write into it.
+    // See RawFiles::LOAD_INFO_STRING_BUFFER_SIZE for details.
+    //
+    std::vector<char> buff(RawFiles::LOAD_INFO_STRING_BUFFER_SIZE);
     std::string path = std::format("rumble/{}", rumbleFileName);
 
     [[maybe_unused]] auto graphBefore = graph;
 
     strncpy(graph->graphName, rumbleFileName, 64);
-    auto data = Game::Com_LoadInfoString(path.data(), "rumble graph file", "RUMBLEGRAPHFILE", buff);
+    auto data = Game::Com_LoadInfoString(path.data(), "rumble graph file", "RUMBLEGRAPHFILE", buff.data());
 
     assert(graph == graphBefore);
 
@@ -618,10 +625,12 @@ namespace Components
     assert(rumbleName);
 
     std::string path = std::format("rumble/{}", rumbleName);
-    char buff[256]{}; // should be 64 but it ALWAYS goes overboard!
+    // As above.
+    //
+    std::vector<char> buff(RawFiles::LOAD_INFO_STRING_BUFFER_SIZE);
 
     [[maybe_unused]] auto infoPtr = info;
-    const char* str = Game::Com_LoadInfoString(path.data(), "rumble info file", "RUMBLE", buff);
+    const char* str = Game::Com_LoadInfoString(path.data(), "rumble info file", "RUMBLE", buff.data());
     assert(infoPtr == info);
 
     const std::string highRumbleFile = Game::Info_ValueForKey(str, "highRumbleFile");
@@ -1091,6 +1100,18 @@ namespace Components
   bool Rumble::CG_EntityEvents_Hk(Game::centity_s* entity, rumble_entity_event_t event)
   {
     const auto rumbleIndex = entity->nextState.eventParm;
+
+    // Ignore rumble events with an invalid or unused index. Note that
+    // eventParm comes straight from the server snapshot.
+    //
+    if (event >= EV_PLAY_RUMBLE_ON_ENT && event <= EV_STOP_RUMBLE)
+    {
+      const auto* rumbleName = ConfigStrings::CL_GetRumbleConfigString(rumbleIndex);
+      if (!rumbleName || !*rumbleName)
+      {
+        return true;
+      }
+    }
 
     switch (event)
     {

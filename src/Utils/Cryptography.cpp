@@ -82,6 +82,20 @@ namespace Utils
 
         chacha20_prng_start(state.get());
 
+        // Seed from system randomness first. The caller's entropy is only ever
+        // mixed in on top, never used as the only seed: hardware identifiers
+        // and the like are neither secret nor random enough for key material.
+        //
+        unsigned char systemEntropy[64]{};
+        if (rng_get_bytes(systemEntropy, sizeof(systemEntropy), nullptr) != sizeof(systemEntropy))
+        {
+          Components::Logger::PrintError(Game::conChannel_t::CON_CHANNEL_ERROR, "Unable to gather system randomness for key generation!\n");
+          return key;
+        }
+
+        chacha20_prng_add_entropy(systemEntropy, sizeof(systemEntropy), state.get());
+        zeromem(systemEntropy, sizeof(systemEntropy));
+
         chacha20_prng_add_entropy(
           reinterpret_cast<const unsigned char*>(entropy.data()),
           entropy.size(),
@@ -258,6 +272,25 @@ namespace Utils
     }
 
 #pragma endregion
+
+    bool CompareConstantTime(const std::string& a, const std::string& b)
+    {
+      const auto hashA = SHA256::Compute(a);
+      const auto hashB = SHA256::Compute(b);
+
+      if (hashA.size() != hashB.size())
+      {
+        return false;
+      }
+
+      std::uint8_t diff = 0;
+      for (std::size_t i = 0; i < hashA.size(); ++i)
+      {
+        diff |= static_cast<std::uint8_t>(hashA[i] ^ hashB[i]);
+      }
+
+      return diff == 0;
+    }
 
 #pragma region SHA512
 

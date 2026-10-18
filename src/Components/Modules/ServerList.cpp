@@ -21,6 +21,7 @@ namespace Components
   int ServerList::SortKey = static_cast<std::underlying_type_t<Column>>(Column::Players);
 
   unsigned int ServerList::CurrentServer = 0;
+  Network::Address ServerList::SelectedServer;
   ServerList::Container ServerList::RefreshContainer;
 
   std::vector<ServerList::ServerInfo> ServerList::OnlineList;
@@ -183,7 +184,8 @@ namespace Components
   {
     CurrentServer = index;
 
-    auto* serverInfo = GetCurrentServer();
+    auto* serverInfo = GetServer(index);
+    SelectedServer = serverInfo ? serverInfo->addr : Network::Address();
 
     if (serverInfo)
     {
@@ -195,6 +197,27 @@ namespace Components
     {
       UIServerSelected.set(false);
     }
+  }
+
+  void ServerList::RestoreSelection()
+  {
+    // Find the selected server in the visible list and move the list cursor
+    // to its row. We track the selection by address since the rows move
+    // whenever the visible list is rebuilt or sorted. If the server is no
+    // longer visible, we clear the selection.
+    //
+    auto* list = GetList();
+    const auto i = std::ranges::find_if(VisibleList, [list](const unsigned int server)
+    {
+      return list && server < list->size() && (*list)[server].addr == SelectedServer;
+    });
+
+    const auto index = SelectedServer.isValid() && i != VisibleList.end()
+      ? static_cast<unsigned int>(i - VisibleList.begin())
+      : std::numeric_limits<unsigned int>::max();
+
+    SelectServer(index);
+    UIFeeder::Select(2.0f, index);
   }
 
   void ServerList::UpdateVisibleList([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
@@ -236,11 +259,16 @@ namespace Components
     VisibleList.clear();
 
     auto* list = GetList();
-    if (!list) return;
+    if (!list)
+    {
+      RestoreSelection();
+      return;
+    }
 
     if (refresh)
     {
       Refresh();
+      RestoreSelection();
       return;
     }
 
@@ -277,6 +305,7 @@ namespace Components
     }
 
     SortList();
+    RestoreSelection();
   }
 
   void ServerList::ParseNewMasterServerResponse(const std::string& servers)
@@ -313,6 +342,11 @@ namespace Components
 
     for (const auto& entry : list.GetArray())
     {
+      if (!entry.IsObject())
+      {
+        continue;
+      }
+
       if (!entry.HasMember("ip") || !entry.HasMember("port"))
       {
         continue;
@@ -323,7 +357,7 @@ namespace Components
         continue;
       }
 
-      if (!entry.HasMember("ip") || !entry["protocol"].IsInt())
+      if (!entry.HasMember("protocol") || !entry["protocol"].IsInt())
       {
         continue;
       }
@@ -426,7 +460,20 @@ namespace Components
       {
         const auto host = "master.iw4x.io";
         const auto url = std::format("http://{}/v1/servers/iw4x?protocol={}", host, PROTOCOL);
-        const auto reply = Utils::WebIO("IW4x", url).setTimeout(5000)->get();
+        std::string reply;
+
+        try
+        {
+          // Cap the size. The list is fetched over plain HTTP, so we can't
+          // trust it.
+          //
+          reply = Utils::WebIO("IW4x", url).setTimeout(5000)->setMaxResponseSize(16 * 1024 * 1024)->get();
+        }
+        catch (const std::exception& ex)
+        {
+          Logger::PrintError(Game::CON_CHANNEL_ERROR, "Failed to fetch the master server list: {}\n", ex.what());
+          reply.clear();
+        }
 
         Scheduler::Once([reply, masterServerName, masterPort, url]()
         {
@@ -1036,7 +1083,17 @@ namespace Components
 
   ServerList::ServerInfo* ServerList::GetCurrentServer()
   {
-    return GetServer(CurrentServer);
+    // Make sure the row still holds the selected server. It may not if the
+    // list changed since we last restored the selection, for example, when
+    // RemoveDeadServers() erases entries before the visible list is rebuilt.
+    //
+    auto* serverInfo = GetServer(CurrentServer);
+    if (!serverInfo || serverInfo->addr != SelectedServer)
+    {
+      return nullptr;
+    }
+
+    return serverInfo;
   }
 
   void ServerList::SortList()
@@ -1410,21 +1467,34 @@ namespace Components
 
         std::lock_guard _(RefreshContainer.mutex);
 
-        auto offset = 0;
+        std::size_t offset = 0;
         const auto count = RefreshContainer.servers.size();
-        MasterEntry* entry;
+
+        // Return the entry at the specified offset or nullptr if it would go
+        // past the end of the packet.
+        //
+        const auto entryAt = [&data](const std::size_t at) -> const MasterEntry*
+        {
+          if (at > data.size() || data.size() - at < sizeof(MasterEntry))
+          {
+            return nullptr;
+          }
+
+          return reinterpret_cast<const MasterEntry*>(data.data() + at);
+        };
 
         // Find first entry
-        do
+        const MasterEntry* entry;
+        while ((entry = entryAt(offset)) != nullptr && !entry->HasSeparator() && !entry->IsEndToken())
         {
-          entry = reinterpret_cast<MasterEntry*>(const_cast<char*>(data.data()) + offset++);
-        } while (!entry->HasSeparator() && !entry->IsEndToken());
+          ++offset;
+        }
 
-        for (int i = 0; !entry[i].IsEndToken() && entry[i].HasSeparator(); ++i)
+        for (; (entry = entryAt(offset)) != nullptr && !entry->IsEndToken() && entry->HasSeparator(); offset += sizeof(MasterEntry))
         {
           Network::Address serverAddr = address;
-          serverAddr.setIP(entry[i].ip);
-          serverAddr.setPort(ntohs(entry[i].port));
+          serverAddr.setIP(entry->ip);
+          serverAddr.setPort(ntohs(entry->port));
           serverAddr.setType(Game::NA_IP);
 
           InsertRequest(serverAddr);
@@ -1489,7 +1559,7 @@ namespace Components
 
     UIScript::Add("JoinServer", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
       {
-        auto* serverInfo = GetServer(CurrentServer);
+        auto* serverInfo = GetCurrentServer();
         if (serverInfo)
         {
           Party::Connect(serverInfo->addr);
@@ -1498,7 +1568,7 @@ namespace Components
 
     UIScript::Add("DownloadServerMod", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
       {
-        auto* serverInfo = GetServer(CurrentServer);
+        auto* serverInfo = GetCurrentServer();
         if (serverInfo)
         {
           Party::Connect(serverInfo->addr, true);
@@ -1520,6 +1590,7 @@ namespace Components
 
         Logger::Print("Sorting server list by token: {}\n", SortKey);
         SortList();
+        RestoreSelection();
       });
 
     UIScript::Add("CreateListFavorite", []([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)

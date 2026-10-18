@@ -34,6 +34,50 @@ namespace Components
 
 #pragma region Client
 
+  namespace
+  {
+    constexpr std::size_t MAX_DOWNLOAD_NAME_LENGTH = 64;
+    constexpr std::size_t MAX_MOD_LIST_SIZE = 4 * 1024 * 1024;
+
+    bool IsSafeNameChar(const char c)
+    {
+      return (c >= 'a' && c <= 'z') ||
+             (c >= 'A' && c <= 'Z') ||
+             (c >= '0' && c <= '9') || c == '_'
+                                    || c == '-';
+    }
+  }
+
+  bool Download::IsValidModName(const std::string& mod)
+  {
+    // Make sure it looks like mods/<name>. We also accept a backslash since
+    // it's just as safe.
+    //
+    const auto prefix = Utils::String::ToLower(mod.substr(0, 5));
+    if (mod.size() <= 5 || mod.size() > MAX_DOWNLOAD_NAME_LENGTH || (prefix != "mods/" && prefix != "mods\\"))
+    {
+      return false;
+    }
+
+    const auto name = mod.substr(5);
+    if (name.starts_with('.') || Utils::String::Contains(name, ".."))
+    {
+      return false;
+    }
+
+    return std::ranges::all_of(name, [](const char c) { return IsSafeNameChar(c) || c == '.'; });
+  }
+
+  bool Download::IsValidMapName(const std::string& map)
+  {
+    if (map.empty() || map.size() > MAX_DOWNLOAD_NAME_LENGTH)
+    {
+      return false;
+    }
+
+    return std::ranges::all_of(map, IsSafeNameChar);
+  }
+
   void Download::InitiateMapDownload(const std::string& map, bool needPassword)
   {
     InitiateClientDownload(map, needPassword, true);
@@ -42,6 +86,12 @@ namespace Components
   void Download::InitiateClientDownload(const std::string& mod, bool needPassword, bool map, bool downloadOnly)
   {
     if (CLDownload.running_) return;
+
+    if (map ? !IsValidMapName(mod) : !IsValidModName(mod))
+    {
+      Party::ConnectError(map ? "Invalid join response: Bad map name." : "Invalid join response: Bad mod name.");
+      return;
+    }
 
     Scheduler::Once([]
     {
@@ -202,11 +252,18 @@ namespace Components
     }
     else
     {
-      url = host + "/file/" + (download->isMap_ ? "map/" : "") + file.name
-        + (download->isPrivate_ ? ("?password=" + download->hashedPassword_) : "");
+      url = host + "/file/" + (download->isMap_ ? "map/" : "") + file.name;
     }
 
+    // Log the url before we add the password hash to it. The server accepts
+    // the hash on its own, so it's as good as the password itself.
+    //
     Logger::Print("Downloading from url {}\n", url);
+
+    if (!SV_wwwDownload.get<bool>() && download->isPrivate_)
+    {
+      url.append("?password=" + download->hashedPassword_);
+    }
 
     FileDownload fDownload;
     fDownload.file = file;
@@ -222,6 +279,18 @@ namespace Components
     fDownload.downloading = true;
 
     Utils::WebIO webIO;
+    webIO.setMaxResponseSize(std::max<std::size_t>(file.size, 1)); // Zero would mean no limit.
+    webIO.setFollowRedirects(false);
+
+    // The fasthost is chosen by the server, so don't let it point us at
+    // loopback or LAN services, unless the game server itself is on such a
+    // network.
+    //
+    if (SV_wwwDownload.get<bool>() && !download->target_.isLocal() && !download->target_.isLoopback())
+    {
+      webIO.setAllowPrivateHosts(false);
+    }
+
     webIO.setProgressCallback([&fDownload, &webIO](std::size_t bytes, std::size_t)
     {
       if(!fDownload.downloading || fDownload.download->terminateThread_)
@@ -256,11 +325,38 @@ namespace Components
   {
     if (!download) download = &CLDownload;
 
+    try
+    {
+      ModDownloaderInternal(download);
+    }
+    catch (const std::exception& ex)
+    {
+      Logger::PrintError(Game::CON_CHANNEL_ERROR, "Download failed: {}\n", ex.what());
+
+      if (download->terminateThread_) return;
+
+      if (download->thread_.joinable())
+      {
+        download->thread_.detach();
+      }
+
+      download->clear();
+
+      Scheduler::Once([]
+      {
+        Command::Execute("closemenu mod_download_popmenu");
+        Party::ConnectError("Failed to download the mod!");
+      }, Scheduler::Pipeline::CLIENT);
+    }
+  }
+
+  void Download::ModDownloaderInternal(ClientDownload* download)
+  {
     const auto host = "http://" + download->target_.getString();
 
     const auto listUrl = host + (download->isMap_ ? "/map" : "/list") + (download->isPrivate_ ? ("?password=" + download->hashedPassword_) : "");
 
-    const auto list = Utils::WebIO("IW4x", listUrl).setTimeout(5000)->get();
+    const auto list = Utils::WebIO("IW4x", listUrl).setTimeout(5000)->setMaxResponseSize(MAX_MOD_LIST_SIZE)->setFollowRedirects(false)->get();
     if (list.empty())
     {
       if (download->terminateThread_) return;
@@ -595,7 +691,7 @@ namespace Components
       {
         auto filename = path / file;
 
-        if (file.find("_svr_") != std::string::npos) // Files that are 'server only' are skipped
+        if (Utils::String::ToLower(file).find("_svr_") != std::string::npos) // Files that are 'server only' are skipped
         {
           continue;
         }
@@ -676,18 +772,38 @@ namespace Components
 
   std::optional<std::string> Download::FileHandler(mg_connection* c, const mg_http_message* hm)
   {
+    if (!VerifyPassword(c, hm))
+    {
+      // Custom reply done in VerifyPassword
+      return {};
+    }
+
     std::string url(hm->uri.ptr, hm->uri.len);
 
     Utils::String::Replace(url, "\\", "/");
 
-    if (url.size() <= 5)
+    if (!url.starts_with("/file/"))
     {
       ReplyError(c, 400);
       return {};
     }
 
-    url = url.substr(6); // Strip /file
+    url = url.substr(6); // Strip /file/
     Utils::String::Replace(url, "%20", " ");
+
+    // Make sure the request is a bare file name (optionally prefixed with
+    // map/), never a path. Note that we also reject control characters since
+    // a NUL would cut off the extension we check below.
+    //
+    {
+      const auto name = url.starts_with("map/") ? url.substr(4) : url;
+      if (name.empty() || Utils::String::Contains(name, "..") || Utils::String::Contains(name, ":") || Utils::String::Contains(name, "/")
+        || std::ranges::any_of(name, [](const char ch) { return static_cast<unsigned char>(ch) < 0x20; }))
+      {
+        ReplyError(c, 403);
+        return {};
+      }
+    }
 
     auto isMap = false;
     if (url.starts_with("map/"))
@@ -716,7 +832,10 @@ namespace Components
     }
     else
     {
-      if ((!url.ends_with(".iwd") && url != "mod.ff") || url.find("_svr_") != std::string::npos)
+      // The filesystem is case-insensitive, so the server-only check has to
+      // be as well.
+      //
+      if ((!url.ends_with(".iwd") && url != "mod.ff") || Utils::String::ToLower(url).find("_svr_") != std::string::npos)
       {
         ReplyError(c, 403);
         return {};

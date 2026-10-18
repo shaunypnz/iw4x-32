@@ -53,6 +53,7 @@
 #include "Modules/RemoteControl.hpp"
 #include "Modules/Rumble.hpp"
 #include "Modules/Security.hpp"
+#include "Modules/Sentry.hpp"
 #include "Modules/ServerCommands.hpp"
 #include "Modules/ServerDemo.hpp"
 #include "Modules/ServerInfo.hpp"
@@ -109,6 +110,7 @@ namespace Components
     Register(new Network());
     Register(new Logger());
     Register(new IW4x32()); // IW4x-32: rewrites the stock iw4x.exe for 32 players - before anything uses the engine arrays
+    Register(new Sentry());
     Register(new UIScript());
     Register(new ZoneBuilder());
 
