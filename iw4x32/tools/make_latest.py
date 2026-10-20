@@ -31,6 +31,8 @@ OFFICIAL_BY_IW4X = {
               "iw4x.exe": "49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009"},
     "r5250": {"iw4x.dll": "4c895880fabdd627e071c8f2b558d90286a4bd088373f57ca4a7d59aa9cb59a0",
               "iw4x.exe": "49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009"},
+    "r5275": {"iw4x.dll": "5e4bdedf1c7bd5ca08bf3844549d1c915118491d8dbba7385b93c0ca9072d862",
+              "iw4x.exe": "49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009"},
 }
 # the constants as the launchers write them:  $OFFICIAL_DLL = '...'  (ps1)  /  OFFICIAL_DLL = "..."  (py)
 OFFICIAL_CONST = {k: re.compile(rf"^(\$?OFFICIAL_{k} = [\"'])[0-9A-Za-z_]*", re.M) for k in ("DLL", "EXE", "VER")}
