@@ -2,33 +2,11 @@
 top of a normal IW4x install; your `iw4x.exe` stays the official one. Normal 18-player IW4x servers keep working.
 
 <!-- whats-new -->
-### What's new in v2.4
-Built for official **IW4x r5275** (previous release: r5250) and live-tested on a 32-slot server (31 bots + a real client). It carries every IW4x fix from r5250 to r5275:
-- Fix sounds silenced by late sound driver init
-- Remove main thread freeze reports
-- Fix D3D9Ex wrapping device that failed to create
-- Fix crash when DLC model surfaces share a name
-- Fix build error in localized file lookup fallback
-- Fix crash when server sets stats before they are fetched
-- Change missing image error to say which file is missing
-- Fix missing images when language differs from installation's
-- Fix crash when DirectSound fails to initialize
-- Fix sound initializing before the game window exists
-- Fix crash when drawing item of weapon that isn't loaded
-- Fix crash when weapon with noDualWield is dual wielded
-- Fix crash when impact marks run out of room
-- Change crash minidumps to include data segments
-- Fix crash when display mode list shrinks after renderer restart
-- Fix crash when Steam calls back handlers game has destroyed
-- Fix map name not localized before arenas are loaded
-- Fix silent disconnect when joining server on DLC map not owned
-- Fix fatal error when server rotates to DLC map not owned
-- Fix crash when connecting before stats are loaded
-- Fix outdated values
-- Add server name filter to the server browser
-- Fix controller flooding server with commands while button held
-- Fix fatal error when gamestate is for different map than preloaded
-- Fix fatal error when server changes map while connecting
+### What's new in v2.5
+Built for official **IW4x r5278** (previous release: r5275) and live-tested on a 32-slot server (31 bots + a real client). It carries every IW4x fix from r5275 to r5278:
+- Fix stats request putting disconnected client back to connecting
+- Fix black screen after missing DLC error on map rotation
+- Fix players reconnecting on every map rotation
 <!-- /whats-new -->
 
 ### Install

@@ -1,3 +1,8 @@
+v2.5: IW4x r5278 - this kit is built for official IW4x r5278 and passed the live 32-player test.
+    - Fix stats request putting disconnected client back to connecting
+    - Fix black screen after missing DLC error on map rotation
+    - Fix players reconnecting on every map rotation
+
 v2.4: IW4x r5275 - this kit is built for official IW4x r5275 and passed the live 32-player test.
     - Fix sounds silenced by late sound driver init
     - Remove main thread freeze reports
