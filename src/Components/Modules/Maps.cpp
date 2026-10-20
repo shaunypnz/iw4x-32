@@ -13,6 +13,7 @@ namespace Components
   std::vector<std::pair<std::string, std::string>> Maps::DependencyList;
   std::vector<std::string> Maps::CurrentDependencies;
   std::vector<std::string> Maps::FoundCustomMaps;
+  int Maps::RotateConnectionState;
 
   Dvar::Var Maps::RListSModels;
 
@@ -543,8 +544,11 @@ namespace Components
     // the missing DLC error instead, the same as when joining such a server.
     //
     // Note that we cannot just fail with Com_Error(): it does disconnect,
-    // but its message is lost on the way back to the main menu. So we show
-    // the error ourselves once cgame is down.
+    // but its message is lost on the way back to the main menu. Instead, the
+    // disconnect command shows the "disconnected from server" error and we
+    // replace its message once cgame is down. Note that opening a popup of
+    // our own on top of it would leave the player with a black screen since
+    // only that error's popup returns to the main menu.
     //
     if (const auto message = Maps::GetMissingDlcError(mapname))
     {
@@ -555,7 +559,7 @@ namespace Components
         if (Game::CL_IsCgameInitialized())
           return false;
 
-        Game::ShowMessageBox(message, "Error");
+        Game::Dvar_SetStringByName("com_errorMessage", message.data());
         return true;
       }, Scheduler::Pipeline::MAIN);
 
@@ -566,7 +570,11 @@ namespace Components
     // previous map and loading it on top of the new one fails. So reconnect,
     // the same as for a map we don't have.
     //
-    const auto connecting = Game::CL_GetLocalClientConnectionState(0) < Game::CA_ACTIVE;
+    // Note that by now the game has already set the state to connected for
+    // the map change, so we check the one it had before (see
+    // SetConnectedStub() below).
+    //
+    const auto connecting = Maps::RotateConnectionState < Game::CA_ACTIVE;
 
     if (connecting || !Maps::CheckMapInstalled(mapname, false, true) || hash && hash != Maps::GetUsermapHash(mapname))
     {
@@ -600,6 +608,49 @@ namespace Components
     }
 
     Game::CL_DownloadsComplete(localClientNum);
+  }
+
+  // Remember the connection state before the game sets it to connected for a
+  // map change.
+  //
+  __declspec(naked) void Maps::SetConnectedStub()
+  {
+    __asm
+    {
+      push eax
+      mov eax, dword ptr [esi + 0B2C540h]
+      mov Maps::RotateConnectionState, eax
+      pop eax
+
+      mov dword ptr [esi + 0B2C540h], 5 // CA_CONNECTED
+      retn
+    }
+  }
+
+  // Ignore the server's request for our stats unless we are connected to it.
+  //
+  // The game starts sending them whatever the state, so a request that
+  // arrives after we have disconnected (say, from the server we just left
+  // after it rotated to a map we don't have) puts us back to connecting and
+  // we sit on a black screen until it times out.
+  //
+  __declspec(naked) void Maps::RequestStatsStub()
+  {
+    __asm
+    {
+      mov eax, dword ptr ds:[0B2C540h]
+      cmp eax, 6 // CA_SENDINGSTATS
+      je skip
+      cmp eax, 5 // CA_CONNECTED
+      jl skip
+
+      push 5AA94Ch
+      retn
+
+    skip:
+      push 5AA9A9h
+      retn
+    }
   }
 
   __declspec(naked) void Maps::RotateCheckStub()
@@ -1033,6 +1084,9 @@ namespace Components
     // Download the map before a map rotation if necessary
     // Conflicts with Theater's SV map rotation check, but this one is safer!
     Utils::Hook(0x5AA91C, Maps::RotateCheckStub, HOOK_CALL).install()->quick();
+    Utils::Hook(0x5AA907, Maps::SetConnectedStub, HOOK_CALL).install()->quick();
+    Utils::Hook::Nop(0x5AA90C, 5);
+    Utils::Hook(0x5AA943, Maps::RequestStatsStub, HOOK_JUMP).install()->quick();
     Utils::Hook(0x5AC6E9, Maps::DownloadsComplete, HOOK_CALL).install()->quick(); // CL_ParseGamestate
 
     // Load usermap arena file
