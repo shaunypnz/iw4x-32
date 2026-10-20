@@ -31,8 +31,11 @@ namespace Components
 
     static void CG_UpdatePrimaryForAltModeWeapon_Stub();
     static void CG_SelectWeaponIndex_Stub();
+    static void CG_DrawItem_Stub();
 
     static void JavelinResetHook_Stub();
+
+    static void CG_CreateViewModelTree_Stub();
 
     static void WeaponEntCanBeGrabbed_Stub();
 

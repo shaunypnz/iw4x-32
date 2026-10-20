@@ -136,5 +136,10 @@ namespace Components
     static void IwdFreeStub(Game::iwd_t* iwd);
 
     static FILE* FS_FileOpenReadText_Hk(const char* file);
+
+    static int FS_FOpenFileReadForThread (const char* filename, int* file, int thread);
+    static int FS_FOpenFileReadForThread_Hk (const char* filename, int* file, int thread);
+    static int SEH_GetCurrentLanguage_Hk ();
+    static void Image_LoadError (Game::errorParm_t error, const char* fmt, const char* name);
   };
 }

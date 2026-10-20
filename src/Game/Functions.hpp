@@ -63,6 +63,9 @@ namespace Game
   typedef char* (__cdecl* CG_StopBoltedEffect_t)(int localClientNum, int effectHandle, int dobjHandle, int tagName);
   extern CG_StopBoltedEffect_t CG_StopBoltedEffect;
 
+  typedef int(*FX_ImpactMarkCallback_t)(void* context, int pointCount, void* points, int triCount, void* tris, const float* origin, const float* texCoordAxis);
+  extern FX_ImpactMarkCallback_t FX_ImpactMarkCallback;
+
   typedef void(*CG_ScoresDown_f_t)();
   extern CG_ScoresDown_f_t CG_ScoresDown_f;
 
@@ -248,6 +251,9 @@ namespace Game
   typedef const char*(*UI_GetMapDisplayName_t)(const char* pszMap);
   extern UI_GetMapDisplayName_t UI_GetMapDisplayName;
 
+  typedef void(*UI_LoadArenas_t)();
+  extern UI_LoadArenas_t UI_LoadArenas;
+
   typedef const char* (*UI_GetGameTypeDisplayName_t)(const char* pszGameType);
   extern UI_GetGameTypeDisplayName_t UI_GetGameTypeDisplayName;
 
@@ -374,6 +380,12 @@ namespace Game
   typedef void(*LiveStorage_SetStat_t)(int controllerIndex, int index, int value);
   extern LiveStorage_SetStat_t LiveStorage_SetStat;
 
+  typedef bool(*LiveStorage_DoWeHaveStats_t)(int controllerIndex);
+  extern LiveStorage_DoWeHaveStats_t LiveStorage_DoWeHaveStats;
+
+  typedef void(*LiveStorage_ReadStats_t)(int controllerIndex);
+  extern LiveStorage_ReadStats_t LiveStorage_ReadStats;
+
   typedef char*(*Scr_AddSourceBuffer_t)(const char* filename, const char* extFilename, const char* codePos, bool archive);
   extern Scr_AddSourceBuffer_t Scr_AddSourceBuffer;
 
@@ -464,11 +476,17 @@ namespace Game
   typedef int(*SEH_GetCurrentLanguage_t)();
   extern SEH_GetCurrentLanguage_t SEH_GetCurrentLanguage;
 
+  typedef const char*(*SEH_GetLanguageName_t)(int iLanguage);
+  extern SEH_GetLanguageName_t SEH_GetLanguageName;
+
   typedef void(*SND_Init_t)(int a1, int a2, int a3);
   extern SND_Init_t SND_Init;
 
   typedef void(*SND_InitDriver_t)();
   extern SND_InitDriver_t SND_InitDriver;
+
+  typedef void(*SND_SetHWND_t)(HWND hwnd);
+  extern SND_SetHWND_t SND_SetHWND;
 
   typedef void(*SockadrToNetadr_t)(sockaddr *s, netadr_t *a);
   extern SockadrToNetadr_t SockadrToNetadr;
@@ -812,6 +830,8 @@ namespace Game
   extern bool* s_havePlaylists;
 
   extern huffman_t* msgHuff;
+
+  extern FxMarksSystem* fx_marksSystemPool;
 
   extern const char* logFileName;
 

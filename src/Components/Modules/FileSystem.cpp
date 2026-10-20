@@ -351,6 +351,140 @@ namespace Components
     return Game::FS_FileOpenReadText(file);
   }
 
+  // Look up localized files in other languages if the current language
+  // doesn't have them.
+  //
+  // The search path has the localized iwds of every language we have but the
+  // lookup only considers those of the current language. The localized zones,
+  // however, are those of the installation's language (see Win_GetLanguage())
+  // and ours fall back to English if we don't have them in that language (see
+  // FastFiles::LoadLocalizeZones()). So, say, with an English installation
+  // switched to Japanese, the zones refer to images that are only in the
+  // English iwds and the game fails to find them.
+  //
+  // So if the lookup fails, we retry it with the installation's language and
+  // then English in place of the current language for the localized iwds.
+  // Note that this way the current language still takes precedence.
+  //
+  // Note also that files are looked up from several threads (for example,
+  // images are loaded from the database thread), thus thread-local.
+  //
+  static thread_local int fallback_language (-1);
+
+  // Return the languages to look up localized files in, in order.
+  //
+  static std::vector<int>
+  lookup_languages ()
+  {
+    std::vector<int> r {Game::SEH_GetCurrentLanguage ()};
+
+    auto add = [&r] (int l)
+    {
+      if (std::ranges::find (r, l) == r.end ())
+        r.push_back (l);
+    };
+
+    if (const char* n = Game::Win_GetLanguage ())
+    {
+      auto ls (std::views::iota (0, static_cast<int> (Game::MAX_LANGUAGES)));
+      auto i (std::ranges::find_if (ls,
+                                    [n] (int l)
+      {
+        return std::strcmp (Game::SEH_GetLanguageName (l), n) == 0;
+      }));
+
+      if (i != ls.end ())
+        add (*i);
+    }
+
+    add (Game::LANGUAGE_ENGLISH);
+    return r;
+  }
+
+  __declspec (naked) int FileSystem::
+  FS_FOpenFileReadForThread (const char*, int*, int)
+  {
+    __asm
+    {
+      sub  esp, 0x33C
+      push 0x643276
+      ret
+    }
+  }
+
+  int FileSystem::
+  FS_FOpenFileReadForThread_Hk (const char* filename, int* file, int thread)
+  {
+    // Note that we call the above stub through a volatile pointer since
+    // otherwise the optimizer sees that it doesn't touch any registers and
+    // assumes the call preserves them, which the engine function doesn't.
+    //
+    static auto (* volatile fs_fopen_file_read_for_thread) (const char*, int*, int)
+      (&FS_FOpenFileReadForThread);
+
+    int r (fs_fopen_file_read_for_thread (filename, file, thread));
+
+    if (r == -1)
+    {
+      for (int l: lookup_languages () | std::views::drop (1))
+      {
+        fallback_language = l;
+        r = fs_fopen_file_read_for_thread (filename, file, thread);
+        fallback_language = -1;
+
+        if (r != -1)
+          break;
+      }
+    }
+
+    return r;
+  }
+
+  int FileSystem::
+  SEH_GetCurrentLanguage_Hk ()
+  {
+    return fallback_language != -1
+      ? fallback_language
+      : Game::SEH_GetCurrentLanguage ();
+  }
+
+  // Explain why an image couldn't be loaded if it is missing.
+  //
+  // All the game says is that it couldn't load the image, which tells the
+  // player nothing. So if that's because its file is nowhere to be found (in
+  // any of the languages we look it up in, see above), we say so as well as
+  // what is the likely cause. Otherwise (the file is truncated, etc), we keep
+  // the original error.
+  //
+  void FileSystem::
+  Image_LoadError (Game::errorParm_t error, const char* fmt, const char* name)
+  {
+    std::string f (std::format ("images/{}.iwi", name));
+
+    if (Game::FS_FOpenFileReadForThread (f.c_str (), nullptr, Game::FS_THREAD_MAIN) != -1)
+    {
+      Game::Com_Error (error, fmt, name);
+      return;
+    }
+
+    std::string ls;
+    {
+      std::vector<int> v (lookup_languages ());
+      for (std::size_t i (0); i != v.size (); ++i)
+      {
+        if (i != 0)
+          ls += (i + 1 == v.size () ? " and " : ", ");
+
+        ls += Game::SEH_GetLanguageName (v[i]);
+      }
+    }
+
+    Logger::Error (error,
+                   "Couldn't load image '{}': {} is missing for {}. "
+                   "Your game files are likely incomplete.",
+                   name, f, ls);
+  }
+
   const char* FileSystem::Sys_DefaultCDPath_Hk()
   {
     return Sys_DefaultInstallPath_Hk();
@@ -488,6 +622,18 @@ namespace Components
 
     // Make the exe run from a folder other than the game folder
     Utils::Hook(0x406D26, FS_FileOpenReadText_Hk, HOOK_CALL).install()->quick();
+
+    // Note that ZoneBuilder hooks FS_FOpenFileReadForThread() itself.
+    //
+    if (!ZoneBuilder::IsEnabled ())
+    {
+      Utils::Hook (Game::FS_FOpenFileReadForThread, FS_FOpenFileReadForThread_Hk, HOOK_JUMP).install ()->quick ();
+      Utils::Hook (0x6432EF, SEH_GetCurrentLanguage_Hk, HOOK_CALL).install ()->quick (); // FS_FOpenFileReadForThread: SEH_GetCurrentLanguage().
+      Utils::Hook (0x6433FB, SEH_GetCurrentLanguage_Hk, HOOK_CALL).install ()->quick (); // FS_FOpenFileReadForThread: SEH_GetCurrentLanguage().
+    }
+
+    Utils::Hook (0x51F4C4, Image_LoadError, HOOK_CALL).install ()->quick (); // Delayed image load: Com_Error().
+    Utils::Hook (0x51F5AC, Image_LoadError, HOOK_CALL).install ()->quick (); // Load_Texture: Com_Error().
 
     // Make the exe run from a folder other than the game folder
     Utils::Hook::Nop(0x4290D8, 5); // FS_IsBasePathValid

@@ -6035,6 +6035,26 @@ namespace Game
     unsigned __int16 nextOverride;
   };
 
+  enum language_t
+  {
+    LANGUAGE_ENGLISH = 0x0,
+    LANGUAGE_FRENCH = 0x1,
+    LANGUAGE_GERMAN = 0x2,
+    LANGUAGE_ITALIAN = 0x3,
+    LANGUAGE_SPANISH = 0x4,
+    LANGUAGE_BRITISH = 0x5,
+    LANGUAGE_RUSSIAN = 0x6,
+    LANGUAGE_POLISH = 0x7,
+    LANGUAGE_KOREAN = 0x8,
+    LANGUAGE_TAIWANESE = 0x9,
+    LANGUAGE_JAPANESE = 0xA,
+    LANGUAGE_CHINESE = 0xB,
+    LANGUAGE_THAI = 0xC,
+    LANGUAGE_LEET = 0xD,
+    LANGUAGE_CZECH = 0xE,
+    MAX_LANGUAGES = 0xF,
+  };
+
   enum XFileLanguage : unsigned char
   {
     XLANG_NONE = 0x00,
@@ -11792,6 +11812,76 @@ namespace Game
     unsigned int restartCount;
     unsigned int pad1[14];
   };
+
+  struct FxMark
+  {
+    unsigned __int16 prevMark;
+    unsigned __int16 nextMark;
+    int frameCountDrawn;
+    int frameCountAlloc;
+    float origin[3];
+    float radius;
+    float texCoordAxis[3];
+    GfxColor color;
+    Material* material;
+    unsigned char context[7];
+    unsigned char unknown;
+    unsigned char pointCount;
+    unsigned __int16 triCount;
+    unsigned __int16 points;
+    unsigned __int16 tris;
+  };
+
+  static_assert(sizeof(FxMark) == 0x40);
+
+  struct FxPointGroup
+  {
+    unsigned __int16 points[2][3];
+    unsigned char context[7];
+    unsigned char pointCount;
+    unsigned __int16 next;
+  };
+
+  union FxPointGroupPool
+  {
+    FxPointGroupPool* nextFree;
+    FxPointGroup item;
+    char pad[24];
+  };
+
+  static_assert(sizeof(FxPointGroupPool) == 24);
+
+  struct FxTriGroup
+  {
+    char tris[2][32];
+    unsigned __int16 next;
+  };
+
+  union FxTriGroupPool
+  {
+    FxTriGroupPool* nextFree;
+    FxTriGroup item;
+  };
+
+  static_assert(sizeof(FxTriGroupPool) == 68);
+
+  struct FxMarksSystem
+  {
+    int frameCount;
+    unsigned __int16 firstFreeMarkHandle;
+    unsigned __int16 firstActiveWorldMarkHandle;
+    unsigned __int16 firstActiveMarkHandle;
+    unsigned __int16 entFirstMarkHandles[2048];
+    unsigned __int16 firstActiveMarkHandles[5];
+    FxPointGroupPool* firstFreePointGroup;
+    FxTriGroupPool* firstFreeTriGroup;
+    FxMark* marks;
+    FxPointGroupPool* pointGroups;
+    FxTriGroupPool* triGroups;
+  };
+
+  static_assert(offsetof(FxMarksSystem, firstFreePointGroup) == 0x1014);
+  static_assert(offsetof(FxMarksSystem, triGroups) == 0x1024);
 
   struct ClientEntSound
   {

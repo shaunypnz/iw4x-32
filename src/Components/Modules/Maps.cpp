@@ -538,6 +538,30 @@ namespace Components
     char hashBuf[100] = { 0 };
     unsigned int hash = atoi(Game::MSG_ReadStringLine(msg, hashBuf, sizeof(hashBuf)));
 
+    // If the server rotated to a DLC map we don't have, then loading it
+    // fails with a fatal error. So skip the map change, disconnect, and show
+    // the missing DLC error instead, the same as when joining such a server.
+    //
+    // Note that we cannot just fail with Com_Error(): it does disconnect,
+    // but its message is lost on the way back to the main menu. So we show
+    // the error ourselves once cgame is down.
+    //
+    if (const auto message = Maps::GetMissingDlcError(mapname))
+    {
+      Command::Execute("disconnect", false);
+
+      Scheduler::Schedule([message = *message]
+      {
+        if (Game::CL_IsCgameInitialized())
+          return false;
+
+        Game::ShowMessageBox(message, "Error");
+        return true;
+      }, Scheduler::Pipeline::MAIN);
+
+      return true;
+    }
+
     // If we are still connecting, then the gamestate we have is for the
     // previous map and loading it on top of the new one fails. So reconnect,
     // the same as for a map we don't have.
@@ -751,21 +775,14 @@ namespace Components
   {
     if (FastFiles::Exists(mapname)) return true;
 
-    for (auto& pack : Maps::DlcPacks)
+    if (const auto message = Maps::GetMissingDlcError(mapname))
     {
-      for (auto map : pack.maps)
+      if (error)
       {
-        if (map == mapname)
-        {
-          if (error)
-          {
-            Logger::Error(Game::ERR_DISCONNECT, "Missing DLC pack {} ({}) containing map {} ({}).\nPlease download it to play this map.",
-              pack.name, pack.index, Localization::LocalizeMapName(mapname.data()), mapname);
-          }
-
-          return dlcIsTrue;
-        }
+        Logger::Error(Game::ERR_DISCONNECT, "{}", *message);
       }
+
+      return dlcIsTrue;
     }
 
     if (error)
@@ -775,6 +792,22 @@ namespace Components
     }
 
     return false;
+  }
+
+  std::optional<std::string> Maps::GetMissingDlcError(const std::string& mapname)
+  {
+    if (FastFiles::Exists(mapname)) return {};
+
+    for (const auto& pack : Maps::DlcPacks)
+    {
+      if (std::ranges::find(pack.maps, mapname) != pack.maps.end())
+      {
+        return std::format("Missing DLC pack {} ({}) containing map {} ({}).\nPlease download it to play this map.",
+          pack.name, pack.index, Localization::LocalizeMapName(mapname.data()), mapname);
+      }
+    }
+
+    return {};
   }
 
   void Maps::HideModel()

@@ -10,5 +10,10 @@ namespace Components
   private:
     static int  Init();
     static void Loop();
+
+    static void __stdcall ReleaseDirectSound(IUnknown** slot);
+    static void PatchMiles();
+
+    static void CL_InitRenderer();
   };
 }

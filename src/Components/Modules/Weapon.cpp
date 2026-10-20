@@ -396,6 +396,63 @@ namespace Components
     }
   }
 
+  // The game draws a weapon item from the weapon and model indexes packed in
+  // the entity's item index, but doesn't check that the weapon is actually
+  // loaded and crashes if it isn't (0x5860B1). So we skip such an item, the
+  // same as the game does when the weapon has no model for that index.
+  //
+  // @@ Not clear how we end up with an item for a weapon we don't have.
+  //    Perhaps we should fail with a fatal error instead (which the crash
+  //    reporter would offer to send us) so that we can find out?
+  //
+  __declspec(naked) void Weapon::CG_DrawItem_Stub()
+  {
+    __asm
+    {
+      mov eax, 0x440EB0 // BG_GetWeaponDef
+      call eax
+
+      test eax, eax
+      jz null
+
+      // Game code
+      push 0x5860B1
+      ret
+
+    null:
+      add esp, 0x4
+
+      push 0x58615A // Exit function
+      ret
+    }
+  }
+
+  // The game creates the view model tree from the animations of the hand
+  // when the weapon is dual wielded. But it doesn't create those for a weapon
+  // with noDualWield set and so, if a server or script hands out such a
+  // weapon dual wielded anyway, the tree ends up with no animations and the
+  // game crashes as soon as it animates it (0x651F37). So we fall back to the
+  // weapon's own animations in this case, which the game makes sure exist.
+  //
+  // Note that esi points to the weapon's entry in cg_weaponsStatic, the
+  // animations of the weapon followed by those of each hand.
+  //
+  __declspec(naked) void Weapon::CG_CreateViewModelTree_Stub()
+  {
+    __asm
+    {
+      cmp dword ptr[esp + 0x4], 0
+      jnz create
+
+      mov eax, [esi]
+      mov [esp + 0x4], eax
+
+    create:
+      mov eax, 0x4CE030 // Com_XAnimCreateSmallTree
+      jmp eax
+    }
+  }
+
   __declspec(naked) void Weapon::JavelinResetHook_Stub()
   {
     static DWORD PM_Weapon_OffHandEnd_t = 0x577A10;
@@ -588,6 +645,9 @@ namespace Components
     Utils::Hook(0x59E341, CG_UpdatePrimaryForAltModeWeapon_Stub, HOOK_JUMP).install()->quick();
     Utils::Hook(0x48BB25, CG_SelectWeaponIndex_Stub, HOOK_JUMP).install()->quick();
 
+    // Fix crash when drawing an item of a weapon that isn't loaded (0x5860B1)
+    Utils::Hook(0x5860AC, CG_DrawItem_Stub, HOOK_JUMP).install()->quick();
+
     AssertOffset(Game::playerState_s, Game::playerState_s::weapCommon.weapFlags, 0x2BC);
     Utils::Hook(0x56E825, WeaponEntCanBeGrabbed_Stub, HOOK_JUMP).install()->quick();
 
@@ -595,6 +655,9 @@ namespace Components
     AssertOffset(Game::playerState_s, grenadeTimeLeft, 0x34);
     BGWeaponOffHandFix = Game::Dvar_RegisterBool("bg_weaponOffHandFix", true, Game::DVAR_CODINFO, "Reset grenadeTimeLeft after using off hand weapon");
     Utils::Hook(0x578F52, JavelinResetHook_Stub, HOOK_JUMP).install()->quick();
+
+    // Fix crash when a weapon with noDualWield is dual wielded (0x651F37)
+    Utils::Hook(0x59C0ED, CG_CreateViewModelTree_Stub, HOOK_CALL).install()->quick();
 
     CGRecoilMultiplier = Game::Dvar_RegisterFloat("cg_recoilMultiplier",
       1.0f, 0.0f, 1000.0f, Game::DVAR_CHEAT,

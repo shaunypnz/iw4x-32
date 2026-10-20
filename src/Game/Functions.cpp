@@ -141,6 +141,8 @@ namespace Game
 
   LiveStorage_GetStat_t LiveStorage_GetStat = LiveStorage_GetStat_t(0x471F60);
   LiveStorage_SetStat_t LiveStorage_SetStat = LiveStorage_SetStat_t(0x4CC5D0);
+  LiveStorage_DoWeHaveStats_t LiveStorage_DoWeHaveStats = LiveStorage_DoWeHaveStats_t(0x444CA0);
+  LiveStorage_ReadStats_t LiveStorage_ReadStats = LiveStorage_ReadStats_t(0x44CEC0);
 
   Scr_AddSourceBuffer_t Scr_AddSourceBuffer = Scr_AddSourceBuffer_t(0x61ABC0);
 
@@ -182,9 +184,11 @@ namespace Game
   SEH_StringEd_GetString_t SEH_StringEd_GetString = SEH_StringEd_GetString_t(0x44BB30);
   SEH_ReadCharFromString_t SEH_ReadCharFromString = SEH_ReadCharFromString_t(0x486560);
   SEH_GetCurrentLanguage_t SEH_GetCurrentLanguage = SEH_GetCurrentLanguage_t(0x4F6110);
+  SEH_GetLanguageName_t SEH_GetLanguageName = SEH_GetLanguageName_t(0x422570);
 
   SND_Init_t SND_Init = SND_Init_t(0x46A630);
   SND_InitDriver_t SND_InitDriver = SND_InitDriver_t(0x4F5090);
+  SND_SetHWND_t SND_SetHWND = SND_SetHWND_t(0x64B600);
 
   SockadrToNetadr_t SockadrToNetadr = SockadrToNetadr_t(0x4F8460);
 
@@ -210,6 +214,7 @@ namespace Game
   UI_ReplaceConversions_t UI_ReplaceConversions = UI_ReplaceConversions_t(0x4E9740);
   UI_ParseInfos_t UI_ParseInfos = UI_ParseInfos_t(0x4027A0);
   UI_GetMapDisplayName_t UI_GetMapDisplayName = UI_GetMapDisplayName_t(0x420700);
+  UI_LoadArenas_t UI_LoadArenas = UI_LoadArenas_t(0x4A95B0);
   UI_GetGameTypeDisplayName_t UI_GetGameTypeDisplayName = UI_GetGameTypeDisplayName_t(0x4EB0B0);
   ParseConfigStringToStruct_t ParseConfigStringToStruct = ParseConfigStringToStruct_t(0x403B60);
 
@@ -424,12 +429,15 @@ namespace Game
 
   huffman_t* msgHuff = reinterpret_cast<huffman_t*>(0x1CB9EC0);
 
+  FxMarksSystem* fx_marksSystemPool = reinterpret_cast<FxMarksSystem*>(0x173FCD0);
+
   const char* logFileName = reinterpret_cast<const char*>(0x730130);
 
   DObjGetBoneIndex_t DObjGetBoneIndex = reinterpret_cast<DObjGetBoneIndex_t>(0x504F20);
   Com_GetClientDObj_t Com_GetClientDObj = reinterpret_cast<Com_GetClientDObj_t>(0x41FF50);
   CG_WeaponDObjHandle_t CG_WeaponDObjHandle = reinterpret_cast<CG_WeaponDObjHandle_t>(0x41DB70);
   CG_StopBoltedEffect_t CG_StopBoltedEffect = reinterpret_cast<CG_StopBoltedEffect_t>(0x44C230);
+  FX_ImpactMarkCallback_t FX_ImpactMarkCallback = reinterpret_cast<FX_ImpactMarkCallback_t>(0x5CFC70);
 
 
   const char* TableLookup(StringTable* stringtable, int row, int column)

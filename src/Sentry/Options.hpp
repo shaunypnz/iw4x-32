@@ -16,17 +16,17 @@ namespace Sentry
     std::filesystem::path reporter;
 
     sentry_minidump_mode_t minidump {SENTRY_MINIDUMP_MODE_SMART};
+
+    // Raw MINIDUMP_TYPE flags which, if present, take precedence over the
+    // minidump mode.
+    //
+    std::optional<sentry_minidump_flags_t> minidump_flags;
     sentry_crash_reporting_mode_t reporting {
       SENTRY_CRASH_REPORTING_MODE_NATIVE_WITH_MINIDUMP};
 
     size_t breadcrumbs {128};
     std::chrono::milliseconds shutdown_timeout {2000};
     std::chrono::milliseconds refresh_interval {5000};
-
-    // How long the main thread may go without a heartbeat before we consider
-    // the game frozen.
-    //
-    std::chrono::milliseconds hang_timeout {20000};
 
     bool debug {false};
     // Session tracking reports every run, crash or not, which is not
