@@ -9,23 +9,32 @@ this file. IW4x-32.sh runs it. Windows: iw4x32.ps1 next to it does the same step
   ./IW4x-32.sh --vanilla-server [port]  normal 18-player IW4x server
   ./IW4x-32.sh --setup [game folder]    do the setup again, e.g. for another game folder
   ./IW4x-32.sh --uninstall              put the official IW4x files back, remove the menu entries
+  ./IW4x-32.sh --fix                    the game crashed / hangs and Steam will not start it: close what is left
   --no-update  skip the update check     --dry  only print what would be started
   --direct     Steam install: run iw4x.exe with the game's Proton even when the Steam launch option is set
   anything else goes to the game, e.g.  +connect 1.2.3.4:28960
 
 Setup (the first start does it by itself): finds MW2 (the folder this IW4x-32 folder is in, then every Steam
-library: native, Snap, Flatpak), copies IW4x-32 to <game>/IW4x-32, lets the OFFICIAL IW4x launcher install or update
-IW4x (IW4x-32 never downloads IW4x's own files), backs up the official iw4x.dll, installs files/iw4x.dll (iw4x.exe
-stays the official one) and makes the menu entries.
+library: native, Snap, Flatpak), copies IW4x-32 to <game>/IW4x-32 (when that game already has this IW4x-32 or a
+newer one, that one is started instead), lets the OFFICIAL IW4x launcher install IW4x when there is none (IW4x-32
+never downloads IW4x's own files), backs up the official iw4x.dll, installs files/iw4x.dll (iw4x.exe stays the
+official one) and makes the menu entries.
+Versions: IW4x-32's iw4x.dll is built for one IW4x release (x, e.g. r5278); your official IW4x is y. Both are read
+from the dlls themselves. x = y: all good. Otherwise vanilla IW4x runs y and IW4x-32 runs its own x build; a y
+older than x is updated with the official launcher first.
 Every start: checks GitHub for a new IW4x-32 (5 s, no network = just start) and installs it with every file's SHA-256
-checked; puts IW4x-32 back when the IW4x launcher's file check replaced it; an IW4x older than this IW4x-32 is made
-for is updated with the official launcher, a newer one only gets a warning (warn, never block).
+checked; puts IW4x-32 back when the IW4x launcher's file check replaced it. The official IW4x launcher only runs when
+it is needed (it checks GitHub, which allows 60 requests an hour): to install or update IW4x, or for vanilla IW4x -
+at most every 15 minutes with its online check, in between with --skip-remote.
+A crash: game processes left behind (crash reporter, wineserver, Steam's reaper) keep Steam saying MW2 is running.
+Before every start they are closed, [6] in the menu / --fix does it on its own, and after the game closes the
+launcher offers [R] to start it again - no need to restart Steam.
 Steam (Proton): the game runs in its own Proton prefix. With the Steam launch option
     bash -c 'exec "${@/iw4mp.exe/iw4x.exe}"' -- %command%
 Steam starts it (and the Play button in Steam works too); without it, the game's Proton is run directly.
-Test hooks: IW4X32_GAME, IW4X32_STEAM, IW4X32_UPDATE_URL, IW4X32_IW4X_LATEST_URL, IW4X32_LAUNCHER_RELEASE_URL,
+Test hooks: IW4X32_GAME, IW4X32_STEAM, IW4X32_UPDATE_URL, IW4X32_LAUNCHER_RELEASE_URL,
 IW4X32_NO_START=1 (print the command, start nothing), IW4X32_NO_SHORTCUTS=1, IW4X32_YES=1 (uninstall without asking)."""
-import glob, hashlib, io, json, os, re, select, shlex, shutil, subprocess, sys, tarfile, tempfile, time
+import glob, hashlib, io, json, os, re, select, shlex, shutil, signal, subprocess, sys, tarfile, tempfile, time
 import urllib.parse, urllib.request
 
 REPO = "shaunypnz/iw4x-32"
@@ -34,14 +43,14 @@ OFFICIAL_DLL = "57922527bbbb5dd5a256b8a6243179eb5e28d7e2bcc7bbf53f5ace0518f6da1c
 OFFICIAL_EXE = "49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009"
 V1_EXE = "2609c2687dd2ffb3f32c7687ed04f57b38ef6879c14b1c546faf8bfd8f35ea6b"   # iw4x.exe of an IW4x-32 v1.x install
 MANIFEST = os.environ.get("IW4X32_UPDATE_URL") or f"https://github.com/{REPO}/releases/latest/download/latest.json"
-IW4X_LATEST = os.environ.get("IW4X32_IW4X_LATEST_URL") or "https://api.github.com/repos/iw4x/iw4x-client/releases/latest"
 LAUNCHER_RELEASE = os.environ.get("IW4X32_LAUNCHER_RELEASE_URL") or "https://api.github.com/repos/iw4x/launcher/releases/latest"
 LAUNCH_OPTION = """bash -c 'exec "${@/iw4mp.exe/iw4x.exe}"' -- %command%"""
 MW2 = "Call of Duty Modern Warfare 2"
 FILES = os.path.dirname(os.path.abspath(__file__))        # <kit>/files: the program, backup/ and mode.txt
 KIT = os.path.dirname(FILES)                              # the IW4x-32 folder
 GAME = None
-MODES = ["iw4x32", "vanilla", "server", "vanilla-server", "uninstall"]
+MODES = ["iw4x32", "vanilla", "server", "vanilla-server", "uninstall", "fix"]
+REMOTE_EVERY = 15 * 60        # s between the official launcher's online checks (GitHub: 60 requests an hour)
 # what IW4x-32 v1.x, v2.0 and the v2.1 test builds had in the IW4x-32 folder; everything is IW4x-32.sh + files/ now
 LEGACY = ["AI_CREDITS.txt", "CHANGES.txt", "SHA256SUMS.txt", "IW4x-32 Launcher.bat", "IW4x-32 Setup.bat",
           "Install IW4x-32.bat", "Play IW4x-32 (IW4x launcher, no file check).bat", "Play IW4x-32 (no update).bat",
@@ -64,6 +73,7 @@ class Opts:
     setup_path = None
     game_args = []
     warned = False
+    detached = False
 
 
 O = Opts()
@@ -75,7 +85,7 @@ def parse(argv):
         a = argv[i]
         if a in ("--play", "--iw4x32"):
             O.mode = "iw4x32"
-        elif a in ("--vanilla", "--server", "--vanilla-server", "--uninstall"):
+        elif a in ("--vanilla", "--server", "--vanilla-server", "--uninstall", "--fix"):
             O.mode = a[2:]
         elif a == "--setup":
             O.setup = True
@@ -150,12 +160,73 @@ def is_game(d):
     return bool(d) and os.path.isdir(d) and any(os.path.isfile(os.path.join(d, e)) for e in ("iw4mp.exe", "iw4x.exe", "iw2mp.exe"))
 
 
-def installed_version():
+def installed_version(kit=None):
     try:
-        m = re.match(r"IW4x-32 (v[\d.]+)", open(os.path.join(KIT, "README.txt"), encoding="utf-8", errors="replace").readline())
+        m = re.match(r"IW4x-32 (v[\d.]+)", open(os.path.join(kit or KIT, "README.txt"), encoding="utf-8", errors="replace").readline())
         return m.group(1) if m else "v0"
     except OSError:
         return "v0"
+
+
+def state():
+    """files/state.json: when the official launcher last checked online"""
+    try:
+        return json.load(open(F("state.json")))
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(**kv):
+    s = state()
+    s.update(kv)
+    try:
+        json.dump(s, open(F("state.json"), "w"))
+    except OSError:
+        pass
+
+
+_DLL = {}
+
+
+def dll_info(p):
+    """(the IW4x release an iw4x.dll is, whether it is IW4x-32's): both are in its strings ("IW4x r5278", "iw4x32");
+    (None, False) for no file / no version in it"""
+    try:
+        st = os.stat(p)
+    except (OSError, TypeError):
+        return None, False
+    key = (p, st.st_size, st.st_mtime_ns)
+    if key not in _DLL:
+        data = open(p, "rb").read()
+        m = re.search(rb"IW4x \(?(r\d{4,})", data)
+        _DLL[key] = (m.group(1).decode() if m else None, re.search(rb"(?i)iw4x32", data) is not None)
+    return _DLL[key]
+
+
+def built_for():
+    """x: the IW4x release this IW4x-32's iw4x.dll is built on"""
+    return dll_info(F("iw4x.dll"))[0] or OFFICIAL_VER
+
+
+def official_dll():
+    """the official IW4x iw4x.dll: the one in the game folder, or its backup while IW4x-32's is in"""
+    return F("backup/iw4x.dll") if dll_info(G("iw4x.dll"))[1] else G("iw4x.dll")
+
+
+def iw4x_version():
+    """y: the official IW4x release installed in the game folder (None = unknown)"""
+    p = official_dll()
+    return dll_info(p)[0] or (OFFICIAL_VER if sha(p) == OFFICIAL_DLL else None)
+
+
+def version_status():
+    x, y = built_for(), iw4x_version()
+    if not y:
+        return f"IW4x-32 is built for IW4x {x} - the version of your IW4x is unknown"
+    if y == x:
+        return f"IW4x-32 is built for IW4x {x}, your IW4x is {y} - they match"
+    return (f"IW4x-32 is built for IW4x {x}, your IW4x is {y} ({'newer' if vtuple(y) > vtuple(x) else 'older'}) - "
+            f"vanilla IW4x runs {y}, IW4x-32 runs its own {x} build")
 
 
 def game_running():
@@ -171,6 +242,9 @@ def game_running():
 
 
 def backup_dll():
+    """the official iw4x.dll in the game folder becomes the backup (never an IW4x-32 one, e.g. an older release's)"""
+    if dll_info(G("iw4x.dll"))[1]:
+        return
     os.makedirs(F("backup"), exist_ok=True)
     shutil.copy2(G("iw4x.dll"), F("backup/iw4x.dll"))
 
@@ -195,12 +269,6 @@ def restore_v1_exe(official_exe):
         return
     say("an older IW4x-32 replaced iw4x.exe - putting your official one back")
     shutil.copy2(F("backup/iw4x.exe"), G("iw4x.exe"))
-
-
-def warn_newer_iw4x(want, latest):
-    """IW4x-32 is a version behind: say it plainly and start anyway (owner's rule: warn, never block)"""
-    if want and latest and vtuple(latest) > vtuple(want):
-        warn(f"IW4x {latest} is out, this IW4x-32 is made for {want} - an IW4x-32 update normally follows within a day")
 
 
 # ---- the official IW4x launcher: it installs and updates IW4x itself --------------------------------------------
@@ -232,13 +300,22 @@ def ensure_launcher():
     return G("iw4x-launcher")
 
 
-def run_launcher(args):
+def remote_due():
+    return time.time() - float(state().get("launcher_remote_at") or 0) > REMOTE_EVERY
+
+
+def run_launcher(args, remote=True):
+    """the official IW4x launcher; remote=False: --skip-remote (no GitHub, no file check). The official iw4x.dll goes
+    back in first - its file check finds IW4x-32's and downloads the official one again otherwise."""
     launcher = ensure_launcher()
     if not launcher:
         return None
-    cmd = [launcher] + list(args)
+    put_official_dll()
+    cmd = [launcher] + list(args) + ([] if remote else ["--skip-remote"])
     if launcher.endswith(".exe"):
         cmd = ["wine"] + cmd
+    if remote:
+        save_state(launcher_remote_at=time.time())
     return subprocess.run(cmd, cwd=GAME)
 
 
@@ -247,80 +324,59 @@ def install_official():
     return run_launcher(["--skip-launch"]) is not None
 
 
-def iw4x_latest():
-    """the newest official IW4x release name (rNNNN), None when it cannot be checked"""
-    try:
-        return json.loads(get(IW4X_LATEST))["tag_name"]
-    except Exception:
-        return None
+def put_official_dll():
+    if dll_info(G("iw4x.dll"))[1] and sha(F("backup/iw4x.dll")):
+        tmp = G("iw4x.dll.iw4x32-off")
+        shutil.copy2(F("backup/iw4x.dll"), tmp)
+        os.replace(tmp, G("iw4x.dll"))
+        return True
+    return False
 
 
 def restore_official():
     """put the official IW4x iw4x.dll back - what vanilla IW4x and a vanilla server start from"""
-    if sha(G("iw4x.dll")) == sha(F("iw4x.dll")) and sha(F("backup/iw4x.dll")):
-        say("putting the official IW4x iw4x.dll back")
-        tmp = G("iw4x.dll.iw4x32-off")
-        shutil.copy2(F("backup/iw4x.dll"), tmp)
-        os.replace(tmp, G("iw4x.dll"))
+    if put_official_dll():
+        say("put the official IW4x iw4x.dll back")
     restore_v1_exe(None)
 
 
 # ---- updates and repairs ------------------------------------------------------------------------------------------
-def repair(m, latest):
-    """the IW4x launcher (or a repair) put the official iw4x.dll back: re-install IW4x-32. An IW4x that is neither
-    the backed-up one nor the one this release is made for: older -> the official launcher updates it, newer ->
-    warn and start IW4x-32 on it (it becomes the backup)."""
-    want = (m or {}).get("official") or {"iw4x.dll": OFFICIAL_DLL, "iw4x.exe": OFFICIAL_EXE}
-    want_ver = (m or {}).get("iw4x") or OFFICIAL_VER
-    restore_v1_exe(want.get("iw4x.exe"))
-    ours, now = sha(F("iw4x.dll")), sha(G("iw4x.dll"))
-    if now == ours:
-        return
-    if not now:
+def repair(m):
+    """IW4x-32's iw4x.dll belongs in the game folder whenever IW4x-32 starts: the official IW4x launcher (vanilla, its
+    file check) puts the official one back - a new official one becomes the backup. An IW4x older than the one
+    IW4x-32 is built for is updated first; a newer one stays (vanilla runs it, IW4x-32 runs its own build)."""
+    restore_v1_exe(((m or {}).get("official") or {}).get("iw4x.exe") or OFFICIAL_EXE)
+    if not os.path.isfile(G("iw4x.dll")):
         say("iw4x.dll is missing - the official IW4x launcher repairs IW4x")
         install_official()
-        now = sha(G("iw4x.dll"))
-    if not now:
-        raise RuntimeError("IW4x is not installed in the game folder")
-    bak = sha(F("backup/iw4x.dll"))
-    if bak and now == bak:
-        say("the official IW4x iw4x.dll is back (IW4x launcher?) - putting IW4x-32 back")
+        if not os.path.isfile(G("iw4x.dll")):
+            raise RuntimeError("IW4x is not installed in the game folder")
+    ours = sha(F("iw4x.dll"))
+    if sha(G("iw4x.dll")) != ours and not dll_info(G("iw4x.dll"))[1]:
+        if sha(G("iw4x.dll")) == sha(F("backup/iw4x.dll")):
+            say("the official IW4x iw4x.dll is back (IW4x launcher?) - putting IW4x-32 back")
+        else:
+            say(f"the official IW4x launcher installed IW4x {iw4x_version() or '(unknown version)'} - kept as your vanilla IW4x")
+            backup_dll()
+    update_iw4x()
+    if sha(G("iw4x.dll")) != ours:
         install_ours()
-        return
-    if now in (want["iw4x.dll"], OFFICIAL_DLL):
-        say("IW4x was updated - putting IW4x-32 back")
-        backup_dll()
-        install_ours()
-        return
-    if latest and vtuple(latest) <= vtuple(want_ver) and update_iw4x(want["iw4x.dll"], want_ver, latest) == "ok":
-        say("your IW4x was older than IW4x-32 is made for - updated")
-        install_ours()
-        return
-    warn(f"your IW4x is not {want_ver}, the version IW4x-32 is made for - starting IW4x-32 on it anyway; it is your "
-         "backup now (vanilla goes back to it)")
-    backup_dll()
-    install_ours()
 
 
-def update_iw4x(want_dll, want_ver, latest):
-    if sha(F("backup/iw4x.dll")) == want_dll:
-        return "ok"
-    if not latest:
-        say("cannot check the IW4x version - not updating it now")
-        return "skip"
-    if latest != want_ver:
-        say(f"IW4x {latest} is out; IW4x-32 for it is not ready yet - keeping your current IW4x")
-        return "skip"
-    say(f"updating IW4x to {want_ver} (official IW4x launcher, update only) ...")
+def update_iw4x():
+    """y older than x: the official IW4x launcher updates IW4x (at most every 15 min - it asks GitHub)"""
+    x, y = built_for(), iw4x_version()
+    if not y or vtuple(y) >= vtuple(x):
+        return
+    if not remote_due():
+        say(f"your IW4x {y} is older than {x} (IW4x-32 is built for it) - the IW4x launcher tried less than 15 min ago")
+        return
+    say(f"your IW4x {y} is older than {x} (IW4x-32 is built for it) - the official IW4x launcher updates it ...")
     r = run_launcher(["--skip-launch"])
-    if r is None:
-        return "skip"
-    if sha(G("iw4x.dll")) != want_dll:
-        say(f"the IW4x launcher (exit {r.returncode}) did not install IW4x {want_ver} - you are on the official IW4x "
-            "files now; start again later to retry")
-        return "failed"
-    backup_dll()
-    return "ok"
+    if r is not None and os.path.isfile(G("iw4x.dll")):
+        backup_dll()
+    if vtuple(iw4x_version()) < vtuple(x):
+        say(f"the IW4x launcher did not update IW4x (exit {getattr(r, 'returncode', '-')}) - start again later to retry")
 
 
 def update_kit(m):
@@ -348,6 +404,7 @@ def update_kit(m):
 
 
 def do_update():
+    """a new IW4x-32: every changed file downloaded and checked, then IW4x-32 is put (back) in"""
     have = installed_version()
     m = None
     if not O.no_update:
@@ -355,20 +412,16 @@ def do_update():
             m = json.loads(get(MANIFEST))
         except Exception as e:
             say(f"no update check ({type(e).__name__}) - starting IW4x-32 {have}")
-    latest = None if O.no_update else iw4x_latest()
-    warn_newer_iw4x((m or {}).get("iw4x") or OFFICIAL_VER, latest)
     if m and vtuple(m["version"]) > vtuple(have) and game_running():
         say("the game is running - updating next time")
         m = None
-    repair(m, latest)
+    repair(m)
     if not m or vtuple(m["version"]) <= vtuple(have):
         return
-    if update_iw4x(m["official"]["iw4x.dll"], m["iw4x"], latest) != "ok":
-        return
     update_kit(m)
-    install_ours()
+    repair(m)                                            # the new iw4x.dll in; an IW4x older than it is built for: updated
     migrate_legacy()
-    say(f"updated to IW4x-32 {m['version']} (IW4x {m['iw4x']})")
+    say(f"updated to IW4x-32 {m['version']} (built for IW4x {built_for()})")
 
 
 # ---- setup ----------------------------------------------------------------------------------------------------------
@@ -433,7 +486,7 @@ def copy_kit(dest):
         if os.path.isfile(os.path.join(KIT, n)):
             shutil.copy2(os.path.join(KIT, n), os.path.join(dest, n))
     for n in os.listdir(FILES):
-        if n in ("backup", "mode.txt", "__pycache__") or n.startswith("."):
+        if n in ("backup", "mode.txt", "state.json", "__pycache__") or n.startswith("."):
             continue
         s, t = os.path.join(FILES, n), os.path.join(dest, "files", n)
         if os.path.isdir(s):
@@ -486,19 +539,16 @@ def install_here():
     if game_running():
         say("ERROR: IW4x is running - close the game and try again")
         return False
-    ours = sha(F("iw4x.dll"))
-    if sha(G("iw4x.dll")) not in (ours, OFFICIAL_DLL):
+    # the official launcher only when there is no official IW4x here (it asks GitHub and checks every file)
+    if not os.path.isfile(G("iw4x.exe")) or not sha(official_dll()):
         install_official()
     restore_v1_exe(OFFICIAL_EXE)
-    now = sha(G("iw4x.dll"))
-    if not now or not os.path.isfile(G("iw4x.exe")):
+    if not sha(official_dll()) or not os.path.isfile(G("iw4x.exe")):
         say("ERROR: IW4x could not be installed - is the internet working? Start IW4x-32 again to retry.")
         return False
-    if now != ours:
-        if now != OFFICIAL_DLL:
-            warn(f"this IW4x is not {OFFICIAL_VER}, the version IW4x-32 is made for - installing anyway (an IW4x-32 "
-                 "update normally follows within a day)")
-        backup_dll()
+    backup_dll()
+    update_iw4x()
+    if sha(G("iw4x.dll")) != sha(F("iw4x.dll")):
         install_ours()
     make_shortcuts()
     say("IW4x-32 is installed.")
@@ -518,6 +568,13 @@ def do_setup():
     g = os.path.realpath(g)
     dest = os.path.join(g, "IW4x-32")
     if os.path.realpath(dest) != os.path.realpath(KIT):
+        theirs, mine = installed_version(dest), installed_version()
+        if os.path.isfile(os.path.join(dest, "files", "iw4x32.py")) and vtuple(theirs) >= vtuple(mine):
+            # this game already has IW4x-32 (an update may have made it newer than this copy): start that one - a
+            # setup from here would put this older copy over it, and the next update download it all again
+            say(f"IW4x-32 {theirs} is already set up in {g} - starting that one (this copy, {KIT}, is not needed)")
+            sys.stdout.flush()
+            os.execv(sys.executable, [sys.executable, os.path.join(dest, "files", "iw4x32.py")] + sys.argv[1:])
         try:
             copy_kit(dest)
         except OSError as e:
@@ -566,7 +623,7 @@ def read_mode():
         return "iw4x32"
 
 
-def read_key(timeout):
+def read_key(timeout, keys="\r\n123456"):
     """one key press (no Enter needed), '' after timeout s; a key that is no choice waits 30 s more"""
     import termios, tty
     fd = sys.stdin.fileno()
@@ -578,8 +635,8 @@ def read_key(timeout):
             if not select.select([sys.stdin], [], [], max(0, end - time.time()))[0]:
                 return ""
             c = sys.stdin.read(1)
-            if c in "\r\n12345":
-                return c
+            if keys is None or c.lower() in keys:
+                return c.lower()
             end = time.time() + 30
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
@@ -590,21 +647,23 @@ def select_mode():
     if os.environ.get("IW4X32_NO_MENU") == "1" or not interactive():
         return default
     d = MODES.index(default) + 1
-    print(f"\n  IW4x-32 {installed_version()} - Modern Warfare 2 with 32 players\n  game: {GAME}\n")
+    print(f"\n  IW4x-32 {installed_version()} - Modern Warfare 2 with 32 players\n  game: {GAME}")
+    print(f"  {version_status()}\n")
     print("  [1] Play IW4x-32          32-player servers, and normal ones")
     print("  [2] Play vanilla IW4x     the official IW4x")
     print(f"  [3] Host a 32-player server   (port {O.port})")
     print(f"  [4] Host a normal IW4x server (port {O.port})")
-    print("  [5] Uninstall IW4x-32\n")
-    print(f"  Press 1-5 - or wait: [{d}] starts in 5 s ", end="", flush=True)
+    print("  [5] Uninstall IW4x-32")
+    print("  [6] Game crashed / stuck?  closes what is left of it, so Steam can start it again\n")
+    print(f"  Press 1-6 - or wait: [{d}] starts in 5 s ", end="", flush=True)
     try:
         c = read_key(5)
     except Exception:                                   # no real terminal: a line, then
         c = sys.stdin.readline().strip()[:1] if select.select([sys.stdin], [], [], 5)[0] else ""
-    pick = int(c) if c in ("1", "2", "3", "4", "5") else d
+    pick = int(c) if c in ("1", "2", "3", "4", "5", "6") else d
     print(pick)
     mode = MODES[pick - 1]
-    if mode != "uninstall":
+    if mode in MODES[:4]:
         try:
             open(F("mode.txt"), "w").write(mode + "\n")
         except OSError:
@@ -644,6 +703,125 @@ def launch_option_set(appid):
     return False
 
 
+# ---- after a crash: what is left of the game keeps Steam saying "running" ---------------------------------------------
+def is_game_exe(name):
+    return name.lower().startswith(("iw4x.exe", "iw4x (mm)", "iw4mp.exe"))
+
+
+def leftovers():
+    """[(pid, name)] of this game's processes: the game, its crash reporter, wineserver, Proton's container and Steam's
+    reaper - all carry MW2's AppId or Proton prefix (environment, or the reaper's command line), or run in this game
+    folder. Never a dedicated server, never Steam itself, never this launcher."""
+    appid, compat = steam_app() if GAME and "/steamapps/common/" in GAME else (None, None)
+    ids = {"10190", appid or "10190"}
+    envs = {f"{k}={i}".encode() for k in ("SteamAppId", "SteamGameId") for i in ids}
+    if compat:
+        envs.add(f"STEAM_COMPAT_DATA_PATH={compat}".encode())
+    skip, p = set(), os.getpid()
+    while p > 1 and p not in skip:                       # this launcher and what started it
+        skip.add(p)
+        try:
+            p = int(open(f"/proc/{p}/stat").read().rsplit(")", 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+    game = os.path.realpath(GAME) if GAME else None
+    out = []
+    for d in os.listdir("/proc"):
+        if not d.isdigit() or int(d) in skip:
+            continue
+        try:
+            if os.stat(f"/proc/{d}").st_uid != os.getuid():
+                continue
+            name = open(f"/proc/{d}/comm").read().strip()
+            cmd = open(f"/proc/{d}/cmdline", "rb").read().replace(b"\0", b" ").decode(errors="replace")
+            env = set(open(f"/proc/{d}/environ", "rb").read().split(b"\0"))
+            here = game and os.path.realpath(f"/proc/{d}/cwd") == game
+        except OSError:
+            continue
+        if not cmd or "-dedicated" in cmd or name in ("steam", "steamwebhelper"):
+            continue
+        if env & envs or re.search(r"\bAppId=(%s)\b" % "|".join(ids), cmd) or (here and name.lower().endswith((".exe", ".ex"))):
+            out.append((int(d), name))
+    return out
+
+
+def kill_procs(procs):
+    say("closing what is left of the game (" + ", ".join(sorted({n for _, n in procs})) + ") so Steam can start it again")
+    for sig, wait in ((signal.SIGTERM, 4), (signal.SIGKILL, 2)):
+        for pid, _ in procs:
+            try:
+                os.kill(pid, sig)
+            except OSError:
+                pass
+        end = time.time() + wait
+        while time.time() < end and any(os.path.exists(f"/proc/{pid}") for pid, _ in procs):
+            time.sleep(0.2)
+        procs = [(pid, n) for pid, n in procs if os.path.exists(f"/proc/{pid}")]
+        if not procs:
+            return True
+    say("could not close: " + ", ".join(f"{n} (pid {pid})" for pid, n in procs))
+    return False
+
+
+def clear_leftovers():
+    """before a start: leftovers of a crash are closed; a game that still runs (or hangs) only after a yes.
+    False = it keeps running."""
+    procs = leftovers()
+    if not procs:
+        return True
+    if any(is_game_exe(n) for _, n in procs):
+        if not interactive():
+            say("IW4x is already running - not starting it twice (./IW4x-32.sh --fix closes it)")
+            return False
+        try:
+            a = input("[IW4x-32] IW4x is still running - hung after a crash? Close it and start again? [Y/n] ")
+        except EOFError:
+            a = "n"
+        if a.strip().lower().startswith("n"):
+            return False
+    return kill_procs(procs)
+
+
+def do_fix():
+    procs = leftovers()
+    if not procs:
+        say("nothing of the game is running - Steam can start it")
+        return 0
+    return 0 if kill_procs(procs) else 1
+
+
+def play(start):
+    """start(); when the game closes - a crash too - what is left of it is closed and [R] starts it again, so a crash
+    never needs a Steam restart"""
+    while True:
+        if not clear_leftovers():
+            return 0
+        O.detached = False
+        rc = start()
+        if O.dry or os.environ.get("IW4X32_NO_START") == "1" or not interactive():
+            return rc
+        if O.detached:                                   # Steam / the IW4x launcher started it: wait for the game
+            end = time.time() + 90
+            while time.time() < end and not any(is_game_exe(n) for _, n in leftovers()):
+                time.sleep(2)
+        if any(is_game_exe(n) for _, n in leftovers()):
+            say("the game is running - this window can stay open: when it closes or crashes, [R] starts it again")
+            while any(is_game_exe(n) for _, n in leftovers()):
+                time.sleep(2)
+        time.sleep(2)                                    # crash reporter, wineserver, reaper: give them a moment
+        procs = leftovers()
+        if procs:
+            kill_procs(procs)
+        print("\n  IW4x closed.  [R] start it again  -  any other key, or wait 30 s: close this window ", end="", flush=True)
+        try:
+            c = read_key(30, None)
+        except Exception:
+            c = ""
+        print()
+        if c != "r":
+            return 0                                     # seen and answered: no "Press Enter to close" on top
+
+
 def start_game():
     """what the official IW4x launcher does, minus its file check: without steam_appid.txt / SteamAppId Steam takes
     over and starts normal MW2"""
@@ -665,6 +843,7 @@ def start_game():
         return 1
     if not O.direct and launch_option_set(appid):
         say("starting IW4x-32 through Steam (launch option found)")
+        O.detached = True
         if shutil.which("steam"):
             return run(["steam", "-applaunch", appid] + O.game_args)
         return run(["xdg-open", f"steam://rungameid/{appid}"])
@@ -753,14 +932,28 @@ def main():
             return 1
     elif migrated:
         make_shortcuts()
+    if O.mode == "fix":
+        return do_fix()
     mode = O.mode or select_mode()
+    while mode == "fix":                                 # [6] in the menu: clean up, then the menu again
+        do_fix()
+        mode = select_mode()
     O.mode = mode
     if mode == "vanilla":
         restore_official()
-        say("starting vanilla IW4x (the official IW4x launcher updates it first) ...")
         if O.dry or os.environ.get("IW4X32_NO_START") == "1":
+            say("starting vanilla IW4x " + (iw4x_version() or ""))
             return 0
-        return 0 if run_launcher([]) is not None else 1
+
+        def vanilla():
+            remote = remote_due()
+            say(f"starting vanilla IW4x {iw4x_version() or ''} (the official IW4x launcher"
+                + (" updates it first) ..." if remote else ", no online check - it checked less than 15 min ago) ..."))
+            t0 = time.time()
+            r = run_launcher([], remote)
+            O.detached = time.time() - t0 < 20          # it started the game and did not wait for it
+            return 0 if r is not None else 1
+        return play(vanilla)
     if mode == "vanilla-server":
         if not O.dry:
             restore_official()
@@ -771,7 +964,8 @@ def main():
         do_update()
     if mode == "server":
         return start_server(32, "server_iw4x32.cfg", "IW4x-32 server - 32 players")
-    return start_game()
+    say(version_status())
+    return play(start_game)
 
 
 if __name__ == "__main__":

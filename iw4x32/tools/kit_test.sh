@@ -6,8 +6,12 @@
 #   IW4x, the official dll is backed up, ours goes in; a second start changes nothing; the IW4x launcher putting the
 #   official dll back is repaired; server (port, 32 slots, userraw cfg); vanilla puts the official dll back; a new
 #   release updates the kit (legacy shims skipped), a second run downloads nothing; a download with a wrong SHA-256
-#   changes nothing and the game still starts; a newer IW4x warns and still starts; a v2.0 folder is migrated through
-#   its old entry point (iw4x32_update.py / .ps1); uninstall; only the launcher script downloaded (bootstrap).
+#   changes nothing and the game still starts; an older copy of the kit hands over to the newer one in the game
+#   folder; versions (built-for x from our dll, your IW4x y from the official one): a newer y stays, an older y is
+#   updated by the official launcher (at most every 15 min); the official launcher gets the official dll and
+#   --skip-remote when it checked online recently; a v2.0 folder is migrated through its old entry point
+#   (iw4x32_update.py / .ps1); uninstall; --fix closes a crashed game's leftovers (py); only the launcher script
+#   downloaded (bootstrap).
 # Usage: bash iw4x32/tools/kit_test.sh [py|ps1]...      (default: both; test tree left under .scratch/)
 set -uo pipefail
 KIT_SRC=${KIT_SRC:-iw4x32/release}
@@ -21,6 +25,10 @@ has() { grep -qF -- "$2" "$1" && ok "$3" || { bad "$3 (no '$2' in output)"; sed 
 hasnt() { grep -qF -- "$2" "$1" && { bad "$3 ('$2' in output)"; sed 's/^/       | /' "$1" | tail -15; } || ok "$3"; }
 same() { [ "$(cat "$1" 2>/dev/null | sha256sum)" = "$(cat "$2" 2>/dev/null | sha256sum)" ] && ok "$3" || bad "$3"; }
 sha() { printf %s "$1" | sha256sum | cut -d' ' -f1; }
+# x = the IW4x release our dll is built for (its strings say "IW4x rNNNN"); the fake official dll says the same
+X=$(grep -aoE 'IW4x \(?r[0-9]{4,}' "$KIT_SRC/files/iw4x.dll" | head -1 | grep -oE 'r[0-9]+')
+[ -n "$X" ] || { echo "no IW4x version in $KIT_SRC/files/iw4x.dll"; exit 1; }
+OFF="OFFICIAL-DLL IW4x $X"; export FAKE_OFF=$OFF
 
 # ---- the local "GitHub" -------------------------------------------------------------------------------------------
 WEB=$T/web; mkdir -p "$WEB/iw4x"
@@ -28,7 +36,6 @@ python3 -u -m http.server 0 --bind 127.0.0.1 --directory "$WEB" > "$T/http.log" 
 HTTP=$!; trap 'kill $HTTP 2>/dev/null' EXIT
 for _ in $(seq 50); do PORT=$(grep -o 'port [0-9]*' "$T/http.log" | cut -d' ' -f2); [ -n "$PORT" ] && break; sleep 0.1; done
 URL=http://127.0.0.1:$PORT
-iw4x_latest() { printf '{"tag_name": "%s"}' "$1" > "$WEB/iw4x/latest.json"; }
 manifest() {   # manifest <dir under web> <version> [file-with-wrong-hash]: writes $WEB/latest.json
     python3 - "$WEB" "$1" "$2" "${3:-}" "$URL" <<'EOF'
 import hashlib, json, os, sys
@@ -41,8 +48,8 @@ for dp, dn, fn in os.walk(root):
         files[p] = hashlib.sha256(open(os.path.join(dp, n), "rb").read()).hexdigest()
 if wrong:
     files[wrong] = "0" * 64
-off = {"iw4x.dll": hashlib.sha256(b"OFFICIAL-DLL").hexdigest(), "iw4x.exe": hashlib.sha256(b"OFFICIAL-EXE").hexdigest()}
-json.dump({"version": ver, "iw4x": "r5168", "official": off, "base_url": f"{url}/{d}/", "files": files,
+off = {"iw4x.dll": hashlib.sha256(os.environ["FAKE_OFF"].encode()).hexdigest(), "iw4x.exe": hashlib.sha256(b"OFFICIAL-EXE").hexdigest()}
+json.dump({"version": ver, "iw4x": os.environ["FAKE_OFF"].split()[-1], "official": off, "base_url": f"{url}/{d}/", "files": files,
            "legacy": ["iw4x32_update.ps1", "iw4x32_update.py"]}, open(os.path.join(web, "latest.json"), "w"))
 EOF
 }
@@ -52,8 +59,8 @@ KIT0=$T/kit0
 cp -a "$KIT_SRC" "$KIT0"
 find "$KIT0" -name __pycache__ -prune -exec rm -rf {} +
 for f in "$KIT0/files/iw4x32.py" "$KIT0/files/iw4x32.ps1"; do
-    sed -i -E "s/^(\\\$?OFFICIAL_DLL = .)[0-9a-f]+/\\1$(sha OFFICIAL-DLL)/; s/^(\\\$?OFFICIAL_EXE = .)[0-9a-f]+/\\1$(sha OFFICIAL-EXE)/; s/^(\\\$?V1_EXE = .)[0-9a-f]+/\\1$(sha V1-EXE)/" "$f"
-    grep -q "$(sha OFFICIAL-DLL)" "$f" || { echo "could not point $f at the fake files"; exit 1; }
+    sed -i -E "s/^(\\\$?OFFICIAL_DLL = .)[0-9a-f]+/\\1$(sha "$OFF")/; s/^(\\\$?OFFICIAL_EXE = .)[0-9a-f]+/\\1$(sha OFFICIAL-EXE)/; s/^(\\\$?V1_EXE = .)[0-9a-f]+/\\1$(sha V1-EXE)/" "$f"
+    grep -q "$(sha "$OFF")" "$f" || { echo "could not point $f at the fake files"; exit 1; }
 done
 # release v2.0 = this kit; release v9.9 = this kit with a new README line 1 and a changed CHANGES.txt
 cp -a "$KIT0" "$WEB/rel20"
@@ -64,8 +71,8 @@ fake_game() {   # fake_game <dir>: an MW2 folder from Steam (no IW4x yet) with t
     mkdir -p "$1"; printf 'STEAM-MW2' > "$1/iw4mp.exe"
     cat > "$1/iw4x-launcher" <<'EOF'
 #!/bin/sh
-printf '%s\n' "$*" >> "$PWD/launcher-args.txt"
-printf '%s' "${FAKE_IW4X_DLL:-OFFICIAL-DLL}" > "$PWD/iw4x.dll"
+printf '%s | dll: %s\n' "$*" "$(head -c 40 "$PWD/iw4x.dll" 2>/dev/null | tr -d '\0')" >> "$PWD/launcher-args.txt"
+printf '%s' "${FAKE_IW4X_DLL:-$FAKE_OFF}" > "$PWD/iw4x.dll"
 [ -f "$PWD/iw4x.exe" ] && [ "$(cat "$PWD/iw4x.exe")" = V1-EXE ] || printf 'OFFICIAL-EXE' > "$PWD/iw4x.exe"
 EOF
     chmod +x "$1/iw4x-launcher"
@@ -86,7 +93,7 @@ for IMPL in "${IMPLS[@]}"; do
     printf '#!/bin/sh\n' > "$LIB/steamapps/common/Proton 9.0/proton"; chmod +x "$LIB/steamapps/common/Proton 9.0/proton"
     printf 'Proton 9.0\n%s\n' "$LIB/steamapps/common/Proton 9.0/files/share/fonts/" > "$LIB/steamapps/compatdata/10190/config_info"
     cp -a "$KIT0" "$R/download"; rm -f "$R/download/iw4x32_update.ps1" "$R/download/iw4x32_update.py"
-    export IW4X32_STEAM=$STEAM IW4X32_UPDATE_URL=$URL/latest.json IW4X32_IW4X_LATEST_URL=$URL/iw4x/latest.json \
+    export IW4X32_STEAM=$STEAM IW4X32_UPDATE_URL=$URL/latest.json \
         IW4X32_LAUNCHER_RELEASE_URL=$URL/none IW4X32_NO_START=1 XDG_DATA_HOME=$R/xdg
     unset IW4X32_YES FAKE_IW4X_DLL
     run() {   # run <kit dir> <output file> args...
@@ -94,16 +101,17 @@ for IMPL in "${IMPLS[@]}"; do
         if [ "$IMPL" = py ]; then python3 "$k/files/iw4x32.py" "$@" </dev/null >"$o" 2>&1
         else "$PWSH" -NoProfile -NonInteractive -File "$k/files/iw4x32.ps1" "$@" </dev/null >"$o" 2>&1; fi
     }
-    manifest rel20 v2.0; iw4x_latest r5168
+    manifest rel20 v2.0
 
     # 1. setup from the extracted zip
     run "$R/download" "$R/1.out"
     K="$GAME/IW4x-32"
     [ -f "$K/files/iw4x32.$IMPL" ] && ok "setup copied the kit into the game folder" || bad "setup did not copy the kit"
     same "$GAME/iw4x.dll" "$KIT0/files/iw4x.dll" "IW4x-32's iw4x.dll is installed"
-    [ "$(cat "$K/files/backup/iw4x.dll" 2>/dev/null)" = OFFICIAL-DLL ] && ok "the official dll is backed up in files/backup" || bad "no backup of the official dll"
+    [ "$(cat "$K/files/backup/iw4x.dll" 2>/dev/null)" = "$OFF" ] && ok "the official dll is backed up in files/backup" || bad "no backup of the official dll"
     grep -q -- --skip-launch "$GAME/launcher-args.txt" 2>/dev/null && ok "the official launcher installed IW4x (--skip-launch)" || bad "the official launcher was not run"
     has "$R/1.out" "command:" "setup goes on to start the game"
+    has "$R/1.out" "built for IW4x $X, your IW4x is $X - they match" "setup: built-for and installed IW4x versions shown"
     if [ "$IMPL" = py ]; then [ -f "$R/xdg/applications/iw4x32.desktop" ] && ok "menu entry made" || bad "no menu entry"; fi
 
     # 2. a second start changes nothing
@@ -114,7 +122,7 @@ for IMPL in "${IMPLS[@]}"; do
     has "$R/2.out" "command:" "second start starts the game"
 
     # 3. the IW4x launcher's file check put the official dll back
-    printf 'OFFICIAL-DLL' > "$GAME/iw4x.dll"
+    printf '%s' "$OFF" > "$GAME/iw4x.dll"
     run "$K" "$R/3.out" --play
     same "$GAME/iw4x.dll" "$KIT0/files/iw4x.dll" "repair: IW4x-32 is put back"
 
@@ -126,9 +134,18 @@ for IMPL in "${IMPLS[@]}"; do
 
     # 5. vanilla puts the official dll back, IW4x-32 puts itself back
     run "$K" "$R/5.out" --vanilla
-    [ "$(cat "$GAME/iw4x.dll")" = OFFICIAL-DLL ] && ok "vanilla: the official dll is back" || bad "vanilla: official dll not restored"
+    [ "$(cat "$GAME/iw4x.dll")" = "$OFF" ] && ok "vanilla: the official dll is back" || bad "vanilla: official dll not restored"
     run "$K" "$R/5b.out" --play
     same "$GAME/iw4x.dll" "$KIT0/files/iw4x.dll" "after vanilla, IW4x-32 puts itself back"
+    # vanilla for real (the fake launcher): it gets the official dll, and no online check right after setup's
+    rm -f "$GAME/launcher-args.txt"
+    IW4X32_NO_START= run "$K" "$R/5c.out" --vanilla
+    grep -qF "dll: $OFF" "$GAME/launcher-args.txt" 2>/dev/null && ok "vanilla: the official launcher sees the official dll" || bad "vanilla: launcher got IW4x-32's dll"
+    grep -q -- "--skip-remote" "$GAME/launcher-args.txt" 2>/dev/null && ok "vanilla: --skip-remote within 15 min of the last online check" || bad "vanilla: online check again"
+    rm -f "$K/files/state.json" "$GAME/launcher-args.txt"
+    IW4X32_NO_START= run "$K" "$R/5d.out" --vanilla
+    grep -q -- "--skip-remote" "$GAME/launcher-args.txt" 2>/dev/null && bad "vanilla: --skip-remote with no recent check" || ok "vanilla: online check when none was recent"
+    run "$K" "$R/5e.out" --play
 
     # 6. a new release
     manifest rel99 v9.9
@@ -149,12 +166,34 @@ for IMPL in "${IMPLS[@]}"; do
     has "$R/7.out" "command:" "bad hash: the game still starts"
     manifest rel99 v9.9
 
-    # 8. IW4x is newer than IW4x-32 is made for: warn, never block
-    iw4x_latest r9999
+    # 7b. an older copy of the kit (the extracted v2.0 zip) hands over to the v9.9 in the game folder
+    rm -f "$GAME/launcher-args.txt"
+    run "$R/download" "$R/7b.out" --play
+    has "$R/7b.out" "already set up" "older copy: hands over to the installed IW4x-32"
+    hasnt "$R/7b.out" "copying IW4x-32" "older copy: not copied over the newer one"
+    head -1 "$K/README.txt" | grep -q 'v9.9 ' && ok "older copy: the game folder keeps v9.9" || bad "older copy: downgraded the kit"
+    [ ! -f "$GAME/launcher-args.txt" ] && ok "older copy: the official launcher is not run" || bad "older copy ran the official launcher"
+    has "$R/7b.out" "command:" "older copy: the game starts"
+
+    # 8. versions: the official launcher (vanilla) installed a NEWER IW4x: it stays, IW4x-32 runs its own build
+    printf 'OFFICIAL-DLL IW4x r9999' > "$GAME/iw4x.dll"; rm -f "$GAME/launcher-args.txt"
     run "$K" "$R/8.out" --play
-    has "$R/8.out" "WARNING: IW4x r9999" "newer IW4x: a warning"
-    has "$R/8.out" "command:" "newer IW4x: the game still starts"
-    iw4x_latest r5168
+    has "$R/8.out" "your IW4x is r9999 (newer) - vanilla IW4x runs r9999, IW4x-32 runs its own $X build" "newer IW4x: both versions said"
+    [ "$(cat "$K/files/backup/iw4x.dll")" = "OFFICIAL-DLL IW4x r9999" ] && ok "newer IW4x: it is the backup (vanilla runs it)" || bad "newer IW4x: not backed up"
+    same "$GAME/iw4x.dll" "$KIT0/files/iw4x.dll" "newer IW4x: IW4x-32 is in"
+    [ ! -f "$GAME/launcher-args.txt" ] && ok "newer IW4x: the official launcher is not run" || bad "newer IW4x: launcher run"
+    has "$R/8.out" "command:" "newer IW4x: the game starts"
+    # an OLDER IW4x: the official launcher updates it (it brings $X), once per 15 min
+    printf 'OFFICIAL-DLL IW4x r1000' > "$GAME/iw4x.dll"; rm -f "$K/files/state.json"
+    run "$K" "$R/8b.out" --play
+    grep -q -- --skip-launch "$GAME/launcher-args.txt" 2>/dev/null && ok "older IW4x: the official launcher updates it" || bad "older IW4x: not updated"
+    [ "$(cat "$K/files/backup/iw4x.dll")" = "$OFF" ] && ok "older IW4x: the updated one is the backup" || bad "older IW4x: backup not updated"
+    has "$R/8b.out" "they match" "older IW4x: versions match after the update"
+    printf 'OFFICIAL-DLL IW4x r1000' > "$GAME/iw4x.dll"; rm -f "$GAME/launcher-args.txt"
+    run "$K" "$R/8c.out" --play
+    [ ! -f "$GAME/launcher-args.txt" ] && ok "older IW4x again: no second launcher run within 15 min" || bad "older IW4x: launcher run twice in 15 min"
+    has "$R/8c.out" "command:" "older IW4x again: the game starts"
+    printf '%s' "$OFF" > "$GAME/iw4x.dll"; run "$K" "$R/8d.out" --play
 
     # 9. a v2.0 folder started through its old entry point
     mv "$K/files/backup" "$K/backup"; printf 'old' > "$K/Play IW4x-32.bat"; mkdir -p "$K/server"; printf 'x' > "$K/server/server_iw4x32.cfg"
@@ -170,8 +209,26 @@ for IMPL in "${IMPLS[@]}"; do
 
     # 10. uninstall
     IW4X32_YES=1 run "$K" "$R/10.out" --uninstall
-    [ "$(cat "$GAME/iw4x.dll")" = OFFICIAL-DLL ] && ok "uninstall: the official dll is back" || bad "uninstall: dll not restored"
+    [ "$(cat "$GAME/iw4x.dll")" = "$OFF" ] && ok "uninstall: the official dll is back" || bad "uninstall: dll not restored"
     if [ "$IMPL" = py ]; then [ ! -f "$R/xdg/applications/iw4x32.desktop" ] && ok "uninstall: menu entry removed" || bad "uninstall: menu entry left"; fi
+
+    # 10b. a crashed game's leftovers (SteamAppId=10190 in their environment) are closed; a server never (py)
+    if [ "$IMPL" = py ]; then
+        if grep -lzs '^SteamAppId=10190$' /proc/[0-9]*/environ >/dev/null 2>&1; then
+            echo "  skip --fix test: a real MW2 process runs on this machine"
+        else
+            env SteamAppId=10190 sleep 300 & LEFT=$!
+            env SteamAppId=10190 python3 -c 'import time; time.sleep(300)' -dedicated & SRV=$!
+            sleep 0.5
+            IW4X32_GAME="$GAME" python3 "$K/files/iw4x32.py" --fix </dev/null >"$R/10b.out" 2>&1
+            sleep 0.3
+            kill -0 $LEFT 2>/dev/null && bad "--fix: a leftover game process is still there" || ok "--fix: leftover closed"
+            kill -0 $SRV 2>/dev/null && ok "--fix: a dedicated server is left alone" || bad "--fix killed a server"
+            kill $LEFT $SRV 2>/dev/null; wait $LEFT $SRV 2>/dev/null
+            IW4X32_GAME="$GAME" python3 "$K/files/iw4x32.py" --fix </dev/null >"$R/10c.out" 2>&1
+            has "$R/10c.out" "nothing of the game is running" "--fix: nothing left says so"
+        fi
+    fi
 
     # 11. only the launcher downloaded: it fetches the release itself
     G2=$R/game2; fake_game "$G2"

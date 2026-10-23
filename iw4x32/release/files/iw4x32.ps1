@@ -8,17 +8,25 @@
 #   IW4x-32.bat --vanilla-server [port]  normal 18-player IW4x server
 #   IW4x-32.bat --setup [game folder]    do the setup again, e.g. for another game folder
 #   IW4x-32.bat --uninstall              put the official IW4x files back, remove the shortcuts
+#   IW4x-32.bat --fix                    the game crashed / hangs and Steam will not start it: close what is left
 #   --no-update  skip the update check     --dry  only print what would be started
 #   anything else goes to the game, e.g.   +connect 1.2.3.4:28960
 #
 # Setup (the first start does it by itself): finds MW2 (the folder this IW4x-32 folder is in, then every Steam
-# library), copies IW4x-32 to <game>\IW4x-32, lets the OFFICIAL IW4x launcher install or update IW4x (IW4x-32
-# never downloads IW4x's own files), backs up the official iw4x.dll, installs files\iw4x.dll (iw4x.exe stays the
-# official one) and makes the shortcuts.
+# library), copies IW4x-32 to <game>\IW4x-32 (when that game already has this IW4x-32 or a newer one, that one is
+# started instead), lets the OFFICIAL IW4x launcher install IW4x when there is none (IW4x-32 never downloads IW4x's
+# own files), backs up the official iw4x.dll, installs files\iw4x.dll (iw4x.exe stays the official one) and makes
+# the shortcuts.
+# Versions: IW4x-32's iw4x.dll is built for one IW4x release (x, e.g. r5278); your official IW4x is y. Both are read
+# from the dlls themselves. x = y: all good. Otherwise vanilla IW4x runs y and IW4x-32 runs its own x build; a y
+# older than x is updated with the official launcher first.
 # Every start: checks GitHub for a new IW4x-32 (5 s, no network = just start) and installs it with every file's
-# SHA-256 checked; puts IW4x-32 back when the IW4x launcher's file check replaced it; an IW4x older than this
-# IW4x-32 is made for is updated with the official launcher, a newer one only gets a warning (warn, never block).
-# Test hooks: IW4X32_GAME, IW4X32_STEAM, IW4X32_UPDATE_URL, IW4X32_IW4X_LATEST_URL, IW4X32_LAUNCHER_RELEASE_URL,
+# SHA-256 checked; puts IW4x-32 back when the IW4x launcher's file check replaced it. The official IW4x launcher only
+# runs when it is needed (it checks GitHub, which allows 60 requests an hour): to install or update IW4x, or for
+# vanilla IW4x - at most every 15 minutes with its online check, in between with --skip-remote.
+# A crash: a hung iw4x.exe or its crash reporter keeps Steam saying MW2 is running. Before every start they are
+# closed (a game that still runs only after a yes); [6] in the menu / --fix does it on its own.
+# Test hooks: IW4X32_GAME, IW4X32_STEAM, IW4X32_UPDATE_URL, IW4X32_LAUNCHER_RELEASE_URL,
 # IW4X32_NO_START=1 (print the command, start nothing), IW4X32_NO_SHORTCUTS=1, IW4X32_YES=1 (uninstall without asking).
 $ErrorActionPreference = 'Stop'
 $Repo = 'shaunypnz/iw4x-32'
@@ -27,12 +35,13 @@ $OFFICIAL_DLL = '57922527bbbb5dd5a256b8a6243179eb5e28d7e2bcc7bbf53f5ace0518f6da1
 $OFFICIAL_EXE = '49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009'
 $V1_EXE = '2609c2687dd2ffb3f32c7687ed04f57b38ef6879c14b1c546faf8bfd8f35ea6b'   # iw4x.exe of an IW4x-32 v1.x install
 $Manifest = if ($env:IW4X32_UPDATE_URL) { $env:IW4X32_UPDATE_URL } else { "https://github.com/$Repo/releases/latest/download/latest.json" }
-$Iw4xLatest = if ($env:IW4X32_IW4X_LATEST_URL) { $env:IW4X32_IW4X_LATEST_URL } else { 'https://api.github.com/repos/iw4x/iw4x-client/releases/latest' }
 $LauncherRelease = if ($env:IW4X32_LAUNCHER_RELEASE_URL) { $env:IW4X32_LAUNCHER_RELEASE_URL } else { 'https://api.github.com/repos/iw4x/launcher/releases/latest' }
 $MW2 = 'Call of Duty Modern Warfare 2'
 $Files = Split-Path -Parent $MyInvocation.MyCommand.Path      # <kit>\files: the program, backup\ and mode.txt
 $Kit = Split-Path -Parent $Files                              # the IW4x-32 folder
 $Game = $null
+$RemoteEvery = 15 * 60         # s between the official launcher's online checks (GitHub: 60 requests an hour)
+$Argv = @($args)
 # what IW4x-32 v1.x, v2.0 and the v2.1 test builds had in the IW4x-32 folder; everything is IW4x-32.bat + files\ now
 $Legacy = @('AI_CREDITS.txt', 'CHANGES.txt', 'SHA256SUMS.txt', 'IW4x-32 Launcher.bat', 'IW4x-32 Setup.bat',
     'Install IW4x-32.bat', 'Play IW4x-32 (IW4x launcher, no file check).bat', 'Play IW4x-32 (no update).bat',
@@ -51,6 +60,7 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     elseif ($a -eq '--server') { $Mode = 'server' }
     elseif ($a -eq '--vanilla-server') { $Mode = 'vanilla-server' }
     elseif ($a -eq '--uninstall') { $Mode = 'uninstall' }
+    elseif ($a -eq '--fix') { $Mode = 'fix' }
     elseif ($a -eq '--setup') {
         $Setup = $true
         if ($i + 1 -lt $args.Count -and "$($args[$i + 1])" -notmatch '^[-+]') { $i++; $SetupPath = "$($args[$i])" }
@@ -85,15 +95,59 @@ function Is-Game($d) {
     foreach ($e in 'iw4mp.exe', 'iw4x.exe', 'iw2mp.exe') { if (Test-Path -LiteralPath (Join-Path $d $e)) { return $true } }
     return $false
 }
-function Installed-Version {
-    $f = P $Kit 'README.txt'
+function Installed-Version($dir) {
+    $f = P $(if ($dir) { $dir } else { $Kit }) 'README.txt'
     if (Test-Path -LiteralPath $f) { $m = [regex]::Match((Get-Content -LiteralPath $f -TotalCount 1), 'IW4x-32 (v[\d.]+)'); if ($m.Success) { return $m.Groups[1].Value } }
     return 'v0'
 }
 function Game-Running {
     @(Get-Process -Name iw4x -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($Game, [StringComparison]::OrdinalIgnoreCase) }).Count -gt 0
 }
+function Get-State {
+    # files\state.json: when the official launcher last checked online
+    try { return (Get-Content -LiteralPath (F 'state.json') -Raw | ConvertFrom-Json) } catch { return $null }
+}
+function Save-RemoteCheck {
+    try { Set-Content -LiteralPath (F 'state.json') -Value (@{ launcher_remote_at = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds() } | ConvertTo-Json) -Encoding ASCII } catch { }
+}
+function Remote-Due {
+    $s = Get-State
+    $at = if ($s -and $s.launcher_remote_at) { [double]$s.launcher_remote_at } else { 0 }
+    return ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - $at) -gt $RemoteEvery
+}
+$DllCache = @{}
+function Dll-Info($p) {
+    # (the IW4x release an iw4x.dll is, whether it is IW4x-32's): both are in its strings ("IW4x r5278", "iw4x32")
+    if (-not $p -or -not (Test-Path -LiteralPath $p -PathType Leaf)) { return @($null, $false) }
+    $fi = Get-Item -LiteralPath $p
+    $key = "$p|$($fi.Length)|$($fi.LastWriteTimeUtc.Ticks)"
+    if (-not $DllCache.ContainsKey($key)) {
+        $t = [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($p))
+        $m = [regex]::Match($t, 'IW4x \(?(r\d{4,})')
+        $DllCache[$key] = @($(if ($m.Success) { $m.Groups[1].Value } else { $null }), [regex]::IsMatch($t, '(?i)iw4x32'))
+    }
+    return $DllCache[$key]
+}
+function Built-For { $v = (Dll-Info (F 'iw4x.dll'))[0]; if ($v) { $v } else { $OFFICIAL_VER } }   # x
+function Official-Dll { if ((Dll-Info (G 'iw4x.dll'))[1]) { F 'backup/iw4x.dll' } else { G 'iw4x.dll' } }
+function Iw4x-Version {
+    # y: the official IW4x release installed in the game folder ($null = unknown)
+    $p = Official-Dll
+    $v = (Dll-Info $p)[0]
+    if ($v) { return $v }
+    if ((Sha $p) -eq $OFFICIAL_DLL) { return $OFFICIAL_VER }
+    return $null
+}
+function Version-Status {
+    $x = Built-For; $y = Iw4x-Version
+    if (-not $y) { return "IW4x-32 is built for IW4x $x - the version of your IW4x is unknown" }
+    if ($y -eq $x) { return "IW4x-32 is built for IW4x $x, your IW4x is $y - they match" }
+    $rel = if ((VNum $y) -gt (VNum $x)) { 'newer' } else { 'older' }
+    return "IW4x-32 is built for IW4x $x, your IW4x is $y ($rel) - vanilla IW4x runs $y, IW4x-32 runs its own $x build"
+}
 function Backup-Dll {
+    # the official iw4x.dll in the game folder becomes the backup (never an IW4x-32 one, e.g. an older release's)
+    if ((Dll-Info (G 'iw4x.dll'))[1]) { return }
     New-Item -ItemType Directory -Force -Path (F 'backup') | Out-Null
     Copy-Item -LiteralPath (G 'iw4x.dll') -Destination (F 'backup/iw4x.dll') -Force
 }
@@ -115,13 +169,6 @@ function Restore-V1Exe($officialExe) {
     Say 'an older IW4x-32 replaced iw4x.exe - putting your official one back'
     Copy-Item -LiteralPath (F 'backup/iw4x.exe') -Destination (G 'iw4x.exe') -Force
 }
-function Warn-NewerIw4x($want, $latest) {
-    # IW4x-32 is a version behind: say it plainly and start anyway (owner's rule: warn, never block)
-    if ($want -and $latest -and (VNum $latest) -gt (VNum $want)) {
-        Warn "IW4x $latest is out, this IW4x-32 is made for $want - an IW4x-32 update normally follows within a day"
-    }
-}
-
 # ---- the official IW4x launcher: it installs and updates IW4x itself -------------------------------------------
 function Ensure-Launcher {
     $p = @('iw4x-launcher', 'iw4x-launcher.exe', 'iw4x-launcher-x86.exe') | ForEach-Object { G $_ } | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
@@ -146,64 +193,66 @@ function Ensure-Launcher {
     Say "downloaded the official IW4x launcher $($rel.tag_name)"
     return $dst
 }
-function Run-Launcher($launcherArgs) {
+function Run-Launcher($launcherArgs, $remote = $true) {
+    # the official IW4x launcher; $remote = $false: --skip-remote (no GitHub, no file check). The official iw4x.dll
+    # goes back in first - its file check finds IW4x-32's and downloads the official one again otherwise.
     $launcher = Ensure-Launcher
     if (-not $launcher) { return $null }
-    if ($launcherArgs) { return Start-Process -FilePath $launcher -ArgumentList $launcherArgs -WorkingDirectory $Game -Wait -PassThru }
+    Put-OfficialDll | Out-Null
+    $la = @($launcherArgs | Where-Object { $_ })
+    if (-not $remote) { $la += '--skip-remote' } else { Save-RemoteCheck }
+    if ($la.Count) { return Start-Process -FilePath $launcher -ArgumentList $la -WorkingDirectory $Game -Wait -PassThru }
     return Start-Process -FilePath $launcher -WorkingDirectory $Game -Wait -PassThru
 }
 function Install-Official {
     Say 'the official IW4x launcher installs / updates IW4x (this can take a few minutes the first time) ...'
     return [bool](Run-Launcher '--skip-launch')
 }
-function Iw4x-Latest {
-    # the newest official IW4x release name (rNNNN), $null when it cannot be checked
-    try { return (Get-Json $Iw4xLatest).tag_name } catch { return $null }
+function Put-OfficialDll {
+    if ((Dll-Info (G 'iw4x.dll'))[1] -and (Sha (F 'backup/iw4x.dll'))) {
+        $tmp = G 'iw4x.dll.iw4x32-off'
+        Copy-Item -LiteralPath (F 'backup/iw4x.dll') -Destination $tmp -Force
+        Move-Item -LiteralPath $tmp -Destination (G 'iw4x.dll') -Force
+        return $true
+    }
+    return $false
 }
 function Restore-Official {
     # put the official IW4x iw4x.dll back - what vanilla IW4x and a vanilla server start from
-    if ((Sha (G 'iw4x.dll')) -eq (Sha (F 'iw4x.dll')) -and (Sha (F 'backup/iw4x.dll'))) {
-        Say 'putting the official IW4x iw4x.dll back'
-        Copy-Item -LiteralPath (F 'backup/iw4x.dll') -Destination (G 'iw4x.dll') -Force
-    }
+    if (Put-OfficialDll) { Say 'put the official IW4x iw4x.dll back' }
     Restore-V1Exe $null
 }
 
 # ---- updates and repairs ---------------------------------------------------------------------------------------
-function Repair($m, $latest) {
-    # the IW4x launcher (or a repair) put the official iw4x.dll back: re-install IW4x-32. An IW4x that is neither
-    # the backed-up one nor the one this release is made for: older -> the official launcher updates it, newer ->
-    # warn and start IW4x-32 on it (it becomes the backup).
-    $want = if ($m) { $m.official } else { $null }
-    Restore-V1Exe $(if ($want) { $want.'iw4x.exe' } else { $OFFICIAL_EXE })
-    $ours = Sha (F 'iw4x.dll'); $now = Sha (G 'iw4x.dll')
-    if ($now -eq $ours) { return }
-    if (-not $now) { Say 'iw4x.dll is missing - the official IW4x launcher repairs IW4x'; Install-Official | Out-Null; $now = Sha (G 'iw4x.dll') }
-    if (-not $now) { throw 'IW4x is not installed in the game folder' }
-    $bak = Sha (F 'backup/iw4x.dll')
-    $wantDll = if ($want) { $want.'iw4x.dll' } else { $OFFICIAL_DLL }
-    if ($bak -and $now -eq $bak) { Say 'the official IW4x iw4x.dll is back (IW4x launcher?) - putting IW4x-32 back'; Install-Ours; return }
-    if ($now -eq $wantDll -or $now -eq $OFFICIAL_DLL) { Say 'IW4x was updated - putting IW4x-32 back'; Backup-Dll; Install-Ours; return }
-    $wantVer = if ($m) { $m.iw4x } else { $OFFICIAL_VER }
-    if ($latest -and (VNum $latest) -le (VNum $wantVer) -and (Update-Iw4x $wantDll $wantVer $latest) -eq 'ok') {
-        Say 'your IW4x was older than IW4x-32 is made for - updated'; Install-Ours; return
+function Repair($m) {
+    # IW4x-32's iw4x.dll belongs in the game folder whenever IW4x-32 starts: the official IW4x launcher (vanilla, its
+    # file check) puts the official one back - a new official one becomes the backup. An IW4x older than the one
+    # IW4x-32 is built for is updated first; a newer one stays (vanilla runs it, IW4x-32 runs its own build).
+    Restore-V1Exe $(if ($m -and $m.official) { $m.official.'iw4x.exe' } else { $OFFICIAL_EXE })
+    if (-not (Test-Path -LiteralPath (G 'iw4x.dll'))) {
+        Say 'iw4x.dll is missing - the official IW4x launcher repairs IW4x'; Install-Official | Out-Null
+        if (-not (Test-Path -LiteralPath (G 'iw4x.dll'))) { throw 'IW4x is not installed in the game folder' }
     }
-    Warn "your IW4x is not $wantVer, the version IW4x-32 is made for - starting IW4x-32 on it anyway; it is your backup now (vanilla goes back to it)"
-    Backup-Dll; Install-Ours
+    $ours = Sha (F 'iw4x.dll')
+    if ((Sha (G 'iw4x.dll')) -ne $ours -and -not (Dll-Info (G 'iw4x.dll'))[1]) {
+        if ((Sha (G 'iw4x.dll')) -eq (Sha (F 'backup/iw4x.dll'))) { Say 'the official IW4x iw4x.dll is back (IW4x launcher?) - putting IW4x-32 back' }
+        else {
+            $v = Iw4x-Version; if (-not $v) { $v = '(unknown version)' }
+            Say "the official IW4x launcher installed IW4x $v - kept as your vanilla IW4x"; Backup-Dll
+        }
+    }
+    Update-Iw4x
+    if ((Sha (G 'iw4x.dll')) -ne $ours) { Install-Ours }
 }
-function Update-Iw4x($wantDll, $wantVer, $latest) {
-    if ((Sha (F 'backup/iw4x.dll')) -eq $wantDll) { return 'ok' }
-    if (-not $latest) { Say 'cannot check the IW4x version - not updating it now'; return 'skip' }
-    if ($latest -ne $wantVer) { Say "IW4x $latest is out; IW4x-32 for it is not ready yet - keeping your current IW4x"; return 'skip' }
-    Say "updating IW4x to $wantVer (official IW4x launcher, update only) ..."
+function Update-Iw4x {
+    # y older than x: the official IW4x launcher updates IW4x (at most every 15 min - it asks GitHub)
+    $x = Built-For; $y = Iw4x-Version
+    if (-not $y -or (VNum $y) -ge (VNum $x)) { return }
+    if (-not (Remote-Due)) { Say "your IW4x $y is older than $x (IW4x-32 is built for it) - the IW4x launcher tried less than 15 min ago"; return }
+    Say "your IW4x $y is older than $x (IW4x-32 is built for it) - the official IW4x launcher updates it ..."
     $p = Run-Launcher '--skip-launch'
-    if (-not $p) { return 'skip' }
-    if ((Sha (G 'iw4x.dll')) -ne $wantDll) {
-        Say "the IW4x launcher (exit $($p.ExitCode)) did not install IW4x $wantVer - you are on the official IW4x files now; start again later to retry"
-        return 'failed'
-    }
-    Backup-Dll
-    return 'ok'
+    if ($p -and (Test-Path -LiteralPath (G 'iw4x.dll'))) { Backup-Dll }
+    if ((VNum (Iw4x-Version)) -lt (VNum $x)) { Say "the IW4x launcher did not update IW4x (exit $(if ($p) { $p.ExitCode } else { '-' })) - start again later to retry" }
 }
 function Update-Kit($m) {
     # every file of the release whose SHA-256 differs: download all, check all, then swap them in
@@ -228,22 +277,19 @@ function Update-Kit($m) {
     } finally { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
 }
 function Do-Update {
+    # a new IW4x-32: every changed file downloaded and checked, then IW4x-32 is put (back) in
     $have = Installed-Version
     $m = $null
     if (-not $NoUpdate) {
         try { $m = Get-Json $Manifest } catch { Say "no update check (no internet?) - starting IW4x-32 $have" }
     }
-    $latest = if ($NoUpdate) { $null } else { Iw4x-Latest }
-    Warn-NewerIw4x $(if ($m) { $m.iw4x } else { $OFFICIAL_VER }) $latest
     if ($m -and (VNum $m.version) -gt (VNum $have) -and (Game-Running)) { Say 'the game is running - updating next time'; $m = $null }
-    Repair $m $latest
+    Repair $m
     if (-not $m -or (VNum $m.version) -le (VNum $have)) { return }
-    $r = Update-Iw4x $m.official.'iw4x.dll' $m.iw4x $latest
-    if ($r -ne 'ok') { return }
     Update-Kit $m
-    Install-Ours
+    Repair $m                                    # the new iw4x.dll in; an IW4x older than it is built for: updated
     Migrate-Legacy | Out-Null
-    Say "updated to IW4x-32 $($m.version) (IW4x $($m.iw4x))"
+    Say "updated to IW4x-32 $($m.version) (built for IW4x $(Built-For))"
 }
 
 # ---- setup -----------------------------------------------------------------------------------------------------
@@ -301,7 +347,7 @@ function Copy-Kit($dest) {
     Say "copying IW4x-32 to $dest"
     New-Item -ItemType Directory -Force -Path (P $dest 'files') | Out-Null
     foreach ($n in 'IW4x-32.bat', 'IW4x-32.sh', 'README.txt') { if (Test-Path -LiteralPath (P $Kit $n)) { Copy-Item -LiteralPath (P $Kit $n) -Destination (P $dest $n) -Force } }
-    Get-ChildItem -LiteralPath $Files -Force | Where-Object { $_.Name -ne 'backup' -and $_.Name -ne 'mode.txt' -and $_.Name -notlike '.*' } |
+    Get-ChildItem -LiteralPath $Files -Force | Where-Object { $_.Name -ne 'backup' -and $_.Name -ne 'mode.txt' -and $_.Name -ne 'state.json' -and $_.Name -notlike '.*' } |
         ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination (P $dest 'files') -Recurse -Force }
 }
 function Make-Shortcuts {
@@ -334,19 +380,16 @@ function Install-Here {
     # IW4x (official launcher) + IW4x-32 into $Game, then the shortcuts
     Say "setting up IW4x-32 in $Game"
     if (Game-Running) { Say 'ERROR: IW4x is running - close the game and try again'; return $false }
-    $ours = Sha (F 'iw4x.dll')
-    if ((Sha (G 'iw4x.dll')) -ne $ours -and (Sha (G 'iw4x.dll')) -ne $OFFICIAL_DLL) { Install-Official | Out-Null }
+    # the official launcher only when there is no official IW4x here (it asks GitHub and checks every file)
+    if (-not (Test-Path -LiteralPath (G 'iw4x.exe')) -or -not (Sha (Official-Dll))) { Install-Official | Out-Null }
     Restore-V1Exe $OFFICIAL_EXE
-    $now = Sha (G 'iw4x.dll')
-    if (-not $now -or -not (Test-Path -LiteralPath (G 'iw4x.exe'))) {
+    if (-not (Sha (Official-Dll)) -or -not (Test-Path -LiteralPath (G 'iw4x.exe'))) {
         Say 'ERROR: IW4x could not be installed - is the internet working? Start IW4x-32 again to retry.'
         return $false
     }
-    if ($now -ne $ours) {
-        if ($now -ne $OFFICIAL_DLL) { Warn "this IW4x is not $OFFICIAL_VER, the version IW4x-32 is made for - installing anyway (an IW4x-32 update normally follows within a day)" }
-        Backup-Dll
-        Install-Ours
-    }
+    Backup-Dll
+    Update-Iw4x
+    if ((Sha (G 'iw4x.dll')) -ne (Sha (F 'iw4x.dll'))) { Install-Ours }
     Make-Shortcuts
     Say 'IW4x-32 is installed.'
     return $true
@@ -359,6 +402,14 @@ function Do-Setup {
     $g = (Resolve-Path -LiteralPath $g).Path
     $dest = P $g 'IW4x-32'
     if ($dest -ne $Kit) {
+        $theirs = Installed-Version $dest; $mine = Installed-Version
+        if ((Test-Path -LiteralPath (P $dest 'files/iw4x32.ps1')) -and (VNum $theirs) -ge (VNum $mine)) {
+            # this game already has IW4x-32 (an update may have made it newer than this copy): start that one - a
+            # setup from here would put this older copy over it, and the next update download it all again
+            Say "IW4x-32 $theirs is already set up in $g - starting that one (this copy, $Kit, is not needed)"
+            & (P $dest 'files/iw4x32.ps1') @Argv
+            exit $LASTEXITCODE
+        }
         try { Copy-Kit $dest } catch { Say "ERROR: could not copy to $dest - if the game is under Program Files, right-click IW4x-32.bat -> Run as administrator"; return $false }
         $script:Kit = $dest; $script:Files = P $dest 'files'
     }
@@ -391,33 +442,69 @@ function Read-Mode {
     return 'iw4x32'
 }
 function Select-Mode {
-    $modes = @('iw4x32', 'vanilla', 'server', 'vanilla-server', 'uninstall')
+    $modes = @('iw4x32', 'vanilla', 'server', 'vanilla-server', 'uninstall', 'fix')
     $def = Read-Mode
     if ($env:IW4X32_NO_MENU -eq '1' -or -not (Interactive)) { return $def }
     $d = [array]::IndexOf($modes, $def) + 1
     Write-Host ''
     Write-Host "  IW4x-32 $(Installed-Version) - Modern Warfare 2 with 32 players"
     Write-Host "  game: $Game"
+    Write-Host "  $(Version-Status)"
     Write-Host ''
     Write-Host '  [1] Play IW4x-32          32-player servers, and normal ones'
     Write-Host '  [2] Play vanilla IW4x     the official IW4x'
     Write-Host "  [3] Host a 32-player server   (port $Port)"
     Write-Host "  [4] Host a normal IW4x server (port $Port)"
     Write-Host '  [5] Uninstall IW4x-32'
+    Write-Host '  [6] Game crashed / stuck?  closes what is left of it, so Steam can start it again'
     Write-Host ''
-    Write-Host -NoNewline "  Press 1-5 - or wait: [$d] starts in 5 s "
+    Write-Host -NoNewline "  Press 1-6 - or wait: [$d] starts in 5 s "
     $end = (Get-Date).AddSeconds(5); $pick = $d
     while ((Get-Date) -lt $end) {
         if (-not [Console]::KeyAvailable) { Start-Sleep -Milliseconds 100; continue }
         $k = [Console]::ReadKey($true)
         if ($k.Key -eq [ConsoleKey]::Enter) { break }
-        if ("$($k.KeyChar)" -match '^[1-5]$') { $pick = [int]"$($k.KeyChar)"; break }
+        if ("$($k.KeyChar)" -match '^[1-6]$') { $pick = [int]"$($k.KeyChar)"; break }
         $end = (Get-Date).AddSeconds(30)                 # a key that is no choice: wait for one
     }
     Write-Host $pick
     $m = $modes[$pick - 1]
-    if ($m -ne 'uninstall') { try { Set-Content -LiteralPath (F 'mode.txt') -Value $m -Encoding ASCII } catch { } }
+    if ($m -ne 'uninstall' -and $m -ne 'fix') { try { Set-Content -LiteralPath (F 'mode.txt') -Value $m -Encoding ASCII } catch { } }
     return $m
+}
+
+# ---- after a crash: a hung game / its crash reporter keeps Steam saying "running" ---------------------------------
+function Leftovers {
+    # this game folder's processes (the game, its crash reporter, the IW4x launcher) - never a dedicated server
+    try {
+        return @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+            $_.ExecutablePath -and $_.ExecutablePath.StartsWith($Game + '\', [StringComparison]::OrdinalIgnoreCase) -and "$($_.CommandLine)" -notmatch '-dedicated' })
+    } catch { return @() }
+}
+function Is-GameExe($name) { "$name" -match '^(iw4x\.exe|iw4x \(mm\)|iw4mp\.exe)' }
+function Kill-Procs($procs) {
+    Say "closing what is left of the game ($((@($procs | ForEach-Object { $_.Name } | Sort-Object -Unique)) -join ', ')) so Steam can start it again"
+    foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 2
+    $left = @($procs | Where-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue })
+    if ($left.Count) { Say "could not close: $((@($left | ForEach-Object { "$($_.Name) (pid $($_.ProcessId))" })) -join ', ')"; return $false }
+    return $true
+}
+function Clear-Leftovers {
+    # before a start: leftovers of a crash are closed; a game that still runs (or hangs) only after a yes.
+    # $false = it keeps running.
+    $procs = Leftovers
+    if (-not $procs.Count) { return $true }
+    if (@($procs | Where-Object { Is-GameExe $_.Name }).Count) {
+        if (-not (Interactive)) { Say 'IW4x is already running - not starting it twice (IW4x-32.bat --fix closes it)'; return $false }
+        if ((Read-Host '[IW4x-32] IW4x is still running - hung after a crash? Close it and start again? [Y/n]') -match '^[nN]') { return $false }
+    }
+    return (Kill-Procs $procs)
+}
+function Do-Fix {
+    $procs = Leftovers
+    if (-not $procs.Count) { Say 'nothing of the game is running - Steam can start it'; return 0 }
+    if (Kill-Procs $procs) { return 0 } else { return 1 }
 }
 
 # ---- start things ----------------------------------------------------------------------------------------------
@@ -491,17 +578,27 @@ try {
     } elseif (-not (Test-Path -LiteralPath (F 'backup/iw4x.dll')) -and (Sha (G 'iw4x.dll')) -ne (Sha (F 'iw4x.dll'))) {
         if (-not (Install-Here)) { Wait-Close; exit 1 }  # the kit is in the game folder but was never installed
     } elseif ($migrated) { Make-Shortcuts }
+    if ($Mode -eq 'fix') { exit (Do-Fix) }
     if (-not $Mode) { $Mode = Select-Mode }
+    while ($Mode -eq 'fix') { Do-Fix | Out-Null; $Mode = Select-Mode }   # [6] in the menu: clean up, then the menu again
     switch ($Mode) {
         'vanilla' {
             Restore-Official
-            Say 'starting vanilla IW4x (the official IW4x launcher updates it first) ...'
-            if (-not ($Dry -or $env:IW4X32_NO_START -eq '1')) { if (-not (Run-Launcher $null)) { $rc = 1 } }
+            if ($Dry -or $env:IW4X32_NO_START -eq '1') { Say "starting vanilla IW4x $(Iw4x-Version)" }
+            elseif (Clear-Leftovers) {
+                $remote = Remote-Due
+                Say ("starting vanilla IW4x $(Iw4x-Version) (the official IW4x launcher" + $(if ($remote) { ' updates it first) ...' } else { ', no online check - it checked less than 15 min ago) ...' }))
+                if (-not (Run-Launcher $null $remote)) { $rc = 1 }
+            }
         }
         'vanilla-server' { if (-not $Dry) { Restore-Official }; $rc = Start-Server 18 'server_vanilla.cfg' 'IW4x server - vanilla, 18 players' }
         'server' { if (-not $Dry) { Do-Update }; $rc = Start-Server 32 'server_iw4x32.cfg' 'IW4x-32 server - 32 players' }
         'uninstall' { $rc = Do-Uninstall }
-        default { if (-not $Dry) { Do-Update }; $rc = Start-Game }
+        default {
+            if (-not $Dry) { Do-Update }
+            Say (Version-Status)
+            if ($Dry -or $env:IW4X32_NO_START -eq '1' -or (Clear-Leftovers)) { $rc = Start-Game }
+        }
     }
 } catch {
     Say "ERROR: $($_.Exception.Message)"
