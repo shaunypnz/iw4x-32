@@ -17,6 +17,27 @@
 
 namespace Components
 {
+  namespace
+  {
+    // Toasts draw their text as is, so look the strings up here. Note that
+    // Get() returns the key itself when the localized zone predates the
+    // string, in which case we keep the English text.
+    //
+    const char* LocalizedToastText(const char* key, const char* fallback)
+    {
+      const char* text (Localization::Get(key));
+      return std::strcmp(text, key) == 0 ? fallback : text;
+    }
+
+    void ShowServerBrowserToast(const char* key, const char* fallback)
+    {
+      Toast::Show("cardicon_headshot",
+                  LocalizedToastText("MPUI_SERVER_BROWSER_TOAST", "Server Browser"),
+                  LocalizedToastText(key, fallback),
+                  3000);
+    }
+  }
+
   bool ServerList::SortAsc = false;
   int ServerList::SortKey = static_cast<std::underlying_type_t<Column>>(Column::Players);
 
@@ -241,7 +262,7 @@ namespace Components
       }
     }
 
-    Toast::Show("cardicon_headshot", "Server Browser", "Servers refreshed", 3000);
+    ShowServerBrowserToast("MPUI_SERVERS_REFRESHED", "Servers refreshed");
   }
 
   void ServerList::RefreshVisibleList([[maybe_unused]] const UIScript::Token& token, [[maybe_unused]] const Game::uiInfo_s* info)
@@ -498,7 +519,7 @@ namespace Components
 
       if (!hasCachedServers)
       {
-        Toast::Show("cardicon_headshot", "Server Browser", "Fetching servers...", 3000);
+        ShowServerBrowserToast("MPUI_FETCHING_SERVERS", "Fetching servers...");
       }
 
       std::jthread([masterServerName, masterPort]()
@@ -1445,9 +1466,13 @@ namespace Components
 
   void ServerList::UpdateVisibleInfo()
   {
-    static auto servers = 0;
-    static auto players = 0;
-    static auto bots = 0;
+    // Start out of range so that the first update always formats the text.
+    // The placeholder set in the constructor predates the localized zones
+    // and is therefore English.
+    //
+    static auto servers = -1;
+    static auto players = -1;
+    static auto bots = -1;
 
     auto* list = GetList();
 
@@ -1469,7 +1494,24 @@ namespace Components
         players = newPlayers;
         bots = newBots;
 
-        Localization::Set("MPUI_SERVERQUERIED", std::format("Servers: {}\nPlayers: {} ({})", servers, players, bots));
+        // Take the labels from the localized zone, with &&1 to &&3 standing
+        // for the server, player, and bot counts. Note that Get() returns
+        // the key itself if the zone predates the string, in which case we
+        // fall back to the English layout.
+        //
+        const char* key ("MPUI_SERVERQUERIED_FORMAT");
+        std::string text (Localization::Get(key));
+
+        if (text == key)
+        {
+          text = "Servers: &&1\nPlayers: &&2 (&&3)";
+        }
+
+        Utils::String::Replace(text, "&&1", std::to_string(servers));
+        Utils::String::Replace(text, "&&2", std::to_string(players));
+        Utils::String::Replace(text, "&&3", std::to_string(bots));
+
+        Localization::Set("MPUI_SERVERQUERIED", text);
       }
     }
   }
@@ -1616,7 +1658,7 @@ namespace Components
         return; // defer refresh until after the cache load completes
       }
 
-      Toast::Show("cardicon_headshot", "Server Browser", "Servers refreshed", 3000);
+      ShowServerBrowserToast("MPUI_SERVERS_REFRESHED", "Servers refreshed");
       ServerList::Refresh();
     });
 
