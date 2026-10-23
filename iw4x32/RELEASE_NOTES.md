@@ -2,11 +2,8 @@
 top of a normal IW4x install; your `iw4x.exe` stays the official one. Normal 18-player IW4x servers keep working.
 
 <!-- whats-new -->
-### What's new in v2.5
-Built for official **IW4x r5278** (previous release: r5275) and live-tested on a 32-slot server (31 bots + a real client). It carries every IW4x fix from r5275 to r5278:
-- Fix stats request putting disconnected client back to connecting
-- Fix black screen after missing DLC error on map rotation
-- Fix players reconnecting on every map rotation
+### What's new in v2.6-r5278
+A kit / launcher update on the same official **IW4x r5278**, live-tested on a 32-slot server (31 bots + a real client).
 <!-- /whats-new -->
 
 ### Install
