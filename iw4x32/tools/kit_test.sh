@@ -62,10 +62,10 @@ for f in "$KIT0/files/iw4x32.py" "$KIT0/files/iw4x32.ps1"; do
     sed -i -E "s/^(\\\$?OFFICIAL_DLL = .)[0-9a-f]+/\\1$(sha "$OFF")/; s/^(\\\$?OFFICIAL_EXE = .)[0-9a-f]+/\\1$(sha OFFICIAL-EXE)/; s/^(\\\$?V1_EXE = .)[0-9a-f]+/\\1$(sha V1-EXE)/" "$f"
     grep -q "$(sha "$OFF")" "$f" || { echo "could not point $f at the fake files"; exit 1; }
 done
-# release v2.0 = this kit; release v9.9 = this kit with a new README line 1 and a changed CHANGES.txt
+# release v2.0 = this kit; release v9.9-rX (the new version format) = this kit with a new README line 1 and a changed CHANGES.txt
 cp -a "$KIT0" "$WEB/rel20"
 cp -a "$KIT0" "$WEB/rel99"
-sed -i '1s/v[0-9.]*/v9.9/' "$WEB/rel99/README.txt"; printf 'new\r\n' >> "$WEB/rel99/files/CHANGES.txt"
+sed -i "1s/v[0-9.]*\(-r[0-9]*\)\?/v9.9-$X/" "$WEB/rel99/README.txt"; printf 'new\r\n' >> "$WEB/rel99/files/CHANGES.txt"
 
 fake_game() {   # fake_game <dir>: an MW2 folder from Steam (no IW4x yet) with the official IW4x launcher in it
     mkdir -p "$1"; printf 'STEAM-MW2' > "$1/iw4mp.exe"
@@ -148,9 +148,9 @@ for IMPL in "${IMPLS[@]}"; do
     run "$K" "$R/5e.out" --play
 
     # 6. a new release
-    manifest rel99 v9.9
+    manifest rel99 "v9.9-$X"
     run "$K" "$R/6.out" --play
-    head -1 "$K/README.txt" | grep -q v9.9 && ok "update: the kit is now v9.9" || bad "update: README is not v9.9"
+    head -1 "$K/README.txt" | grep -q "v9.9-$X " && ok "update: the kit is now v9.9" || bad "update: README is not v9.9"
     same "$K/files/CHANGES.txt" "$WEB/rel99/files/CHANGES.txt" "update: changed file downloaded"
     [ ! -e "$K/iw4x32_update.py" ] && [ ! -e "$K/iw4x32_update.ps1" ] && ok "update: the v2.0 shims are not downloaded" || bad "update downloaded the legacy shims"
     has "$R/6.out" "command:" "update: the game starts"
@@ -158,20 +158,20 @@ for IMPL in "${IMPLS[@]}"; do
     hasnt "$R/6b.out" "downloading" "after the update nothing is downloaded again"
 
     # 7. a download that does not match latest.json changes nothing
-    cp -a "$WEB/rel99" "$WEB/rel910"; sed -i '1s/v9.9/v9.10/' "$WEB/rel910/README.txt"
-    manifest rel910 v9.10 files/CHANGES.txt
+    cp -a "$WEB/rel99" "$WEB/rel910"; sed -i '1s/v9.9-/v9.10-/' "$WEB/rel910/README.txt"
+    manifest rel910 "v9.10-$X" files/CHANGES.txt
     run "$K" "$R/7.out" --play
     has "$R/7.out" "download check failed" "bad hash: refused"
-    head -1 "$K/README.txt" | grep -q 'v9.9 ' && ok "bad hash: nothing was changed" || bad "bad hash: the kit changed"
+    head -1 "$K/README.txt" | grep -q "v9.9-$X " && ok "bad hash: nothing was changed" || bad "bad hash: the kit changed"
     has "$R/7.out" "command:" "bad hash: the game still starts"
-    manifest rel99 v9.9
+    manifest rel99 "v9.9-$X"
 
     # 7b. an older copy of the kit (the extracted v2.0 zip) hands over to the v9.9 in the game folder
     rm -f "$GAME/launcher-args.txt"
     run "$R/download" "$R/7b.out" --play
     has "$R/7b.out" "already set up" "older copy: hands over to the installed IW4x-32"
     hasnt "$R/7b.out" "copying IW4x-32" "older copy: not copied over the newer one"
-    head -1 "$K/README.txt" | grep -q 'v9.9 ' && ok "older copy: the game folder keeps v9.9" || bad "older copy: downgraded the kit"
+    head -1 "$K/README.txt" | grep -q "v9.9-$X " && ok "older copy: the game folder keeps v9.9" || bad "older copy: downgraded the kit"
     [ ! -f "$GAME/launcher-args.txt" ] && ok "older copy: the official launcher is not run" || bad "older copy ran the official launcher"
     has "$R/7b.out" "command:" "older copy: the game starts"
 

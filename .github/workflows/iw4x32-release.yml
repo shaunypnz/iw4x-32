@@ -1,6 +1,6 @@
 name: IW4x-32 release
 
-# IW4x-32 kit: cut a v* tag (v2.1, v2.2, ...) and this publishes the kit COMMITTED in that tag (IW4x-32.bat,
+# IW4x-32 kit: cut a v* tag (v2.6-r5278, v2.7-r5280, ...) and this publishes the kit COMMITTED in that tag (IW4x-32.bat,
 # IW4x-32.sh, README.txt, files/ with the iw4x.dll that was tested live) as a public GitHub Release:
 # IW4x-32-<tag>.zip, the two launcher scripts on their own, latest.json and iw4x.dll.
 # The zip, the tag's iw4x32/release/ (what the installed players' auto-update downloads, latest.json's base_url)
@@ -66,10 +66,12 @@ jobs:
           sed -i "s/@VERSION@/${GITHUB_REF_NAME}/g; s/@IW4X@/${IW4X}/g" iw4x32/RELEASE_NOTES.md
           if grep -n "@[A-Z0-9]*@" iw4x32/RELEASE_NOTES.md; then echo "unfilled placeholder"; exit 1; fi
 
-      - name: Version rule (v2.1, v2.2, ... - see iw4x32/tools/next_version.py)
+      - name: Version rule (v2.6-r5278, v2.7-r5280, ... - see iw4x32/tools/next_version.py)
         run: |
           python3 iw4x32/tools/next_version.py --self-test
-          python3 -c "import json,sys,re; v=json.load(open('latest.json'))['version']; sys.exit(0 if v=='${GITHUB_REF_NAME}' and re.fullmatch(r'v2\.\d+', v) else 'tag ${GITHUB_REF_NAME} != latest.json version '+v)"
+          IW4X=$(python3 -c "import json; print(json.load(open('latest.json'))['iw4x'])")
+          python3 iw4x32/tools/next_version.py --check "${GITHUB_REF_NAME}" --iw4x "$IW4X"
+          python3 -c "import json,sys; v=json.load(open('latest.json'))['version']; sys.exit(0 if v=='${GITHUB_REF_NAME}' else 'tag ${GITHUB_REF_NAME} != latest.json version '+v)"
 
       - name: Pack the kit
         run: |

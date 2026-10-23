@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """make_latest.py - write the IW4x-32 player kit's hash files: latest.json (repo root) and SHA256SUMS.txt (kit).
 
-    python3 iw4x32/tools/make_latest.py [--dll PATH] [--version v2.0] [--iw4x r5154] [--kit DIR] [--out FILE]
+    python3 iw4x32/tools/make_latest.py [--dll PATH] [--version v2.6-r5278] [--iw4x r5278] [--kit DIR] [--out FILE]
 
   --dll PATH   copy a built Release iw4x.dll into <kit>/files/iw4x.dll before hashing (what the release
                workflow does; without it the kit's committed DLL is used as it is)
@@ -19,6 +19,7 @@ What it writes:
 Bytes are hashed exactly as they sit in the tree: GitHub raw serves them unchanged (see the -text rule for the
 kit in .gitattributes), and the updater compares those bytes' SHA-256 with what is written here."""
 import argparse, hashlib, json, os, re, shutil, sys
+import next_version                                   # the version format: iw4x32/tools/next_version.py
 
 REPO = "shaunypnz/iw4x-32"
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -89,8 +90,10 @@ def main():
     ap.add_argument("--out", default=os.path.join(ROOT, "latest.json"))
     a = ap.parse_args()
 
-    if not re.fullmatch(r"v\d+(\.\d+)*", a.version):
-        sys.exit(f"make_latest: version must look like v2.0, got {a.version!r}")
+    try:
+        next_version.check(a.version, a.iw4x)               # v2.N-rNNNN, its rNNNN = --iw4x
+    except ValueError as e:
+        sys.exit(f"make_latest: {e}")
     if a.dll:
         dst = os.path.join(a.kit, "files", "iw4x.dll")
         os.makedirs(os.path.dirname(dst), exist_ok=True)

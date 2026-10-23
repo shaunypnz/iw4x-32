@@ -144,6 +144,12 @@ def vtuple(v):
     return tuple(int(x) for x in re.findall(r"\d+", v or "0"))
 
 
+def kver(v):
+    """an IW4x-32 version's order: vMAJOR.MINOR only - the -rNNNN (v2.6-r5278) names the IW4x it is built for"""
+    m = re.match(r"v(\d+)\.(\d+)", v or "")
+    return (int(m.group(1)), int(m.group(2))) if m else (0, 0)
+
+
 def interactive():
     return sys.stdin.isatty()
 
@@ -162,7 +168,7 @@ def is_game(d):
 
 def installed_version(kit=None):
     try:
-        m = re.match(r"IW4x-32 (v[\d.]+)", open(os.path.join(kit or KIT, "README.txt"), encoding="utf-8", errors="replace").readline())
+        m = re.match(r"IW4x-32 (v[\d.]+(?:-r\d+)?)", open(os.path.join(kit or KIT, "README.txt"), encoding="utf-8", errors="replace").readline())
         return m.group(1) if m else "v0"
     except OSError:
         return "v0"
@@ -412,11 +418,11 @@ def do_update():
             m = json.loads(get(MANIFEST))
         except Exception as e:
             say(f"no update check ({type(e).__name__}) - starting IW4x-32 {have}")
-    if m and vtuple(m["version"]) > vtuple(have) and game_running():
+    if m and kver(m["version"]) > kver(have) and game_running():
         say("the game is running - updating next time")
         m = None
     repair(m)
-    if not m or vtuple(m["version"]) <= vtuple(have):
+    if not m or kver(m["version"]) <= kver(have):
         return
     update_kit(m)
     repair(m)                                            # the new iw4x.dll in; an IW4x older than it is built for: updated
@@ -569,7 +575,7 @@ def do_setup():
     dest = os.path.join(g, "IW4x-32")
     if os.path.realpath(dest) != os.path.realpath(KIT):
         theirs, mine = installed_version(dest), installed_version()
-        if os.path.isfile(os.path.join(dest, "files", "iw4x32.py")) and vtuple(theirs) >= vtuple(mine):
+        if os.path.isfile(os.path.join(dest, "files", "iw4x32.py")) and kver(theirs) >= kver(mine):
             # this game already has IW4x-32 (an update may have made it newer than this copy): start that one - a
             # setup from here would put this older copy over it, and the next update download it all again
             say(f"IW4x-32 {theirs} is already set up in {g} - starting that one (this copy, {KIT}, is not needed)")

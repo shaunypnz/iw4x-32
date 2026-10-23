@@ -88,6 +88,11 @@ function Get-Bytes($url, $timeoutSec = 5) {   # 5 s: a version check must never 
 }
 function Get-Json($url, $timeoutSec = 5) { [Text.Encoding]::UTF8.GetString((Get-Bytes $url $timeoutSec)) | ConvertFrom-Json }
 function VNum($v) { (([regex]::Matches("$v", '\d+') | ForEach-Object { '{0:D6}' -f [int]$_.Value }) -join '.') }
+function KVer($v) {
+    # an IW4x-32 version's order: vMAJOR.MINOR only - the -rNNNN (v2.6-r5278) names the IW4x it is built for
+    $m = [regex]::Match("$v", '^v(\d+)\.(\d+)')
+    if ($m.Success) { '{0:D6}.{1:D6}' -f [int]$m.Groups[1].Value, [int]$m.Groups[2].Value } else { '000000.000000' }
+}
 function Interactive { -not [Console]::IsInputRedirected }
 function Wait-Close { if (Interactive) { Read-Host 'Press Enter to close' | Out-Null } }
 function Is-Game($d) {
@@ -97,7 +102,7 @@ function Is-Game($d) {
 }
 function Installed-Version($dir) {
     $f = P $(if ($dir) { $dir } else { $Kit }) 'README.txt'
-    if (Test-Path -LiteralPath $f) { $m = [regex]::Match((Get-Content -LiteralPath $f -TotalCount 1), 'IW4x-32 (v[\d.]+)'); if ($m.Success) { return $m.Groups[1].Value } }
+    if (Test-Path -LiteralPath $f) { $m = [regex]::Match((Get-Content -LiteralPath $f -TotalCount 1), 'IW4x-32 (v[\d.]+(?:-r\d+)?)'); if ($m.Success) { return $m.Groups[1].Value } }
     return 'v0'
 }
 function Game-Running {
@@ -283,9 +288,9 @@ function Do-Update {
     if (-not $NoUpdate) {
         try { $m = Get-Json $Manifest } catch { Say "no update check (no internet?) - starting IW4x-32 $have" }
     }
-    if ($m -and (VNum $m.version) -gt (VNum $have) -and (Game-Running)) { Say 'the game is running - updating next time'; $m = $null }
+    if ($m -and (KVer $m.version) -gt (KVer $have) -and (Game-Running)) { Say 'the game is running - updating next time'; $m = $null }
     Repair $m
-    if (-not $m -or (VNum $m.version) -le (VNum $have)) { return }
+    if (-not $m -or (KVer $m.version) -le (KVer $have)) { return }
     Update-Kit $m
     Repair $m                                    # the new iw4x.dll in; an IW4x older than it is built for: updated
     Migrate-Legacy | Out-Null
@@ -403,7 +408,7 @@ function Do-Setup {
     $dest = P $g 'IW4x-32'
     if ($dest -ne $Kit) {
         $theirs = Installed-Version $dest; $mine = Installed-Version
-        if ((Test-Path -LiteralPath (P $dest 'files/iw4x32.ps1')) -and (VNum $theirs) -ge (VNum $mine)) {
+        if ((Test-Path -LiteralPath (P $dest 'files/iw4x32.ps1')) -and (KVer $theirs) -ge (KVer $mine)) {
             # this game already has IW4x-32 (an update may have made it newer than this copy): start that one - a
             # setup from here would put this older copy over it, and the next update download it all again
             Say "IW4x-32 $theirs is already set up in $g - starting that one (this copy, $Kit, is not needed)"

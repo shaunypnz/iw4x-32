@@ -22,6 +22,7 @@ check_kit.py - the IW4x-32 player kit must be installable as it stands:
 
 Exits 1 with everything it found wrong. Run iw4x32/tools/make_latest.py to rewrite the hashes."""
 import argparse, hashlib, json, os, re, sys
+import next_version                                   # the version format: iw4x32/tools/next_version.py
 
 try:
     import yaml
@@ -96,8 +97,10 @@ def check_manifest(root, kit, files, bad):
     for k in ("version", "iw4x", "official", "base_url", "files"):
         if k not in m:
             bad.append(f"latest.json: no {k!r}")
-    if not re.fullmatch(r"v\d+(\.\d+)*", str(m.get("version", ""))):
-        bad.append(f"latest.json: version {m.get('version')!r} must look like v2.0")
+    try:
+        next_version.check(str(m.get("version", "")), m.get("iw4x"))    # v2.N-rNNNN, rNNNN = "iw4x"
+    except ValueError as e:
+        bad.append(f"latest.json: version: {e}")
     want = f"https://raw.githubusercontent.com/{REPO}/{m.get('version')}/iw4x32/release/"
     if m.get("base_url") != want:
         bad.append(f"latest.json: base_url {m.get('base_url')!r} != {want!r} (the tag's copy of the kit)")
@@ -173,9 +176,9 @@ def check_readme(kit, manifest, bad):
         bad.append("kit: README.txt is missing (the updater reads its first line)")
         return
     first = open(f, encoding="utf-8", errors="replace").readline()
-    m = re.match(r"IW4x-32 (v[\d.]+)", first)
+    m = re.match(r"IW4x-32 (v[\d.]+(?:-r\d+)?)", first)
     if not m:
-        bad.append("kit: README.txt line 1 must start 'IW4x-32 vX.Y' - the updater reads the version there")
+        bad.append("kit: README.txt line 1 must start 'IW4x-32 v2.N-rNNNN' - the updater reads the version there")
     elif manifest and m.group(1) != manifest.get("version"):
         bad.append(f"kit: README.txt says {m.group(1)} but latest.json says {manifest.get('version')}")
 
