@@ -232,9 +232,16 @@ def check_gitattributes(root, bad):
                    "hashed (GitHub raw serves them to the updater)")
 
 
+# what the release pipeline's make_latest.py rewrites: a change between releases may (must) leave these stale
+PIPELINE_WRITES = re.compile(r"^latest\.json: (\S+ does not have SHA-256|kit file \S+ is not listed|\S+ is listed but not in the kit)")
+
+
 def main():
     ap = argparse.ArgumentParser(add_help=True)
     ap.add_argument("--root", default=DEFAULT_ROOT, help="repo root (for testing a copy of the kit)")
+    ap.add_argument("--pre-release", action="store_true",
+                    help="a change before its release (a queue task's CHECK): everything but the latest.json file "
+                         "list and hashes, which make_latest.py writes when the release pipeline cuts the release")
     a = ap.parse_args()
     kit = os.path.join(a.root, "iw4x32", "release")
     if not os.path.isdir(kit):
@@ -251,6 +258,12 @@ def main():
     check_readme(kit, manifest, bad)
     check_workflow(a.root, bad)
     check_gitattributes(a.root, bad)
+    if a.pre_release:
+        bad = [b for b in bad if not PIPELINE_WRITES.search(b)]
+        if not bad:
+            print(f"check_kit: ok (pre-release) - {len(files)} kit file(s): line endings, entry points, README, "
+                  "official constants, workflow; the latest.json hashes come with the release")
+            return 0
     if bad:
         print("check_kit: %d problem(s):" % len(bad))
         for b in bad:
