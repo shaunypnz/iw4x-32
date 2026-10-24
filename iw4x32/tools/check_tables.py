@@ -160,6 +160,33 @@ def main():
         want(val(arrays[i][4]) == operands.index(mine[0]), "array %s: operand block first" % j["name"])
         want(val(arrays[i][5]) == len(mine), "array %s: operand block count" % j["name"])
 
+    # ---- dual operands (layout-switched addresses inside a moved array) ----
+    jd = src.get("dual_operands", [])
+    if jd:
+        drows = table(text, "IW4x32_DualOperands")
+        want(len(drows) == len(jd), "dual operands: %d in the header, %d in the json" % (len(drows), len(jd)))
+        for o in jd:
+            r = next((x for x in drows if val(x[1]) == num(o["operand_va"])), None)
+            want(r is not None, "dual operand %s missing" % o["operand_va"])
+            if not r:
+                continue
+            arr = next(a for a in src["arrays"] if a["name"] == o["array"])
+            want((val(r[0]), val(r[2]), val(r[3]), val(r[4]), val(r[5])) ==
+                 (num(o["insn_va"]), num(o["old"]), num(o["ours_offset"]), num(o["stock_offset"]), by_name[o["array"]]),
+                 "dual operand %s: fields" % o["operand_va"])
+            # the stock value must be the stock address the exe holds, seen from the moved array
+            want(num(o["old"]) == num(arr["old_lo"]) + num(o["stock_offset"]),
+                 "dual operand %s: old %s != %s old_lo + stock_offset" % (o["operand_va"], o["old"], o["array"]))
+            want(num(o["ours_offset"]) < num(arr["new_size"]) and num(o["stock_offset"]) < num(arr["new_size"]),
+                 "dual operand %s: an offset past the end of %s" % (o["operand_va"], o["array"]))
+            want(not any(c["va"] == o["insn_va"] for c in src["code_patches"]),
+                 "dual operand %s is also a code patch - the two would fight" % o["insn_va"])
+    else:
+        want("IW4x32_DualOperands = nullptr;" in text, "IW4x32_DualOperands: the json has none, the header does")
+    m = re.search(r"IW4x32_DualOperandsCount = (\d+);", text)
+    want(m is not None and int(m.group(1)) == len(jd), "IW4x32_DualOperandsCount != %d" % len(jd))
+    want("IW4x32_Players = %d;" % src.get("players", 32) in text, "IW4x32_Players != %d" % src.get("players", 32))
+
     # ---- the in-place cg growth has to fit in the room the tables vacate (IW4x-32) --------------------
     # cg_tail is grown_in_place: cg_s ends at its old_hi and extends by (new - old) of its fixed operands into
     # whatever follows in the image. Every byte of that extension must belong to an array the tables relocate,
@@ -388,6 +415,9 @@ def check_against_exe(src, path, bad):
     for o in src["relocation_operands"]:
         want(at(num(o["operand_va"]), 4) == struct.pack("<I", num(o["old"])),
              "exe: operand 0x%x does not hold %s" % (num(o["operand_va"]), o["old"]))
+    for o in src.get("dual_operands", []):
+        want(at(num(o["operand_va"]), 4) == struct.pack("<I", num(o["old"])),
+             "exe: dual operand 0x%x does not hold %s" % (num(o["operand_va"]), o["old"]))
     for s in src["size_constant_operands"]:
         want(at(num(s["operand_va"]), 4) == struct.pack("<I", num(s["old"])),
              "exe: size constant 0x%x does not hold %s" % (num(s["operand_va"]), s["old"]))

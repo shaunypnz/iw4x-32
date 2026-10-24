@@ -126,11 +126,12 @@ for IMPL in "${IMPLS[@]}"; do
     run "$K" "$R/3.out" --play
     same "$GAME/iw4x.dll" "$KIT0/files/iw4x.dll" "repair: IW4x-32 is put back"
 
-    # 4. a 32-player server on another port
+    # 4. an IW4x-32 server (files/iw4x32.py PLAYERS slots) on another port
     run "$K" "$R/4.out" --server 28961
     [ -f "$GAME/userraw/server_iw4x32.cfg" ] && ok "server: userraw/server_iw4x32.cfg made" || bad "server: no userraw cfg"
     has "$R/4.out" "net_port 28961" "server: the port is passed on"
-    has "$R/4.out" "sv_maxclients 32" "server: 32 slots"
+    P=$(sed -n 's/^PLAYERS = \([0-9]*\).*/\1/p' "$KIT0/files/iw4x32.py")
+    has "$R/4.out" "sv_maxclients $P" "server: $P slots"
 
     # 5. vanilla puts the official dll back, IW4x-32 puts itself back
     run "$K" "$R/5.out" --vanilla

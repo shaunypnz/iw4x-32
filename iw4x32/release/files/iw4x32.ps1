@@ -2,9 +2,9 @@
 # IW4x-32.bat (double-click) runs it. Linux: iw4x32.py next to it does the same steps.
 #
 #   IW4x-32.bat                          first time: sets everything up; then the start menu
-#   IW4x-32.bat --play                   IW4x-32 (32-player servers, and normal ones)
+#   IW4x-32.bat --play                   IW4x-32 (IW4x-32 servers up to 48 players, and normal ones)
 #   IW4x-32.bat --vanilla                vanilla IW4x (the official IW4x launcher updates and starts it)
-#   IW4x-32.bat --server [port]          32-player dedicated server (port 28960)
+#   IW4x-32.bat --server [port]          48-player dedicated server (port 28960)
 #   IW4x-32.bat --vanilla-server [port]  normal 18-player IW4x server
 #   IW4x-32.bat --setup [game folder]    do the setup again, e.g. for another game folder
 #   IW4x-32.bat --uninstall              put the official IW4x files back, remove the shortcuts
@@ -30,6 +30,8 @@
 # IW4X32_NO_START=1 (print the command, start nothing), IW4X32_NO_SHORTCUTS=1, IW4X32_YES=1 (uninstall without asking).
 $ErrorActionPreference = 'Stop'
 $Repo = 'shaunypnz/iw4x-32'
+# IW4x-32: the player count files\iw4x.dll is built for (Game::MAX_CLIENTS) - what 'host' runs
+$Players = 48
 $OFFICIAL_VER = 'r5292'
 $OFFICIAL_DLL = '890a310c9b594824ff3da71d24647821991c9ab5d1f2f9870fd9a07cb2341ba4'
 $OFFICIAL_EXE = '49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009'
@@ -370,7 +372,7 @@ function Make-Shortcuts {
             $l.Arguments = '/c ""' + $bat + '" ' + $s[2] + '"'
             $l.WorkingDirectory = $Kit
             $l.IconLocation = (G 'iw4x.exe') + ',0'
-            $l.Description = 'IW4x-32 - Modern Warfare 2 with 32 players'
+            $l.Description = "IW4x-32 - Modern Warfare 2 with up to $Players players"
             $l.Save()
         }
         Say 'shortcuts: "IW4x-32" on your desktop, and an IW4x-32 folder in the Start menu'
@@ -452,13 +454,13 @@ function Select-Mode {
     if ($env:IW4X32_NO_MENU -eq '1' -or -not (Interactive)) { return $def }
     $d = [array]::IndexOf($modes, $def) + 1
     Write-Host ''
-    Write-Host "  IW4x-32 $(Installed-Version) - Modern Warfare 2 with 32 players"
+    Write-Host "  IW4x-32 $(Installed-Version) - Modern Warfare 2 with up to $Players players"
     Write-Host "  game: $Game"
     Write-Host "  $(Version-Status)"
     Write-Host ''
-    Write-Host '  [1] Play IW4x-32          32-player servers, and normal ones'
+    Write-Host "  [1] Play IW4x-32          IW4x-32 servers up to $Players players, and normal ones"
     Write-Host '  [2] Play vanilla IW4x     the official IW4x'
-    Write-Host "  [3] Host a 32-player server   (port $Port)"
+    Write-Host "  [3] Host a $Players-player server   (port $Port)"
     Write-Host "  [4] Host a normal IW4x server (port $Port)"
     Write-Host '  [5] Uninstall IW4x-32'
     Write-Host '  [6] Game crashed / stuck?  closes what is left of it, so Steam can start it again'
@@ -529,7 +531,7 @@ function Start-Game {
 function Start-Server($slots, $cfg, $label) {
     $exe = G 'iw4x.exe'
     if (-not (Test-Path -LiteralPath $exe)) { Say "ERROR: no iw4x.exe in $Game - run IW4x-32.bat --setup"; return 1 }
-    if ($slots -eq 32 -and (Sha (G 'iw4x.dll')) -ne (Sha (F 'iw4x.dll'))) { Say 'ERROR: IW4x-32 is not installed - run IW4x-32.bat --setup'; return 1 }
+    if ($slots -eq $Players -and (Sha (G 'iw4x.dll')) -ne (Sha (F 'iw4x.dll'))) { Say 'ERROR: IW4x-32 is not installed - run IW4x-32.bat --setup'; return 1 }
     $user = G 'userraw'
     if (-not $Dry -and -not (Test-Path -LiteralPath (P $user $cfg))) {
         New-Item -ItemType Directory -Force -Path $user | Out-Null
@@ -597,7 +599,7 @@ try {
             }
         }
         'vanilla-server' { if (-not $Dry) { Restore-Official }; $rc = Start-Server 18 'server_vanilla.cfg' 'IW4x server - vanilla, 18 players' }
-        'server' { if (-not $Dry) { Do-Update }; $rc = Start-Server 32 'server_iw4x32.cfg' 'IW4x-32 server - 32 players' }
+        'server' { if (-not $Dry) { Do-Update }; $rc = Start-Server $Players 'server_iw4x32.cfg' "IW4x-32 server - $Players players" }
         'uninstall' { $rc = Do-Uninstall }
         default {
             if (-not $Dry) { Do-Update }

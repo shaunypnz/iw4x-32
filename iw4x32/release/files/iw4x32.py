@@ -3,9 +3,9 @@
 this file. IW4x-32.sh runs it. Windows: iw4x32.ps1 next to it does the same steps.
 
   ./IW4x-32.sh                          first time: sets everything up; then the start menu
-  ./IW4x-32.sh --play                   IW4x-32 (32-player servers, and normal ones)
+  ./IW4x-32.sh --play                   IW4x-32 (IW4x-32 servers up to 48 players, and normal ones)
   ./IW4x-32.sh --vanilla                vanilla IW4x (the official IW4x launcher updates and starts it)
-  ./IW4x-32.sh --server [port]          32-player dedicated server (port 28960, runs under Wine)
+  ./IW4x-32.sh --server [port]          48-player dedicated server (port 28960, runs under Wine)
   ./IW4x-32.sh --vanilla-server [port]  normal 18-player IW4x server
   ./IW4x-32.sh --setup [game folder]    do the setup again, e.g. for another game folder
   ./IW4x-32.sh --uninstall              put the official IW4x files back, remove the menu entries
@@ -39,6 +39,8 @@ import urllib.parse, urllib.request
 
 REPO = "shaunypnz/iw4x-32"
 OFFICIAL_VER = "r5292"
+# IW4x-32: the player count files/iw4x.dll is built for (Game::MAX_CLIENTS) - what "host" runs
+PLAYERS = 48
 OFFICIAL_DLL = "890a310c9b594824ff3da71d24647821991c9ab5d1f2f9870fd9a07cb2341ba4"
 OFFICIAL_EXE = "49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009"
 V1_EXE = "2609c2687dd2ffb3f32c7687ed04f57b38ef6879c14b1c546faf8bfd8f35ea6b"   # iw4x.exe of an IW4x-32 v1.x install
@@ -511,8 +513,8 @@ def make_shortcuts():
     sh = os.path.join(KIT, "IW4x-32.sh")
     try:
         os.makedirs(apps_dir(), exist_ok=True)
-        for f, name, comment, arg in (("iw4x32.desktop", "IW4x-32", "Modern Warfare 2 with 32 players", ""),
-                                      ("iw4x32-server.desktop", "IW4x-32 Server", "32-player dedicated server", " --server"),
+        for f, name, comment, arg in (("iw4x32.desktop", "IW4x-32", f"Modern Warfare 2 with up to {PLAYERS} players", ""),
+                                      ("iw4x32-server.desktop", "IW4x-32 Server", f"{PLAYERS}-player dedicated server", " --server"),
                                       ("iw4x32-vanilla.desktop", "IW4x (vanilla)", "The official IW4x", " --vanilla")):
             with open(os.path.join(apps_dir(), f), "w") as out:
                 out.write(f"[Desktop Entry]\nType=Application\nVersion=1.0\nName={name}\nComment={comment}\n"
@@ -653,11 +655,11 @@ def select_mode():
     if os.environ.get("IW4X32_NO_MENU") == "1" or not interactive():
         return default
     d = MODES.index(default) + 1
-    print(f"\n  IW4x-32 {installed_version()} - Modern Warfare 2 with 32 players\n  game: {GAME}")
+    print(f"\n  IW4x-32 {installed_version()} - Modern Warfare 2 with up to {PLAYERS} players\n  game: {GAME}")
     print(f"  {version_status()}\n")
-    print("  [1] Play IW4x-32          32-player servers, and normal ones")
+    print(f"  [1] Play IW4x-32          IW4x-32 servers up to {PLAYERS} players, and normal ones")
     print("  [2] Play vanilla IW4x     the official IW4x")
-    print(f"  [3] Host a 32-player server   (port {O.port})")
+    print(f"  [3] Host a {PLAYERS}-player server   (port {O.port})")
     print(f"  [4] Host a normal IW4x server (port {O.port})")
     print("  [5] Uninstall IW4x-32")
     print("  [6] Game crashed / stuck?  closes what is left of it, so Steam can start it again\n")
@@ -870,7 +872,7 @@ def start_server(slots, cfg, label):
     if not os.path.isfile(G("iw4x.exe")):
         say(f"ERROR: no iw4x.exe in {GAME} - run ./IW4x-32.sh --setup")
         return 1
-    if slots == 32 and sha(G("iw4x.dll")) != sha(F("iw4x.dll")):
+    if slots == PLAYERS and sha(G("iw4x.dll")) != sha(F("iw4x.dll")):
         say("ERROR: IW4x-32 is not installed - run ./IW4x-32.sh --setup")
         return 1
     user = G("userraw")
@@ -969,7 +971,7 @@ def main():
     if not O.dry:
         do_update()
     if mode == "server":
-        return start_server(32, "server_iw4x32.cfg", "IW4x-32 server - 32 players")
+        return start_server(PLAYERS, "server_iw4x32.cfg", f"IW4x-32 server - {PLAYERS} players")
     say(version_status())
     return play(start_game)
 

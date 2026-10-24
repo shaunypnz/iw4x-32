@@ -34,6 +34,10 @@ namespace Components
     };
     std::vector<DualSite> g_Dual;
 
+    // IW4x-32: the table set and the DLL's own per-client arrays must agree on the player count - the DLL
+    // indexes the engine's enlarged arrays by Game::MAX_CLIENTS.
+    static_assert(IW4x32_Players == Game::MAX_CLIENTS, "IW4x32Tables.hpp is built for another player count");
+
     // SV_SendClientMessages: the engine kept bool needsSnapshot[18] on its own stack frame and the
     // longer client loop wrote over the msg_t next to it - a global sized for the widest server replaces it.
     unsigned char g_NeedSnapshot[64];
@@ -134,6 +138,12 @@ namespace Components
           mismatch("operand", o.operandVa);
           return false;
         }
+      for (unsigned int i = 0; i < IW4x32_DualOperandsCount; i++)
+        if (*reinterpret_cast<unsigned int*>(IW4x32_DualOperands[i].operandVa) != IW4x32_DualOperands[i].old)
+        {
+          mismatch("dual operand", IW4x32_DualOperands[i].operandVa);
+          return false;
+        }
       for (const auto& s : IW4x32_SizeConstants)
         if (*reinterpret_cast<unsigned int*>(s.operandVa) != s.oldValue)
         {
@@ -200,6 +210,18 @@ namespace Components
       return true;
     }
 
+    // IW4x-32: where a stock engine address lives after the patch - inside a relocated array, or where it was
+    unsigned int Moved(unsigned int stock)
+    {
+      for (unsigned int i = 0; i < IW4x32_ArraysCount; i++)
+      {
+        const auto& a = IW4x32_Arrays[i];
+        if (!a.grownInPlace && g_Arrays[i] && stock >= a.oldLo && stock < a.oldHi)
+          return static_cast<unsigned int>(reinterpret_cast<unsigned int>(g_Arrays[i])) + (stock - a.oldLo);
+      }
+      return stock;
+    }
+
     unsigned int OperandValue(const IW4x32Operand& o)
     {
       if (o.fixed)
@@ -239,6 +261,19 @@ namespace Components
         WriteProtected(reinterpret_cast<void*>(c.operandVa), &c.newValue, sizeof(c.newValue));
     }
 
+    // IW4x-32: an operand inside a moved array that also depends on the body layout (wide table sets: the
+    // own-body cg_entities sites once post_cg_globals reaches over cg_entities) - base + one offset per layout
+    void WriteDualOperands(bool ours)
+    {
+      for (unsigned int i = 0; i < IW4x32_DualOperandsCount; i++)
+      {
+        const auto& d = IW4x32_DualOperands[i];
+        const auto value = static_cast<unsigned int>(reinterpret_cast<unsigned int>(g_Arrays[d.array])) +
+                           (ours ? d.oursOffset : d.stockOffset);
+        WriteProtected(reinterpret_cast<void*>(d.operandVa), &value, sizeof(value));
+      }
+    }
+
     void ApplyToEngine()
     {
       for (const auto& o : IW4x32_Operands)
@@ -246,6 +281,7 @@ namespace Components
         const auto value = OperandValue(o);
         WriteProtected(reinterpret_cast<void*>(o.operandVa), &value, sizeof(value));
       }
+      WriteDualOperands(true);
       for (const auto& s : IW4x32_SizeConstants)
         WriteProtected(reinterpret_cast<void*>(s.operandVa), &s.newValue, sizeof(s.newValue));
       for (const auto& p : IW4x32_CvarDomains)
@@ -276,6 +312,8 @@ namespace Components
       if (svs >= 0) Game::svs_clients = reinterpret_cast<Game::client_s*>(g_Arrays[svs]);
       if (bgs >= 0) Game::level_bgs = reinterpret_cast<Game::bgs_t*>(g_Arrays[bgs]);
       if (cgGlobals >= 0) Game::cgMedia = reinterpret_cast<Game::cgMedia_t*>(g_Arrays[cgGlobals]);
+      // IW4x-32: wide table sets move cg_entities[2048] (0x8F3CA8) with post_cg_globals
+      Game::cg_entitiesArray = reinterpret_cast<Game::cgEntity_s*>(Moved(0x8F3CA8));
 
       g_PlayerNames = names >= 0 ? reinterpret_cast<char (*)[32]>(g_Arrays[names])
                                  : &Game::sharedUiInfo->playerNames[0];
@@ -353,11 +391,13 @@ namespace Components
 
       for (const auto& d : g_Dual)
         WriteProtected(d.va, is32 ? d.ours : d.stock, d.len);
+      WriteDualOperands(is32);
       FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
 
       g_Layout32 = is32;
       Game::Com_Printf(0x10, "iw4x32: %s server - using the %s player/body layout (%zu sites)\n",
-                       is32 ? "more than 18 slots" : "stock", is32 ? "iw4x32" : "stock 18-player", g_Dual.size());
+                       is32 ? "more than 18 slots" : "stock", is32 ? "iw4x32" : "stock 18-player",
+                       g_Dual.size() + IW4x32_DualOperandsCount);
     }
 
     void RegisterMarker()
@@ -384,6 +424,13 @@ namespace Components
                                                 "IW4x-32 server: 1 = iw4x32 layout, more than 18 slots (patched clients only), 0 = stock layout");
       if (dvar)
         Game::Dvar_SetBool(dvar, g_ServerIs32);
+      // IW4x-32: the player count our layout is built for (body clones start at that + 4). A client of another
+      // build lays the entities out differently even when sv_maxclients would fit both, so both sides compare it.
+      const auto layout = Game::Dvar_RegisterInt("sv_iw4x32n", static_cast<int>(Game::MAX_CLIENTS), 0, 64,
+                                                 DVAR_SERVERINFO | DVAR_ROM,
+                                                 "IW4x-32 server: the player count its entity layout is built for");
+      if (layout)
+        Game::Dvar_SetInt(layout, static_cast<int>(Game::MAX_CLIENTS));
 
       SetLayout(g_ServerIs32);
       Game::Com_Printf(0x10, "iw4x32: %d-slot server - %s\n", maxc,
@@ -407,16 +454,18 @@ namespace Components
       }
 
       // IW4x-32: a client of the previous release carries the marker but no slot count, and its arrays hold 32.
-      // Handing it clientnum 40 would write outside them, so a wider server turns it away instead.
+      // The count is also its entity layout (body clones at count + 4): a 32-player build on a 48-player build's
+      // server - even one running 32 slots - would see bodies where players are. Only the same build gets in.
       const auto* cap = Game::Info_ValueForKey(userinfo, "iw4x32n");
       const int slots = cap && cap[0] ? std::atoi(cap) : 32;
-      if (slots >= g_ServerSlots)
+      if (slots == static_cast<int>(Game::MAX_CLIENTS))
         return 1;
 
-      wsprintfA(g_RejectMsg, "error\nThis server holds %d players; your IW4x-32 build handles %d. Update IW4x-32 "
-                             "to join (the update also works on normal servers).", g_ServerSlots, slots);
-      wsprintfA(g_RejectLog, "    rejected connect: client build handles %d slots, this server has %d\n", slots,
-                g_ServerSlots);
+      wsprintfA(g_RejectMsg, "error\nThis IW4x-32 server runs the %d-player build; yours is the %d-player build. "
+                             "Update IW4x-32 to join (the update also works on normal servers).",
+                static_cast<int>(Game::MAX_CLIENTS), slots);
+      wsprintfA(g_RejectLog, "    rejected connect: client build lays out %d players, this server %d\n", slots,
+                static_cast<int>(Game::MAX_CLIENTS));
       return 0;
     }
 
@@ -438,13 +487,29 @@ namespace Components
       else
         Game::Com_Printf(0x10, "iw4x32: server is stock 18-slot - using the stock player/body layout\n");
       SetLayout(is32);
+
+      // IW4x-32: an IW4x-32 server of another build lays the entities out for its own player count (servers of
+      // the 32-player releases do not say: 32). Our server turns such a client away; an older one lets it in, so
+      // the client leaves by itself instead of playing with bodies where players are.
+      if (is32)
+      {
+        const auto* n = Game::Info_ValueForKey(info, "sv_iw4x32n");
+        const int layout = n && n[0] ? std::atoi(n) : 32;
+        if (layout != static_cast<int>(Game::MAX_CLIENTS))
+        {
+          Game::Com_Printf(0x10, "^1iw4x32: this server runs the %d-player IW4x-32 build, this client the %d-player "
+                                 "build - disconnecting. Update IW4x-32, or the server's owner has to.\n",
+                           layout, static_cast<int>(Game::MAX_CLIENTS));
+          Game::Cbuf_AddText(0, "disconnect\n");
+        }
+      }
     }
 
     // ---------------------------------------------------------------- anti-lag (engine32c/antilag.c)
 
     // anti-lag keeps a per-slot archive of positions. The engine's own store is 18 wide; ours covers the
-    // widest server this build hosts (48) - every user clamps sv_maxclients to it.
-    constexpr int AL_MAX = 48;
+    // widest server this build hosts (Game::MAX_CLIENTS) - every user clamps sv_maxclients to it.
+    constexpr int AL_MAX = static_cast<int>(Game::MAX_CLIENTS);
 
     struct AntilagStore32
     {
@@ -739,6 +804,255 @@ namespace Components
     return true;
   }
 
+  // ---------------------------------------------------------------- per-client entity masks (> 32 players)
+
+  // IW4x-32: entityState_s::clientMask is ONE word at +0xFC (+0x100 is r.isLinked of the gentity, and the
+  // snapshot copies are 0x100 bytes), so the engine can say "hidden from client n" for n < 32 only. Above 32 the
+  // writers either OR a bit into isLinked/svFlags (0x5D5588 indexes the mask by n >> 5) or wrap to n & 31, and the
+  // snapshot filter (0x6295A0 and two more) tests 1 << n, which wraps: client 37 was sent the entities hidden from
+  // everyone but client 5 and died in its own viewmodel code. The words for clients 32.. live here, by entity
+  // number (live entities and snapshot copies both start with it).
+  constexpr int MASK_WORDS = (static_cast<int>(Game::MAX_CLIENTS) + 31) / 32;
+  unsigned int g_MaskHi[2048][MASK_WORDS > 1 ? MASK_WORDS - 1 : 1];
+
+  unsigned int* MaskWord(char* ent, int clientNum)
+  {
+    const int w = clientNum >> 5;
+    if (w == 0)
+      return reinterpret_cast<unsigned int*>(ent + 0xFC);
+    return &g_MaskHi[*reinterpret_cast<int*>(ent) & 2047][w - 1];
+  }
+
+  bool MaskClient(int clientNum)
+  {
+    return clientNum >= 0 && clientNum < static_cast<int>(Game::MAX_CLIENTS);
+  }
+
+  // every client's bit set, then this one's cleared (0x5D5784, 0x5DD29D, 0x5F6B82)
+  void __cdecl MaskAllBut(char* ent, int clientNum)
+  {
+    *reinterpret_cast<unsigned int*>(ent + 0xFC) = 0xFFFFFFFF;
+    for (auto& w : g_MaskHi[*reinterpret_cast<int*>(ent) & 2047])
+      w = 0xFFFFFFFF;
+    if (MaskClient(clientNum))
+      *MaskWord(ent, clientNum) &= ~(1u << (clientNum & 31));
+  }
+
+  // one more client's bit (0x5D5579)
+  void __cdecl MaskAdd(char* ent, int clientNum)
+  {
+    if (MaskClient(clientNum))
+      *MaskWord(ent, clientNum) |= 1u << (clientNum & 31);
+  }
+
+  int __cdecl MaskTest(char* ent, int clientNum)
+  {
+    return MaskClient(clientNum) && (*MaskWord(ent, clientNum) >> (clientNum & 31) & 1);
+  }
+
+  // the clientMask builder (0x5E2990, edx = entity): bit i unless level.clients[i] has 0x400000 at +0x428
+  unsigned int __cdecl MaskBuild(char* ent)
+  {
+    const auto* clients = *reinterpret_cast<char**>(0x1A831A8); // level.clients (the relocated g_clients)
+    unsigned int words[MASK_WORDS] = {};
+    for (int i = 0; i < static_cast<int>(Game::MAX_CLIENTS); i++)
+      if (!(*reinterpret_cast<const unsigned int*>(clients + i * 0x366C + 0x428) & 0x400000))
+        words[i >> 5] |= 1u << (i & 31);
+    *reinterpret_cast<unsigned int*>(ent + 0xFC) = words[0];
+    for (int k = 1; k < MASK_WORDS; k++)
+      g_MaskHi[*reinterpret_cast<int*>(ent) & 2047][k - 1] = words[k];
+    return words[0];
+  }
+
+  // G_FreeEntity: a recycled entity number starts with no high bits (the engine zeroes word 0 itself)
+  void __cdecl MaskClear(char* ent)
+  {
+    for (auto& w : g_MaskHi[*reinterpret_cast<int*>(ent) & 2047])
+      w = 0;
+  }
+
+  volatile DWORD s_back_5D57A8 = 0x5D57A8, s_back_5DD2B2 = 0x5DD2B2, s_back_6295AF = 0x6295AF,
+                 s_back_6295D2 = 0x6295D2, s_back_629604 = 0x629604, s_back_62962F = 0x62962F,
+                 s_back_62966D = 0x62966D, s_back_44C9D5 = 0x44C9D5;
+
+  // 0x5D5579: ecx = clientNum, esi = entity; the rest of the function is `or [mask], bit; pop edi; pop esi; ret`
+  void __declspec(naked) MaskAdd_Stub()
+  {
+    __asm
+    {
+      push ecx
+      push esi
+      call MaskAdd
+      add esp, 8
+      pop edi
+      pop esi
+      retn
+    }
+  }
+
+  // 0x5D5784: ecx = clientNum, ebp = entity; keeps the stolen `mov [ebp+0x7C], eax`, then the epilogue
+  void __declspec(naked) MaskAllButA_Stub()
+  {
+    __asm
+    {
+      mov dword ptr [ebp + 0x7C], eax
+      push ecx
+      push ebp
+      call MaskAllBut
+      add esp, 8
+      jmp dword ptr [s_back_5D57A8]
+    }
+  }
+
+  // 0x5DD29D: ebx = clientNum, eax = entity (also the argument of the call that follows)
+  void __declspec(naked) MaskAllButB_Stub()
+  {
+    __asm
+    {
+      push eax
+      push ebx
+      push eax
+      call MaskAllBut
+      add esp, 8
+      pop eax
+      push eax
+      jmp dword ptr [s_back_5DD2B2]
+    }
+  }
+
+  // 0x5F6B82: [edi] = clientNum (the player's entity number), esi = entity; the rest is `pop edi .. pop esi; ret`
+  void __declspec(naked) MaskAllButC_Stub()
+  {
+    __asm
+    {
+      mov ecx, dword ptr [edi]
+      push ecx
+      push esi
+      call MaskAllBut
+      add esp, 8
+      pop edi
+      pop esi
+      retn
+    }
+  }
+
+  // 0x5E2990 (edx = entity): the whole builder
+  void __declspec(naked) MaskBuild_Stub()
+  {
+    __asm
+    {
+      push edx
+      call MaskBuild
+      pop edx
+      retn
+    }
+  }
+
+  // the snapshot filter: ecx = clientNum (still needed after), ebp / esi = the snapshot entityState
+  void __declspec(naked) MaskTest1_Stub() // 0x6295A0
+  {
+    __asm
+    {
+      push ecx
+      push ecx
+      push ebp
+      call MaskTest
+      add esp, 8
+      pop ecx
+      test eax, eax
+      jnz maskTest1Hidden
+      jmp dword ptr [s_back_6295AF]
+    maskTest1Hidden:
+      jmp dword ptr [s_back_6295D2]
+    }
+  }
+
+  void __declspec(naked) MaskTest2_Stub() // 0x6295FA
+  {
+    __asm
+    {
+      push ecx
+      push ecx
+      push esi
+      call MaskTest
+      add esp, 8
+      pop ecx
+      test eax, eax
+      jnz maskTest2Hidden
+      jmp dword ptr [s_back_629604]
+    maskTest2Hidden:
+      jmp dword ptr [s_back_62962F]
+    }
+  }
+
+  void __declspec(naked) MaskTest3_Stub() // 0x62965E
+  {
+    __asm
+    {
+      push ecx
+      push ecx
+      push esi
+      call MaskTest
+      add esp, 8
+      pop ecx
+      test eax, eax
+      jnz maskTest3Hidden
+      jmp dword ptr [s_back_62966D]
+    maskTest3Hidden:
+      jmp dword ptr [s_back_62962F]
+    }
+  }
+
+  // G_FreeEntity 0x44C9D0 (cdecl, ent at [esp+4]): clear the entity's high mask words, then the stolen
+  // `push esi; mov esi, [esp+8]`
+  void __declspec(naked) MaskFree_Stub()
+  {
+    __asm
+    {
+      push dword ptr [esp + 4]
+      call MaskClear
+      add esp, 4
+      push esi
+      mov esi, dword ptr [esp + 8]
+      jmp dword ptr [s_back_44C9D5]
+    }
+  }
+
+  struct MaskSite
+  {
+    unsigned int va;
+    const char* bytes; // what the stock exe holds where the jmp goes
+    void* stub;
+  };
+
+  // only when the build is wider than one mask word; refuses the lot if any site is not the stock bytes
+  bool InstallClientMaskHooks()
+  {
+    if (Game::MAX_CLIENTS <= 32)
+      return true;
+    const MaskSite sites[] = {
+      {0x5D5579, "\x8B\xC1\x83\xE1\x1F", MaskAdd_Stub},
+      {0x5D5784, "\x83\xE1\x1F\xBA\x01", MaskAllButA_Stub},
+      {0x5DD29D, "\x8B\xCB\x83\xE1\x1F", MaskAllButB_Stub},
+      {0x5F6B82, "\xC7\x86\xFC\x00\x00", MaskAllButC_Stub},
+      {0x6295A0, "\xB8\x01\x00\x00\x00", MaskTest1_Stub},
+      {0x6295FA, "\xD3\xE0\x85\x86\xFC", MaskTest2_Stub},
+      {0x62965E, "\xB8\x01\x00\x00\x00", MaskTest3_Stub},
+      {0x44C9D0, "\x56\x8B\x74\x24\x08", MaskFree_Stub},
+    };
+    for (const auto& m : sites)
+      if (!Matches(reinterpret_cast<const void*>(m.va), m.bytes, 5))
+      {
+        Logger::Print("IW4x32: client mask site {:#x} is not the stock code - entities stay masked for 32 clients", m.va);
+        return false;
+      }
+    for (const auto& m : sites)
+      Utils::Hook(m.va, m.stub, HOOK_JUMP).install()->quick();
+    // the builder: our tables rewrote its head (compact loop), the stub replaces the whole function
+    Utils::Hook(0x5E2990, MaskBuild_Stub, HOOK_JUMP).install()->quick();
+    return true;
+  }
+
   // 0x5028B0 party host timeout handler: return without running it. For a systemlink client that handler
   // only ends the game with @XBOXLIVE_PARTYENDED; its callers (the keepalive at 0x4973A0, the in-game
   // session frame at 0x4E5090, the party-gone helper at 0x4A7CA0) carry on with their per-frame work.
@@ -1002,6 +1316,7 @@ namespace Components
     if (withPool)
       ApplyPool(!poolStock);
     InstallHooks();
+    InstallClientMaskHooks(); // IW4x-32: more than 32 players - see MaskAllBut
     Utils::Hook(0x5028B0, PartyTimeout_Stub, HOOK_JUMP).install()->quick(); // IW4x-32: see PartyTimeout_Stub
     PointDllGlobals();
     AddVectoredExceptionHandler(1, &CrashReport); // IW4x-32: see CrashReport

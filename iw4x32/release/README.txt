@@ -1,4 +1,4 @@
-IW4x-32 v2.7-r5292 - Modern Warfare 2 (2009) multiplayer with 32 players instead of 18
+IW4x-32 v2.7-r5292 - Modern Warfare 2 (2009) multiplayer with up to 48 players instead of 18
 ==================================================================================
 
   WINDOWS:  double-click  IW4x-32.bat
@@ -10,9 +10,9 @@ That is all. The first time, it:
   3. installs IW4x-32 and puts an "IW4x-32" shortcut on your desktop
      (Linux: in your applications menu).
 After that the shortcut opens this menu - press a number, or wait 5 seconds:
-  [1] Play IW4x-32            32-player servers, and normal ones
+  [1] Play IW4x-32            IW4x-32 servers up to 48 players, and normal ones
   [2] Play vanilla IW4x       the official IW4x
-  [3] Host a 32-player server
+  [3] Host a 48-player server
   [4] Host a normal IW4x server
   [5] Uninstall IW4x-32
 It updates IW4x-32 (and IW4x) by itself. Without internet the game just starts.
@@ -22,8 +22,8 @@ You need: Call of Duty: Modern Warfare 2 (2009) from Steam. Nothing else.
 WHAT IT IS
   One file, an iw4x.dll built from public source, on top of a normal IW4x install.
   Your iw4x.exe stays the official one. Scoreboard, minimap, kill feed, voice and
-  killstreaks work for all 32 players, and normal 18-player IW4x servers keep working.
-  32-player servers show in the in-game server browser.
+  killstreaks work for all 48 players, and normal 18-player IW4x servers keep working.
+  IW4x-32 servers show in the in-game server browser.
 
 HOSTING A SERVER
   Pick [3] in the menu (Linux: ./IW4x-32.sh --server; it runs under Wine).
@@ -48,7 +48,7 @@ GOOD TO KNOW
     Properties -> Launch Options:   bash -c 'exec "${@/iw4mp.exe/iw4x.exe}"' -- %command%
   - Windows "protected your PC" message: More info -> Run anyway (the files are
     plain scripts; read them first if you like).
-  - Tested: the 32-player server and the client under Wine/Proton on Linux.
+  - Tested: the 48-player server and the client under Wine/Proton on Linux.
     The Windows client has not been tested by us yet - please report how it goes.
 
 IS IT SAFE?
