@@ -3,9 +3,9 @@
 this file. IW4x-32.sh runs it. Windows: iw4x32.ps1 next to it does the same steps.
 
   ./IW4x-32.sh                          first time: sets everything up; then the start menu
-  ./IW4x-32.sh --play                   IW4x-32 (IW4x-32 servers up to 48 players, and normal ones)
+  ./IW4x-32.sh --play                   IW4x-32 (IW4x-32 servers up to 64 players, and normal ones)
   ./IW4x-32.sh --vanilla                vanilla IW4x (the official IW4x launcher updates and starts it)
-  ./IW4x-32.sh --server [port]          48-player dedicated server (port 28960, runs under Wine)
+  ./IW4x-32.sh --server [port]          64-player dedicated server (port 28960, runs under Wine)
   ./IW4x-32.sh --vanilla-server [port]  normal 18-player IW4x server
   ./IW4x-32.sh --setup [game folder]    do the setup again, e.g. for another game folder
   ./IW4x-32.sh --uninstall              put the official IW4x files back, remove the menu entries
@@ -40,7 +40,7 @@ import urllib.parse, urllib.request
 REPO = "shaunypnz/iw4x-32"
 OFFICIAL_VER = "r5292"
 # IW4x-32: the player count files/iw4x.dll is built for (Game::MAX_CLIENTS) - what "host" runs
-PLAYERS = 48
+PLAYERS = 64
 OFFICIAL_DLL = "890a310c9b594824ff3da71d24647821991c9ab5d1f2f9870fd9a07cb2341ba4"
 OFFICIAL_EXE = "49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009"
 V1_EXE = "2609c2687dd2ffb3f32c7687ed04f57b38ef6879c14b1c546faf8bfd8f35ea6b"   # iw4x.exe of an IW4x-32 v1.x install

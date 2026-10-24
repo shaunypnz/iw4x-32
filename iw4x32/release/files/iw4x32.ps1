@@ -2,9 +2,9 @@
 # IW4x-32.bat (double-click) runs it. Linux: iw4x32.py next to it does the same steps.
 #
 #   IW4x-32.bat                          first time: sets everything up; then the start menu
-#   IW4x-32.bat --play                   IW4x-32 (IW4x-32 servers up to 48 players, and normal ones)
+#   IW4x-32.bat --play                   IW4x-32 (IW4x-32 servers up to 64 players, and normal ones)
 #   IW4x-32.bat --vanilla                vanilla IW4x (the official IW4x launcher updates and starts it)
-#   IW4x-32.bat --server [port]          48-player dedicated server (port 28960)
+#   IW4x-32.bat --server [port]          64-player dedicated server (port 28960)
 #   IW4x-32.bat --vanilla-server [port]  normal 18-player IW4x server
 #   IW4x-32.bat --setup [game folder]    do the setup again, e.g. for another game folder
 #   IW4x-32.bat --uninstall              put the official IW4x files back, remove the shortcuts
@@ -31,7 +31,7 @@
 $ErrorActionPreference = 'Stop'
 $Repo = 'shaunypnz/iw4x-32'
 # IW4x-32: the player count files\iw4x.dll is built for (Game::MAX_CLIENTS) - what 'host' runs
-$Players = 48
+$Players = 64
 $OFFICIAL_VER = 'r5292'
 $OFFICIAL_DLL = '890a310c9b594824ff3da71d24647821991c9ab5d1f2f9870fd9a07cb2341ba4'
 $OFFICIAL_EXE = '49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009'

@@ -4,7 +4,7 @@
 # nothing installed anywhere outside the test tree. Both launchers go through the same cases:
 #   setup from an extracted zip: finds MW2 in Steam, copies the kit to <game>/IW4x-32, the official launcher installs
 #   IW4x, the official dll is backed up, ours goes in; a second start changes nothing; the IW4x launcher putting the
-#   official dll back is repaired; server (port, 32 slots, userraw cfg); vanilla puts the official dll back; a new
+#   official dll back is repaired; server (port, the kit's PLAYERS slots - 64 for this build, userraw cfg); vanilla puts the official dll back; a new
 #   release updates the kit (legacy shims skipped), a second run downloads nothing; a download with a wrong SHA-256
 #   changes nothing and the game still starts; an older copy of the kit hands over to the newer one in the game
 #   folder; versions (built-for x from our dll, your IW4x y from the official one): a newer y stays, an older y is
@@ -131,7 +131,13 @@ for IMPL in "${IMPLS[@]}"; do
     [ -f "$GAME/userraw/server_iw4x32.cfg" ] && ok "server: userraw/server_iw4x32.cfg made" || bad "server: no userraw cfg"
     has "$R/4.out" "net_port 28961" "server: the port is passed on"
     P=$(sed -n 's/^PLAYERS = \([0-9]*\).*/\1/p' "$KIT0/files/iw4x32.py")
+    Q=$(sed -n 's/^\$Players = \([0-9]*\).*/\1/p' "$KIT0/files/iw4x32.ps1")
+    [ -n "$P" ] && [ "$P" = "$Q" ] && ok "host: both launchers host $P players" || bad "host: iw4x32.py PLAYERS=$P but iw4x32.ps1 Players=$Q"
+    [ "$P" = 64 ] && ok "host: the kit's host choice is the 64-player server" || bad "host: the kit hosts $P, this build hosts 64"
     has "$R/4.out" "sv_maxclients $P" "server: $P slots"
+    has "$R/4.out" "party_maxplayers $P" "server: party_maxplayers follows the slots"
+    has "$R/4.out" "IW4x-32 server - $P players" "server: the label says $P players"
+    grep -qF "Host a $P-player server" "$KIT0/README.txt" && ok "host: the start menu offers hosting $P" || bad "host: the README menu does not offer hosting $P"
 
     # 5. vanilla puts the official dll back, IW4x-32 puts itself back
     run "$K" "$R/5.out" --vanilla

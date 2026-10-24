@@ -1,5 +1,5 @@
 #!/bin/sh
-# IW4x-32 - Modern Warfare 2 with up to 48 players (Linux / Steam Deck, Steam Proton or Wine). Run:  ./IW4x-32.sh
+# IW4x-32 - Modern Warfare 2 with up to 64 players (Linux / Steam Deck, Steam Proton or Wine). Run:  ./IW4x-32.sh
 #  First time: finds your game, installs official IW4x (with the official IW4x launcher) and IW4x-32, and adds
 #  "IW4x-32" to your applications menu. After that it is the start menu: play, vanilla IW4x, host a server,
 #  uninstall. It keeps itself and IW4x up to date.

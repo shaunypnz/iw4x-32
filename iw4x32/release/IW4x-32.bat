@@ -1,11 +1,11 @@
 @echo off
-REM IW4x-32 - Modern Warfare 2 with up to 48 players. DOUBLE-CLICK THIS FILE - that is all.
+REM IW4x-32 - Modern Warfare 2 with up to 64 players. DOUBLE-CLICK THIS FILE - that is all.
 REM  First time: finds your game, installs official IW4x (with the official IW4x launcher) and IW4x-32, and puts
 REM  an "IW4x-32" shortcut on your desktop. After that it is the start menu: play, vanilla IW4x, host a server,
 REM  uninstall. It keeps itself and IW4x up to date.
 REM This file is enough on its own: without the files\ folder next to it, it downloads the release from GitHub
 REM (every file SHA-256 checked) into an IW4x-32 folder next to it first.
-REM Options, e.g. for your own shortcuts: --play  --vanilla  --server [port]  --server48 [port]  --vanilla-server [port]
+REM Options, e.g. for your own shortcuts: --play  --vanilla  --server [port]  --vanilla-server [port]
 REM  --setup [game folder]  --uninstall  --no-update  --dry; anything else goes to the game: +connect 1.2.3.4:28960
 REM Everything happens in files\iw4x32.ps1. The last line is ONE line on purpose: an update may replace this file
 REM while it runs.
