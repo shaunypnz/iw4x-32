@@ -847,6 +847,13 @@ namespace Components
       *MaskWord(ent, clientNum) |= 1u << (clientNum & 31);
   }
 
+  // one client's bit cleared (0x5EF580, 0x5F6AE5, 0x5F6E67)
+  void __cdecl MaskRemove(char* ent, int clientNum)
+  {
+    if (MaskClient(clientNum))
+      *MaskWord(ent, clientNum) &= ~(1u << (clientNum & 31));
+  }
+
   int __cdecl MaskTest(char* ent, int clientNum)
   {
     return MaskClient(clientNum) && (*MaskWord(ent, clientNum) >> (clientNum & 31) & 1);
@@ -875,7 +882,81 @@ namespace Components
 
   volatile DWORD s_back_5D57A8 = 0x5D57A8, s_back_5DD2B2 = 0x5DD2B2, s_back_6295AF = 0x6295AF,
                  s_back_6295D2 = 0x6295D2, s_back_629604 = 0x629604, s_back_62962F = 0x62962F,
-                 s_back_62966D = 0x62966D, s_back_44C9D5 = 0x44C9D5;
+                 s_back_62966D = 0x62966D, s_back_44C9D5 = 0x44C9D5, s_back_5DDF3E = 0x5DDF3E,
+                 s_back_5DDFAD = 0x5DDFAD, s_back_5EF5CB = 0x5EF5CB, s_back_5F6B01 = 0x5F6B01;
+
+  // the writers that form the word address first - `lea eax, [ent + (n >> 5) * 4 + 0xFC]` (slot_hazards.py found
+  // them: an `or`/`and` on [eax], so a search for +0xFC operands missed them)
+
+  // 0x5DDF26: ecx = clientNum, edi = entity; the next instruction is a call with a stack argument
+  void __declspec(naked) MaskAddB_Stub()
+  {
+    __asm
+    {
+      push ecx
+      push edi
+      call MaskAdd
+      add esp, 8
+      jmp dword ptr [s_back_5DDF3E]
+    }
+  }
+
+  // 0x5DDF90: ecx = clientNum, eax = entity (word 0 was just set to -1): every client but this one; then the
+  // stolen `add esp, 0x1C`
+  void __declspec(naked) MaskAllButD_Stub()
+  {
+    __asm
+    {
+      push ecx
+      push eax
+      call MaskAllBut
+      add esp, 8
+      add esp, 0x1C
+      jmp dword ptr [s_back_5DDFAD]
+    }
+  }
+
+  // 0x5EF580: ecx = clientNum, ebp = entity; continues at the jmp target (ebx is reloaded there)
+  void __declspec(naked) MaskRemoveA_Stub()
+  {
+    __asm
+    {
+      push ecx
+      push ebp
+      call MaskRemove
+      add esp, 8
+      jmp dword ptr [s_back_5EF5CB]
+    }
+  }
+
+  // 0x5F6AE5 (a loop): [edx] = clientNum, edi = entity; edx and esi are the loop's, so every register is kept
+  void __declspec(naked) MaskRemoveB_Stub()
+  {
+    __asm
+    {
+      pushad
+      push dword ptr [edx]
+      push edi
+      call MaskRemove
+      add esp, 8
+      popad
+      jmp dword ptr [s_back_5F6B01]
+    }
+  }
+
+  // 0x5F6E67: [eax] = clientNum, esi = entity; the rest is `pop esi; not; and; ret`
+  void __declspec(naked) MaskRemoveC_Stub()
+  {
+    __asm
+    {
+      push dword ptr [eax]
+      push esi
+      call MaskRemove
+      add esp, 8
+      pop esi
+      retn
+    }
+  }
 
   // 0x5D5579: ecx = clientNum, esi = entity; the rest of the function is `or [mask], bit; pop edi; pop esi; ret`
   void __declspec(naked) MaskAdd_Stub()
@@ -1041,6 +1122,11 @@ namespace Components
       {0x6295FA, "\xD3\xE0\x85\x86\xFC", MaskTest2_Stub},
       {0x62965E, "\xB8\x01\x00\x00\x00", MaskTest3_Stub},
       {0x44C9D0, "\x56\x8B\x74\x24\x08", MaskFree_Stub},
+      {0x5DDF26, "\x8B\xD1\xC1\xFA\x05", MaskAddB_Stub},
+      {0x5DDF90, "\x8B\xD1\xC1\xFA\x05", MaskAllButD_Stub},
+      {0x5EF580, "\x8B\xD1\x83\xE1\x1F", MaskRemoveA_Stub},
+      {0x5F6AE5, "\x8B\x0A\x8B\xC1\x83", MaskRemoveB_Stub},
+      {0x5F6E67, "\x8B\x08\x8B\xD1\xC1", MaskRemoveC_Stub},
     };
     for (const auto& m : sites)
       if (!Matches(reinterpret_cast<const void*>(m.va), m.bytes, 5))
