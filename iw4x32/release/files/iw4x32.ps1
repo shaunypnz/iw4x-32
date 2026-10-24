@@ -30,8 +30,8 @@
 # IW4X32_NO_START=1 (print the command, start nothing), IW4X32_NO_SHORTCUTS=1, IW4X32_YES=1 (uninstall without asking).
 $ErrorActionPreference = 'Stop'
 $Repo = 'shaunypnz/iw4x-32'
-$OFFICIAL_VER = 'r5278'
-$OFFICIAL_DLL = '57922527bbbb5dd5a256b8a6243179eb5e28d7e2bcc7bbf53f5ace0518f6da1c'
+$OFFICIAL_VER = 'r5292'
+$OFFICIAL_DLL = '890a310c9b594824ff3da71d24647821991c9ab5d1f2f9870fd9a07cb2341ba4'
 $OFFICIAL_EXE = '49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009'
 $V1_EXE = '2609c2687dd2ffb3f32c7687ed04f57b38ef6879c14b1c546faf8bfd8f35ea6b'   # iw4x.exe of an IW4x-32 v1.x install
 $Manifest = if ($env:IW4X32_UPDATE_URL) { $env:IW4X32_UPDATE_URL } else { "https://github.com/$Repo/releases/latest/download/latest.json" }

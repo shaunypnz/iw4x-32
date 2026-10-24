@@ -2,8 +2,26 @@
 top of a normal IW4x install; your `iw4x.exe` stays the official one. Normal 18-player IW4x servers keep working.
 
 <!-- whats-new -->
-### What's new in v2.6-r5278
-A kit / launcher update on the same official **IW4x r5278**, live-tested on a 32-slot server (31 bots + a real client).
+### What's new in v2.7-r5292
+Built for official **IW4x r5292** (previous release: r5278) and live-tested on a 32-slot server (31 bots + a real client). It carries every IW4x fix from r5278 to r5292:
+- Fix outdated legacy fastfiles replacing current ones during zone adoption
+- Fix fatal error when dropping weapon with no world model
+- Fix recoil multiplier discarding accumulated gun kick
+- Change script stack corruption from crash to error
+- Remove set optimal settings prompt
+- Fix fatal error when starting match on DLC map not owned
+- Fix unlocked items not marked new after map rotation
+- Fix stats request putting disconnected client back to connecting
+- Fix black screen after missing DLC error on map rotation
+- Fix players reconnecting on every map rotation
+- Fix client command overflow from repeated notifies
+- Fix crash when Direct3D 9 fails to initialize
+- Bump iw4-open-formats
+- Fix ZoneBuilder not building secondary sound aliases
+- Localize server browser toasts
+- Fix localized zone not replacing stock strings
+- Fix server browser counts not being localized
+- Fix sounds silenced by late sound driver init
 <!-- /whats-new -->
 
 ### Install
