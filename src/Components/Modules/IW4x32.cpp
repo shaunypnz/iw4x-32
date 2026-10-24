@@ -1028,8 +1028,8 @@ namespace Components
   // only when the build is wider than one mask word; refuses the lot if any site is not the stock bytes
   bool InstallClientMaskHooks()
   {
-    if (Game::MAX_CLIENTS <= 32)
-      return true;
+    if constexpr (Game::MAX_CLIENTS <= 32) // a constexpr count: a plain if makes MSVC warn C4127, and Release
+      return true;                         // treats every warning as an error
     const MaskSite sites[] = {
       {0x5D5579, "\x8B\xC1\x83\xE1\x1F", MaskAdd_Stub},
       {0x5D5784, "\x83\xE1\x1F\xBA\x01", MaskAllButA_Stub},
