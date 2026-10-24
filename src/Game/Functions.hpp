@@ -679,9 +679,13 @@ namespace Game
 
   constexpr std::size_t STATIC_MAX_LOCAL_CLIENTS = 1;
   constexpr std::size_t MAX_LOCAL_CLIENTS = 1;
-  // IW4x-32: 32 players. Sizes/bounds every IW4x-owned per-client system (bots, voice, clan tags, card titles,
+  // IW4x-32: up to 32 players. Sizes/bounds every IW4x-owned per-client system (bots, voice, clan tags, card titles,
   // server list, chat, bans, status). Engine struct mirrors in Structs.hpp keep their literal [18]: the engine's own
   // arrays are enlarged by the IW4x32 component, which also redirects the engine addresses that change.
+  // This number MUST equal the player count the engine table set (iw4x32/reference/engine_patches.json) is built
+  // for: the DLL indexes the engine's enlarged arrays by it (ServerInfo's getStatus walks svs_clients[0..N-1]), so
+  // a DLL wider than the tables reads past the end of what the component allocated. The 48-slot table set is on
+  // hold - its in-place cg growth does not fit (check_tables.py refuses it); raise both together when it lands.
   constexpr std::size_t MAX_CLIENTS = 32;
 
   constexpr auto MAX_CMD_BUFFER = 0x10000;
