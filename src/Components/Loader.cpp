@@ -31,6 +31,7 @@
 #include "Modules/Huffman.hpp"
 #include "Modules/IPCPipe.hpp"
 #include "Modules/IW4x32.hpp" // IW4x-32
+#include "Modules/IW4x32Bots.hpp" // IW4x-32
 #include "Modules/Lean.hpp"
 #include "Modules/MapDump.hpp"
 #include "Modules/MapRotation.hpp"
@@ -195,6 +196,8 @@ namespace Components
     Register(new Zones());
 
     Register(new GSC::GSC());
+
+    Register(new IW4x32Bots()); // IW4x-32: native Bot Warfare target/route builtins - after the GSC builtin hooks
 
     Register(new BotLib::lPrecomp());
     Register(new ViewModelFxSetup::Setup());
