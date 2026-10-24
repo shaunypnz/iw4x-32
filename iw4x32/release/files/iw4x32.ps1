@@ -36,6 +36,18 @@ $OFFICIAL_VER = 'r5292'
 $OFFICIAL_DLL = '890a310c9b594824ff3da71d24647821991c9ab5d1f2f9870fd9a07cb2341ba4'
 $OFFICIAL_EXE = '49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009'
 $V1_EXE = '2609c2687dd2ffb3f32c7687ed04f57b38ef6879c14b1c546faf8bfd8f35ea6b'   # iw4x.exe of an IW4x-32 v1.x install
+# the IW4x-32 release key (RSA-3072 modulus, exponent): an update is taken only from a latest.json signed with it
+# (latest.json.sig next to it) - a release that is not signed by the owner's key never reaches this PC
+$ReleaseKeyN = (
+    'b3d1e635d2cbb05774f8f9e016a111bd6f3fc2ef1d2c0010d63003ffb503b5a43bfa5e104a3b039135bb9ca8cf15a18d' +
+    '0375798e2c246c884c9319c9328463600382e8eab31886ff59f1d2e0ec8eeaad642cf0f46b625b36bc4571c05f050180' +
+    'f0ba99310892eb4e4bb6d5e6770b6be91d69be07bfefd598381a6a8cf9e84a5be9f94bfdbbb4dbd55f9bc8ea485630b7' +
+    'de40db5b53df40efb3970f57f2fec67ec4be2a346306a1ef02f0b4db4a22babe70ac14271c152c37a2414c148d821a37' +
+    'd96d2bba03dcab4e79bd976b664b3875c38ecaa29bd0d173f73a86e2937722e4635cbccac33821da93158ced0069d431' +
+    'ee291697ccaee886f5afa8cf967e4f7efba9b65e25d9cad1bf377053a8f94ab9a5c1a3850307c6544bf50a5cedfab8a4' +
+    'a1195926d8e13813457d590db39cca1599c622054b8fd99d576bcda8c36a31ff21970d43464923913da2082c37b669f8' +
+    '483862b64fc68354e4883543c3e40757284a2912d92502fa2db1384eb192b925039a14a9ff3742537b7e94a333a307fb')
+$ReleaseKeyE = '10001'
 $Manifest = if ($env:IW4X32_UPDATE_URL) { $env:IW4X32_UPDATE_URL } else { "https://github.com/$Repo/releases/latest/download/latest.json" }
 $LauncherRelease = if ($env:IW4X32_LAUNCHER_RELEASE_URL) { $env:IW4X32_LAUNCHER_RELEASE_URL } else { 'https://api.github.com/repos/iw4x/launcher/releases/latest' }
 $MW2 = 'Call of Duty Modern Warfare 2'
@@ -87,6 +99,25 @@ function Get-Bytes($url, $timeoutSec = 5) {   # 5 s: a version check must never 
     $req.Headers.Add('Cache-Control', 'no-cache')
     $resp = $req.GetResponse()
     try { $ms = New-Object IO.MemoryStream; $resp.GetResponseStream().CopyTo($ms); return , $ms.ToArray() } finally { $resp.Close() }
+}
+function HexBytes($h) { if ($h.Length % 2) { $h = '0' + $h }; [byte[]](0..($h.Length / 2 - 1) | ForEach-Object { [Convert]::ToByte($h.Substring($_ * 2, 2), 16) }) }
+function Get-Manifest($timeoutSec = 5) {
+    # latest.json - only when latest.json.sig proves the release key signed exactly these bytes (RSA PKCS#1 v1.5
+    # SHA-256, the release pipeline's own check)
+    $data = Get-Bytes $Manifest $timeoutSec
+    try { $sig = [Convert]::FromBase64String([Text.Encoding]::ASCII.GetString((Get-Bytes ($Manifest + '.sig') $timeoutSec)).Trim()) }
+    catch { throw "UNSIGNED: no signature for latest.json" }
+    $n = $ReleaseKeyN; $e = $ReleaseKeyE
+    if ($env:IW4X32_TEST_RELEASE_KEY -and $Manifest.StartsWith('http://127.0.0.1:')) { $n, $e = $env:IW4X32_TEST_RELEASE_KEY -split ':' }   # kit_test.sh's key, its localhost fake GitHub only
+    $p = New-Object Security.Cryptography.RSAParameters
+    $p.Modulus = HexBytes $n; $p.Exponent = HexBytes $e
+    $rsa = [Security.Cryptography.RSA]::Create()
+    try {
+        $rsa.ImportParameters($p)
+        $ok = $rsa.VerifyData($data, $sig, [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    } catch { $ok = $false } finally { $rsa.Dispose() }
+    if (-not $ok) { throw "UNSIGNED: latest.json is not signed by the IW4x-32 release key" }
+    [Text.Encoding]::UTF8.GetString($data) | ConvertFrom-Json
 }
 function Get-Json($url, $timeoutSec = 5) { [Text.Encoding]::UTF8.GetString((Get-Bytes $url $timeoutSec)) | ConvertFrom-Json }
 function VNum($v) { (([regex]::Matches("$v", '\d+') | ForEach-Object { '{0:D6}' -f [int]$_.Value }) -join '.') }
@@ -288,7 +319,11 @@ function Do-Update {
     $have = Installed-Version
     $m = $null
     if (-not $NoUpdate) {
-        try { $m = Get-Json $Manifest } catch { Say "no update check (no internet?) - starting IW4x-32 $have" }
+        try { $m = Get-Manifest }
+        catch {
+            if ("$($_.Exception.Message)" -like 'UNSIGNED:*') { Say "update refused: $(("$($_.Exception.Message)").Substring(10)) - starting IW4x-32 $have as it is" }
+            else { Say "no update check (no internet?) - starting IW4x-32 $have" }
+        }
     }
     if ($m -and (KVer $m.version) -gt (KVer $have) -and (Game-Running)) { Say 'the game is running - updating next time'; $m = $null }
     Repair $m
@@ -575,7 +610,7 @@ try {
     if (-not (Test-Path -LiteralPath (F 'iw4x.dll'))) {
         # only IW4x-32.bat was downloaded (or the zip was not fully extracted): get the rest of the release
         Say 'getting IW4x-32 from GitHub ...'
-        Update-Kit (Get-Json $Manifest 30)
+        Update-Kit (Get-Manifest 30)
     }
     $migrated = Migrate-Legacy
     if ($env:IW4X32_GAME) { $Game = $env:IW4X32_GAME } elseif (Is-Game (Split-Path -Parent $Kit)) { $Game = Split-Path -Parent $Kit }

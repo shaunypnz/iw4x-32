@@ -34,7 +34,7 @@ Steam (Proton): the game runs in its own Proton prefix. With the Steam launch op
 Steam starts it (and the Play button in Steam works too); without it, the game's Proton is run directly.
 Test hooks: IW4X32_GAME, IW4X32_STEAM, IW4X32_UPDATE_URL, IW4X32_LAUNCHER_RELEASE_URL,
 IW4X32_NO_START=1 (print the command, start nothing), IW4X32_NO_SHORTCUTS=1, IW4X32_YES=1 (uninstall without asking)."""
-import glob, hashlib, io, json, os, re, select, shlex, shutil, signal, subprocess, sys, tarfile, tempfile, time
+import base64, glob, hashlib, io, json, os, re, select, shlex, shutil, signal, subprocess, sys, tarfile, tempfile, time
 import urllib.parse, urllib.request
 
 REPO = "shaunypnz/iw4x-32"
@@ -44,7 +44,21 @@ PLAYERS = 64
 OFFICIAL_DLL = "890a310c9b594824ff3da71d24647821991c9ab5d1f2f9870fd9a07cb2341ba4"
 OFFICIAL_EXE = "49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009"
 V1_EXE = "2609c2687dd2ffb3f32c7687ed04f57b38ef6879c14b1c546faf8bfd8f35ea6b"   # iw4x.exe of an IW4x-32 v1.x install
+# the IW4x-32 release key (RSA-3072, "modulus:exponent" in hex): an update is taken only from a latest.json signed
+# with it (latest.json.sig next to it) - a release that is not signed by the owner's key never reaches this PC
+RELEASE_KEY = (
+    "b3d1e635d2cbb05774f8f9e016a111bd6f3fc2ef1d2c0010d63003ffb503b5a43bfa5e104a3b039135bb9ca8cf15a18d"
+    "0375798e2c246c884c9319c9328463600382e8eab31886ff59f1d2e0ec8eeaad642cf0f46b625b36bc4571c05f050180"
+    "f0ba99310892eb4e4bb6d5e6770b6be91d69be07bfefd598381a6a8cf9e84a5be9f94bfdbbb4dbd55f9bc8ea485630b7"
+    "de40db5b53df40efb3970f57f2fec67ec4be2a346306a1ef02f0b4db4a22babe70ac14271c152c37a2414c148d821a37"
+    "d96d2bba03dcab4e79bd976b664b3875c38ecaa29bd0d173f73a86e2937722e4635cbccac33821da93158ced0069d431"
+    "ee291697ccaee886f5afa8cf967e4f7efba9b65e25d9cad1bf377053a8f94ab9a5c1a3850307c6544bf50a5cedfab8a4"
+    "a1195926d8e13813457d590db39cca1599c622054b8fd99d576bcda8c36a31ff21970d43464923913da2082c37b669f8"
+    "483862b64fc68354e4883543c3e40757284a2912d92502fa2db1384eb192b925039a14a9ff3742537b7e94a333a307fb"
+    ":10001")
 MANIFEST = os.environ.get("IW4X32_UPDATE_URL") or f"https://github.com/{REPO}/releases/latest/download/latest.json"
+if os.environ.get("IW4X32_TEST_RELEASE_KEY") and MANIFEST.startswith("http://127.0.0.1:"):
+    RELEASE_KEY = os.environ["IW4X32_TEST_RELEASE_KEY"]  # kit_test.sh's own key, for its fake GitHub on localhost only
 LAUNCHER_RELEASE = os.environ.get("IW4X32_LAUNCHER_RELEASE_URL") or "https://api.github.com/repos/iw4x/launcher/releases/latest"
 LAUNCH_OPTION = """bash -c 'exec "${@/iw4mp.exe/iw4x.exe}"' -- %command%"""
 MW2 = "Call of Duty Modern Warfare 2"
@@ -140,6 +154,34 @@ def sha(p):
 def get(url, timeout=5):        # 5 s: a version check must never hold up a game start
     req = urllib.request.Request(url, headers={"User-Agent": "iw4x32-updater", "Cache-Control": "no-cache"})
     return urllib.request.urlopen(req, timeout=timeout).read()
+
+
+class Unsigned(Exception):
+    """latest.json without a valid signature from the release key"""
+
+
+def signed(data, sig):
+    """RSA PKCS#1 v1.5 SHA-256 over data with RELEASE_KEY (the same check as the release pipeline's)"""
+    n_hex, e_hex = RELEASE_KEY.split(":")
+    n, e = int(n_hex, 16), int(e_hex, 16)
+    k = (n.bit_length() + 7) // 8
+    if len(sig) != k:
+        return False
+    em = pow(int.from_bytes(sig, "big"), e, n).to_bytes(k, "big")
+    t = bytes.fromhex("3031300d060960864801650304020105000420") + hashlib.sha256(data).digest()
+    return em == b"\x00\x01" + b"\xff" * (k - 3 - len(t)) + b"\x00" + t
+
+
+def get_manifest(timeout=5):
+    """latest.json - only when latest.json.sig proves the release key signed exactly these bytes"""
+    data = get(MANIFEST, timeout)
+    try:
+        sig = base64.b64decode(get(MANIFEST + ".sig", timeout).strip(), validate=True)
+    except Exception as e:
+        raise Unsigned(f"no signature for latest.json ({type(e).__name__})")
+    if not signed(data, sig):
+        raise Unsigned("latest.json is not signed by the IW4x-32 release key")
+    return json.loads(data)
 
 
 def vtuple(v):
@@ -417,7 +459,9 @@ def do_update():
     m = None
     if not O.no_update:
         try:
-            m = json.loads(get(MANIFEST))
+            m = get_manifest()
+        except Unsigned as e:
+            say(f"update refused: {e} - starting IW4x-32 {have} as it is")
         except Exception as e:
             say(f"no update check ({type(e).__name__}) - starting IW4x-32 {have}")
     if m and kver(m["version"]) > kver(have) and game_running():
@@ -927,7 +971,7 @@ def main():
     if not os.path.isfile(F("iw4x.dll")):
         # only IW4x-32.sh was downloaded (or the zip was not fully extracted): get the rest of the release
         say("getting IW4x-32 from GitHub ...")
-        update_kit(json.loads(get(MANIFEST, timeout=30)))
+        update_kit(get_manifest(timeout=30))
     migrated = migrate_legacy()
     GAME = os.environ.get("IW4X32_GAME") or (os.path.dirname(KIT) if is_game(os.path.dirname(KIT)) else None)
     if O.setup or not GAME:

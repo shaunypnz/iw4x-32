@@ -60,6 +60,9 @@ jobs:
       - name: Check the committed kit (hashes, installers, line endings)
         run: python3 iw4x32/tools/check_kit.py
 
+      - name: latest.json is signed (the launchers refuse an update without latest.json.sig)
+        run: test -s latest.json.sig
+
       - name: Release page text (version + the IW4x release it is made for, from latest.json)
         run: |
           IW4X=$(python3 -c "import json; print(json.load(open('latest.json'))['iw4x'])")
@@ -93,7 +96,7 @@ jobs:
           bodyFile: iw4x32/RELEASE_NOTES.md
           # latest.json: what every IW4x-32 launcher reads (releases/latest/download/latest.json); IW4x-32.bat /
           # IW4x-32.sh also work downloaded on their own - they fetch the rest of the release
-          artifacts: "IW4x-32-*.zip,iw4x32/release/IW4x-32.bat,iw4x32/release/IW4x-32.sh,latest.json,iw4x.dll,iw4x32/release/files/SHA256SUMS.txt"
+          artifacts: "IW4x-32-*.zip,iw4x32/release/IW4x-32.bat,iw4x32/release/IW4x-32.sh,latest.json,latest.json.sig,iw4x.dll,iw4x32/release/files/SHA256SUMS.txt"
           artifactErrorsFailBuild: true
           allowUpdates: true
           draft: false

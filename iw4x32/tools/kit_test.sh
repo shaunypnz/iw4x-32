@@ -36,7 +36,15 @@ python3 -u -m http.server 0 --bind 127.0.0.1 --directory "$WEB" > "$T/http.log" 
 HTTP=$!; trap 'kill $HTTP 2>/dev/null' EXIT
 for _ in $(seq 50); do PORT=$(grep -o 'port [0-9]*' "$T/http.log" | cut -d' ' -f2); [ -n "$PORT" ] && break; sleep 0.1; done
 URL=http://127.0.0.1:$PORT
-manifest() {   # manifest <dir under web> <version> [file-with-wrong-hash]: writes $WEB/latest.json
+# the launchers take an update only from a latest.json signed with the release key: a throwaway key here, handed to
+# them as IW4X32_TEST_RELEASE_KEY (honoured only for a localhost update URL - this fake GitHub)
+KEY=$T/release-test.pem
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:3072 -out "$KEY" 2>/dev/null
+export IW4X32_TEST_RELEASE_KEY="$(openssl rsa -in "$KEY" -noout -modulus 2>/dev/null | cut -d= -f2 | tr 'A-F' 'a-f'):10001"
+sign() {       # sign [file]: writes $WEB/latest.json.sig (base64, RSA-3072 PKCS#1 v1.5 SHA-256)
+    openssl dgst -sha256 -sign "$KEY" "${1:-$WEB/latest.json}" | base64 -w0 > "${1:-$WEB/latest.json}.sig"
+}
+manifest() {   # manifest <dir under web> <version> [file-with-wrong-hash]: writes $WEB/latest.json (+ its .sig)
     python3 - "$WEB" "$1" "$2" "${3:-}" "$URL" <<'EOF'
 import hashlib, json, os, sys
 web, d, ver, wrong, url = sys.argv[1:]
@@ -52,6 +60,7 @@ off = {"iw4x.dll": hashlib.sha256(os.environ["FAKE_OFF"].encode()).hexdigest(), 
 json.dump({"version": ver, "iw4x": os.environ["FAKE_OFF"].split()[-1], "official": off, "base_url": f"{url}/{d}/", "files": files,
            "legacy": ["iw4x32_update.ps1", "iw4x32_update.py"]}, open(os.path.join(web, "latest.json"), "w"))
 EOF
+    sign
 }
 
 # ---- the kit as a player extracts it, its constants pointed at our fake official / v1.x files -----------------------
@@ -171,6 +180,18 @@ for IMPL in "${IMPLS[@]}"; do
     has "$R/7.out" "download check failed" "bad hash: refused"
     head -1 "$K/README.txt" | grep -q "v9.9-$X " && ok "bad hash: nothing was changed" || bad "bad hash: the kit changed"
     has "$R/7.out" "command:" "bad hash: the game still starts"
+    # 7s. owner 2026-10-25: an update whose latest.json is not signed by the release key changes nothing
+    manifest rel910 "v9.10-$X"
+    rm -f "$WEB/latest.json.sig"
+    run "$K" "$R/7s.out" --play
+    has "$R/7s.out" "update refused" "unsigned: refused"
+    head -1 "$K/README.txt" | grep -q "v9.9-$X " && ok "unsigned: nothing was changed" || bad "unsigned: the kit changed"
+    has "$R/7s.out" "command:" "unsigned: the game still starts"
+    manifest rel910 "v9.10-$X"
+    python3 -c "import sys; p=sys.argv[1]; b=open(p,'rb').read(); open(p,'wb').write(b.replace(b'v9.10', b'v9.11', 1))" "$WEB/latest.json"
+    run "$K" "$R/7t.out" --play
+    has "$R/7t.out" "not signed by the IW4x-32 release key" "tampered after signing: refused"
+    head -1 "$K/README.txt" | grep -q "v9.9-$X " && ok "tampered: nothing was changed" || bad "tampered: the kit changed"
     manifest rel99 "v9.9-$X"
 
     # 7b. an older copy of the kit (the extracted v2.0 zip) hands over to the v9.9 in the game folder
