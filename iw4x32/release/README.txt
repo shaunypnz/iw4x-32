@@ -1,4 +1,4 @@
-IW4x-32 v2.8-r5292 - Modern Warfare 2 (2009) multiplayer with up to 48 players instead of 18
+IW4x-32 v2.9-r5292 - Modern Warfare 2 (2009) multiplayer with up to 48 players instead of 18
 ==================================================================================
 
   WINDOWS:  double-click  IW4x-32.bat
