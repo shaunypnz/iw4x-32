@@ -104,6 +104,14 @@ allocated them.
 ## Compatibility: one client for stock and 32-player servers
 - **Marker dvars:** clients register `iw4x32 = 1` (USERINFO | ROM). Servers with more than 18 slots register
   `sv_iw4x32 = 1` (SERVERINFO).
+- **Slot-layout token:** clients also register `iw4x32h`, wide servers `sv_iw4x32h` - an FNV-1a hash
+  `gen_tables.py` takes of the layout its tables lay out: `players`, every grown array's range and size (this is
+  the `post_cg_globals` span that lets `cg_s.clientinfo` grow), the `cg_s` shift, the per-layout operand offsets,
+  the size constants, the slot-count cvar domains and the player/body `dual` byte patches. Both sides compare it:
+  the server refuses the connect, the client disconnects. The player count alone is not enough - two table sets
+  can hold the same number of slots and still put bodies where the other side has players. Hook addresses, the
+  script-variable pool and non-`dual` patches are not in the hash: they move no player and no body. A peer that
+  sends no token is a build from before it existed, with the same tables, so it is still admitted.
 - **Server side:** with more than 18 slots, `SV_DirectConnect` refuses remote clients without `iw4x32\1` (bots
   and loopback are exempt), with a message. With 18 or fewer, the server keeps the **stock** entity layout and
   admits everyone.

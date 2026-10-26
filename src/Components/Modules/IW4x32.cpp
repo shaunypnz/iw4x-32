@@ -401,6 +401,16 @@ namespace Components
                        g_Dual.size() + IW4x32_DualOperandsCount);
     }
 
+    // IW4x-32: the slot layout as one number. gen_tables.py hashes what the tables make it to be - the player
+    // count, every grown array's range and size (the post_cg_globals span is what lets cg_s.clientinfo grow),
+    // the cg_s shift, the per-layout operand offsets, the entity-layout byte patches and the slot-count cvar
+    // domains. Two table sets can agree on the player count and still lay the engine out differently: the
+    // count alone would let a client read bodies where the server has players, so both sides compare this.
+    constexpr int LayoutToken()
+    {
+      return static_cast<int>(IW4x32_LayoutHash & 0x7FFFFFFFu); // an int dvar stays positive on the wire
+    }
+
     void RegisterMarker()
     {
       Game::Dvar_RegisterBool("iw4x32", true, DVAR_USERINFO | DVAR_ROM,
@@ -410,6 +420,10 @@ namespace Components
       // clientnum the client could not survive.
       Game::Dvar_RegisterInt("iw4x32n", static_cast<int>(Game::MAX_CLIENTS), 0, static_cast<int>(Game::MAX_CLIENTS),
                              DVAR_USERINFO | DVAR_ROM, "IW4x-32 build: highest clientnum + 1 this client handles");
+      // IW4x-32: and the layout those arrays are placed in, for a server of the same player count whose tables
+      // moved things (see LayoutToken).
+      Game::Dvar_RegisterInt("iw4x32h", LayoutToken(), 0, LayoutToken(), DVAR_USERINFO | DVAR_ROM,
+                             "IW4x-32 build: the slot layout its engine tables lay out");
     }
 
     // SV_SpawnServer, right after sv_maxclients is registered
@@ -433,6 +447,13 @@ namespace Components
                                                  "IW4x-32 server: the player count its entity layout is built for");
       if (layout)
         Game::Dvar_SetInt(layout, static_cast<int>(Game::MAX_CLIENTS));
+      // IW4x-32: the same for the table set itself - a client of another set leaves instead of playing with a
+      // foreign entity layout (its own iw4x32h is what the connect check below reads).
+      const auto token = Game::Dvar_RegisterInt("sv_iw4x32h", LayoutToken(), 0, LayoutToken(),
+                                                DVAR_SERVERINFO | DVAR_ROM,
+                                                "IW4x-32 server: the slot layout its engine tables lay out");
+      if (token)
+        Game::Dvar_SetInt(token, LayoutToken());
 
       SetLayout(g_ServerIs32);
       Game::Com_Printf(0x10, "iw4x32: %d-slot server - %s\n", maxc,
@@ -460,15 +481,30 @@ namespace Components
       // build's server - even one running 32 slots - would see bodies where players are. Only the same build gets in.
       const auto* cap = Game::Info_ValueForKey(userinfo, "iw4x32n");
       const int slots = cap && cap[0] ? std::atoi(cap) : 32;
-      if (slots == static_cast<int>(Game::MAX_CLIENTS))
-        return 1;
+      if (slots != static_cast<int>(Game::MAX_CLIENTS))
+      {
+        wsprintfA(g_RejectMsg, "error\nThis IW4x-32 server runs the %d-player build; yours is the %d-player build. "
+                               "Update IW4x-32 to join (the update also works on normal servers).",
+                  static_cast<int>(Game::MAX_CLIENTS), slots);
+        wsprintfA(g_RejectLog, "    rejected connect: client build lays out %d players, this server %d\n", slots,
+                  static_cast<int>(Game::MAX_CLIENTS));
+        return 0;
+      }
 
-      wsprintfA(g_RejectMsg, "error\nThis IW4x-32 server runs the %d-player build; yours is the %d-player build. "
-                             "Update IW4x-32 to join (the update also works on normal servers).",
-                static_cast<int>(Game::MAX_CLIENTS), slots);
-      wsprintfA(g_RejectLog, "    rejected connect: client build lays out %d players, this server %d\n", slots,
-                static_cast<int>(Game::MAX_CLIENTS));
-      return 0;
+      // IW4x-32: the same player count can still come from another table set - grown arrays in other places,
+      // another body base. A client that does not send the token is a build from before it existed: same
+      // tables, so it gets in.
+      const auto* token = Game::Info_ValueForKey(userinfo, "iw4x32h");
+      if (token && token[0] && std::atoi(token) != LayoutToken())
+      {
+        wsprintfA(g_RejectMsg, "error\nThis IW4x-32 server lays out its %d players differently from your build. "
+                               "Update IW4x-32 to join (the update also works on normal servers).",
+                  static_cast<int>(Game::MAX_CLIENTS));
+        wsprintfA(g_RejectLog, "    rejected connect: client slot layout %08X, this server %08X\n",
+                  static_cast<unsigned>(std::atoi(token)), static_cast<unsigned>(LayoutToken()));
+        return 0;
+      }
+      return 1;
     }
 
     // CG_ParseServerinfo
@@ -484,8 +520,9 @@ namespace Components
       // session, and "did the client keep the iw4x32 layout across the map change?" - the first suspect
       // in the live report - could not be read off it. One line per connect and per level restart.
       if (is32)
-        Game::Com_Printf(0x10, "iw4x32: server is %d-slot - using the iw4x32 player/body layout\n",
-                         slots ? slots : static_cast<int>(Game::MAX_CLIENTS));
+        Game::Com_Printf(0x10, "iw4x32: server is %d-slot - using the iw4x32 player/body layout (layout %08X)\n",
+                         slots ? slots : static_cast<int>(Game::MAX_CLIENTS),
+                         static_cast<unsigned>(IW4x32_LayoutHash));
       else
         Game::Com_Printf(0x10, "iw4x32: server is stock 18-slot - using the stock player/body layout\n");
       SetLayout(is32);
@@ -497,11 +534,22 @@ namespace Components
       {
         const auto* n = Game::Info_ValueForKey(info, "sv_iw4x32n");
         const int layout = n && n[0] ? std::atoi(n) : 32;
-        if (layout != static_cast<int>(Game::MAX_CLIENTS))
+        // IW4x-32: same player count, different table set - the server's grown arrays, cg_s growth and body
+        // base are somewhere else than ours, so its entity numbers do not line up with ours. (A server from
+        // before the token sends no sv_iw4x32h: same tables, so it stays.)
+        const auto* h = Game::Info_ValueForKey(info, "sv_iw4x32h");
+        const bool tokenMismatch = h && h[0] && std::atoi(h) != LayoutToken();
+        if (layout != static_cast<int>(Game::MAX_CLIENTS) || tokenMismatch)
         {
-          Game::Com_Printf(0x10, "^1iw4x32: this server runs the %d-player IW4x-32 build, this client the %d-player "
-                                 "build - disconnecting. Update IW4x-32, or the server's owner has to.\n",
-                           layout, static_cast<int>(Game::MAX_CLIENTS));
+          if (tokenMismatch)
+            Game::Com_Printf(0x10, "^1iw4x32: this %d-player IW4x-32 server lays out its players differently "
+                                   "(layout %08X, ours %08X) - disconnecting. Update IW4x-32, or the server's "
+                                   "owner has to.\n", layout, static_cast<unsigned>(std::atoi(h)),
+                             static_cast<unsigned>(LayoutToken()));
+          else
+            Game::Com_Printf(0x10, "^1iw4x32: this server runs the %d-player IW4x-32 build, this client the %d-player "
+                                   "build - disconnecting. Update IW4x-32, or the server's owner has to.\n",
+                             layout, static_cast<int>(Game::MAX_CLIENTS));
           Game::Cbuf_AddText(0, "disconnect\n");
         }
       }

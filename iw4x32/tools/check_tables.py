@@ -20,6 +20,9 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 DEFAULT_JSON = os.path.join(ROOT, "iw4x32", "reference", "engine_patches.json")
 DEFAULT_HEADER = os.path.join(ROOT, "src", "Components", "Modules", "IW4x32Tables.hpp")
 
+sys.path.insert(0, HERE)
+import gen_tables  # the layout token below is gen_tables.py's, so the check cannot drift from the generator
+
 ROLE = {"client": 0, "server": 1}
 
 
@@ -186,6 +189,15 @@ def main():
     m = re.search(r"IW4x32_DualOperandsCount = (\d+);", text)
     want(m is not None and int(m.group(1)) == len(jd), "IW4x32_DualOperandsCount != %d" % len(jd))
     want("IW4x32_Players = %d;" % src.get("players", 32) in text, "IW4x32_Players != %d" % src.get("players", 32))
+
+    # ---- IW4x-32: the slot-layout token a client and a server compare at connect (IW4x32.cpp compat) ----
+    # It is derived from the json, so a header that was hand-edited or not regenerated after a table change -
+    # the one way the compat check could end up advertising a layout its own tables do not lay out - fails here.
+    try:
+        want("IW4x32_LayoutHash = %s;" % ("0x%x" % gen_tables.layout_hash(src, gen_tables.parse(src))) in text,
+             "IW4x32_LayoutHash is not what this json lays out - run gen_tables.py")
+    except AssertionError as e:
+        want(False, "IW4x32_LayoutHash: the json does not parse as a table set: %s" % e)
 
     # ---- the in-place cg growth has to fit in the room the tables vacate (IW4x-32) --------------------
     # cg_tail is grown_in_place: cg_s ends at its old_hi and extends by (new - old) of its fixed operands into

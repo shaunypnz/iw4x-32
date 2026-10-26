@@ -9,6 +9,7 @@ namespace Components
   inline constexpr unsigned int IW4x32_ImageBase = 0x400000;
   inline constexpr unsigned int IW4x32_Players = 64;  // the slot count these tables lay the engine out for
   inline constexpr unsigned int IW4x32_CgTailShift = 0xede8;  // cg_s grew: absolute cg_tail operands
+  inline constexpr unsigned int IW4x32_LayoutHash = 0xdf2cfad6;  // what these tables lay the slots out to be - a client and a server refuse each other over a different hash (gen_tables.py layout_facts)
 
   enum IW4x32Role
   {
