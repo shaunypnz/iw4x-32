@@ -143,6 +143,11 @@ for IMPL in "${IMPLS[@]}"; do
     Q=$(sed -n 's/^\$Players = \([0-9]*\).*/\1/p' "$KIT0/files/iw4x32.ps1")
     [ -n "$P" ] && [ "$P" = "$Q" ] && ok "host: both launchers host $P players" || bad "host: iw4x32.py PLAYERS=$P but iw4x32.ps1 Players=$Q"
     [ "$P" = 64 ] && ok "host: the kit's host choice is the 64-player server" || bad "host: the kit hosts $P, this build hosts 64"
+    # IW4x-32: the slot ladder (32 -> 48 -> 64). The kit hosts the newest rung, so everything the host scenario
+    # needs at the 48-slot step must hold at any rung >= 48: one slot count in both launchers, and that count
+    # reaching sv_maxclients, party_maxplayers, the label and the menu.
+    [ "$P" -ge 48 ] && ok "host: the kit covers the 48-slot host scenario (it hosts $P)" \
+        || bad "host: the kit hosts $P, below the 48-slot ladder step"
     has "$R/4.out" "sv_maxclients $P" "server: $P slots"
     has "$R/4.out" "party_maxplayers $P" "server: party_maxplayers follows the slots"
     has "$R/4.out" "IW4x-32 server - $P players" "server: the label says $P players"
