@@ -1,25 +1,25 @@
 {
- "version": "v2.9-r5292",
+ "version": "v2.10-r5292",
  "iw4x": "r5292",
  "official": {
   "iw4x.dll": "890a310c9b594824ff3da71d24647821991c9ab5d1f2f9870fd9a07cb2341ba4",
   "iw4x.exe": "49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009"
  },
- "base_url": "https://raw.githubusercontent.com/shaunypnz/iw4x-32/v2.9-r5292/iw4x32/release/",
+ "base_url": "https://raw.githubusercontent.com/shaunypnz/iw4x-32/v2.10-r5292/iw4x32/release/",
  "files": {
   "IW4x-32.bat": "4e87f1deb43ff4bf159fae89de15d386aa830fd6b755c270d70fb063c6edaede",
   "IW4x-32.sh": "4aff0da5fefb6c728fc9d740f35d1a73a6936f4f63928b34c6318e30b440026f",
-  "README.txt": "2e30b941b0f48d22b5f097e435752184c152ad64f74e9426c95b454dbc600182",
+  "README.txt": "06d5484ed84c5c262741f07e93404c6ddd51b5a33ce6d3f44f4037155a83f0a4",
   "files/AI_CREDITS.txt": "442018a8201b3e7ca9f2da4a3bbf60bc3f8ac4a3b6e5601e7ce415f545e0bde8",
-  "files/CHANGES.txt": "3f966403c80d7947a292501b7aa239ec5f4efc0b3ff7ecf0b0f924d0737f9263",
-  "files/iw4x.dll": "71f61cadb06e906650fedaa4772d455dfc64bab22c861f8f0592ee9aafb50681",
+  "files/CHANGES.txt": "014be6109dbd7f786cc642ed8a0f5cd5e6e35f7af96a082c44ecf65b87b2f2f0",
+  "files/iw4x.dll": "9b4520e9893cdfc5ad093b1b229b8571b6621170ceeccca63e6a0b895a9298ad",
   "files/iw4x32.ps1": "b12901f969facd4fc3d65f6ece70c7459e816c7c2f2d80dcfc8a361587ebd192",
   "files/iw4x32.py": "7718a9975507da643f8ae8163697f06c31d354a597cd6142736cb65db9a1d353",
   "files/server_iw4x32.cfg": "44f5130fd6bce82017df3d595bd0951ad24f371b5443d75486fe1821fc6c7436",
   "files/server_vanilla.cfg": "48a77c44351875d727849515433a9bb7888e1a3b07c3be490f7217548d9d9dc8",
   "iw4x32_update.ps1": "b6310fca3181395d48c11b4bb34fcaf977f28af7c06088dcf2b0164b4a488a0f",
   "iw4x32_update.py": "76ec46eb5354d72128ab8d4f5915d5bad7088152f4a7ba7566a6c92a97bb4211",
-  "files/SHA256SUMS.txt": "cb0c92f04cbe584edd318aea41e50c6c70b8bc9fd665c9eb4efe970a40e30afb"
+  "files/SHA256SUMS.txt": "1e4208cc3e1dadad153777cff2f4fb2b94358bfdbdf04aaa27ddfe0b6c819339"
  },
  "legacy": [
   "iw4x32_update.ps1",
