@@ -19,6 +19,10 @@ namespace Components
     static char (*PlayerNames())[32];
     static int* PlayerClientNums();
 
+    // IW4x-32: one server frame into the frame-time histogram that iw4x32_framestats reports (Dedicated's
+    // Com_ClampMsec hook sees every frame of a dedicated server).
+    static void RecordFrame(int msec);
+
   private:
     static void PatchEngine();
   };

@@ -8,6 +8,8 @@
 
 #include "IW4x32.hpp"
 #include "IW4x32Tables.hpp"
+#include "Command.hpp"
+#include "Events.hpp"
 #include "Logger.hpp"
 #include <cstring> // IW4x-32: memcpy / strcmp in the engine patch tables
 #include <cstdlib> // IW4x-32: atoi on the client's slot-count marker
@@ -19,6 +21,13 @@ namespace Components
     void* g_Arrays[IW4x32_ArraysCount] = {};
     void* g_Pool = nullptr; // the relocated GSC script-variable pool (IW4x-32)
     bool g_Patched = false;
+
+    // IW4x-32: the pool THIS process actually runs on - block address and geometry. The grown pool is off by
+    // default, so these are the engine's own numbers unless iw4x32-pool48 moved them (IW4x32::PoolStats reads
+    // them, see below - a probe that assumed the table geometry would read headroom that is not there).
+    unsigned int g_PoolBase = IW4x32_Pool_StockBase;
+    unsigned int g_PoolParentCap = IW4x32_Pool_OldParentCap;
+    unsigned int g_PoolChildCap = IW4x32_Pool_OldChildCap;
 
     // compat (engine32c/compat.c)
     bool g_Layout32 = true;      // the image is written with our (32-player) bytes
@@ -326,6 +335,78 @@ namespace Components
     // component, iw4x32-pool48 / iw4x32-poolstock switch the script-variable pool on (see PatchEngine).
     // The pool is the one table GSC compiles against, so when a level fails to load it is the first thing
     // to A/B, and a switch costs one file rather than a second table set.
+    // IW4x-32: how many entries of one pool bank hold a live variable. The engine's own in-use test: bit 0x60 of
+    // the status byte at entry + 8 (the low 5 bits are the type). Read-only - counting a bank cannot change it.
+    int PoolBankUsed(const unsigned char* entries, unsigned int first, unsigned int last)
+    {
+      auto used = 0;
+      for (auto index = first; index < last; index++)
+      {
+        if (entries[static_cast<std::size_t>(index) * IW4x32_Pool_EntrySize + 8] & 0x60)
+          used++;
+      }
+      return used;
+    }
+
+    // Server frame time, one window per iw4x32_framestats call - every probe row is its own window. Fixed
+    // buckets and no allocation, because RecordFrame runs once per server frame on the game thread.
+    constexpr int FRAME_BUCKETS = 257; // 1 ms per bucket; the last one is "this slow or worse"
+    constexpr int FRAME_SLOW_MS = 250; // the "playable or not" line the ladder prints
+    unsigned int g_FrameBuckets[FRAME_BUCKETS] = {};
+    unsigned long long g_FrameSlow = 0;
+    unsigned long long g_FrameTotal = 0;
+    unsigned long long g_FrameSum = 0;
+    unsigned long long g_FrameWorst = 0;
+
+    int FramePercentile(const unsigned long long count, const int percent)
+    {
+      if (count == 0)
+        return 0;
+
+      const auto want = (count * percent + 99) / 100; // the first frame at or above the percentile
+      unsigned long long seen = 0;
+      for (auto bucket = 0; bucket < FRAME_BUCKETS; bucket++)
+      {
+        seen += g_FrameBuckets[bucket];
+        if (seen >= want)
+          return bucket == FRAME_BUCKETS - 1 ? static_cast<int>(g_FrameWorst) : bucket;
+      }
+      return 0;
+    }
+
+    // IW4x-32: the server's own measurement commands. The test box refuses /proc/<pid>/mem for a reader that did
+    // not fork the process (ptrace_scope=1), and tools/pool_probe.py wants the GSC script-variable pool and the
+    // server frame time of a live server - so the process counts them and the probe asks over rcon. Both are
+    // pure counters: nothing here writes engine state, and the pool scan only reads.
+    void AddStatsCommands()
+    {
+      Command::AddSV("iw4x32_poolstats", [](const Command::Params*)
+      {
+        const auto* entries = reinterpret_cast<const unsigned char*>(g_PoolBase);
+        const auto child0 = g_PoolParentCap + 1; // index 0 is the header, 1..cap the parent pool, then 2 banks
+        const auto child1 = child0 + g_PoolChildCap;
+        const auto parentUsed = PoolBankUsed(entries, 1, child0);
+        const auto bank0 = PoolBankUsed(entries, child0, child1);
+        const auto bank1 = PoolBankUsed(entries, child1, child1 + g_PoolChildCap);
+
+        Logger::Print("IW4X32_POOL;{};{};{};{}\n", parentUsed, g_PoolParentCap,
+                      bank0 + bank1, 2 * g_PoolChildCap);
+        Logger::Print("IW4X32_POOL_BANKS;{};{};{}\n", bank0, bank1, g_PoolChildCap);
+      });
+
+      Command::AddSV("iw4x32_framestats", [](const Command::Params*)
+      {
+        const auto frames = g_FrameTotal;
+        Logger::Print("IW4X32_FRAME;{};{};{};{};{};{};{}\n", FramePercentile(frames, 50), FramePercentile(frames, 95),
+                      FramePercentile(frames, 99), g_FrameWorst, g_FrameSlow, frames,
+                      frames ? g_FrameSum / frames : 0);
+
+        for (auto bucket = 0; bucket < FRAME_BUCKETS; bucket++)
+          g_FrameBuckets[bucket] = 0;
+        g_FrameSlow = g_FrameTotal = g_FrameSum = g_FrameWorst = 0;
+      });
+    }
+
     bool DisabledByFile(const char* name)
     {
       char path[MAX_PATH];
@@ -1415,6 +1496,21 @@ namespace Components
   IW4x32::IW4x32()
   {
     PatchEngine();
+    Events::OnSVInit(AddStatsCommands); // IW4x-32: the pool / frame-time ladder (see AddStatsCommands)
+  }
+
+  void IW4x32::RecordFrame(const int msec)
+  {
+    if (msec < 0)
+      return;
+
+    g_FrameBuckets[msec < FRAME_BUCKETS - 1 ? msec : FRAME_BUCKETS - 1]++;
+    g_FrameTotal++;
+    g_FrameSum += static_cast<unsigned long long>(msec);
+    if (static_cast<unsigned long long>(msec) > g_FrameWorst)
+      g_FrameWorst = static_cast<unsigned long long>(msec);
+    if (msec > FRAME_SLOW_MS)
+      g_FrameSlow++;
   }
 
   void IW4x32::PatchEngine()
@@ -1451,7 +1547,15 @@ namespace Components
 
     ApplyToEngine();
     if (withPool)
+    {
       ApplyPool(!poolStock);
+      g_PoolBase = static_cast<unsigned int>(reinterpret_cast<unsigned int>(g_Pool));
+      if (!poolStock) // iw4x32-poolstock moves the block but keeps the engine's geometry
+      {
+        g_PoolParentCap = IW4x32_Pool_ParentCap;
+        g_PoolChildCap = IW4x32_Pool_ChildCap;
+      }
+    }
     InstallHooks();
     InstallClientMaskHooks(); // IW4x-32: more than 32 players - see MaskAllBut
     Utils::Hook(0x5028B0, PartyTimeout_Stub, HOOK_JUMP).install()->quick(); // IW4x-32: see PartyTimeout_Stub

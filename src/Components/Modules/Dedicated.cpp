@@ -5,6 +5,7 @@
 #include "ClanTags.hpp"
 #include "Events.hpp"
 #include "Friends.hpp"
+#include "IW4x32.hpp" // IW4x-32: frame-time histogram for iw4x32_framestats
 #include "Party.hpp"
 #include "ServerCommands.hpp"
 
@@ -94,6 +95,8 @@ namespace Components
 
   void Dedicated::Com_ClampMsec(const int msec)
   {
+    IW4x32::RecordFrame(msec); // IW4x-32: the ladder's frame-time numbers come from here
+
     if (msec > 500 && msec < 500000)
     {
       Game::Com_PrintWarning(Game::CON_CHANNEL_SYSTEM, "Hitch warning: %i msec frame time\n", msec);
