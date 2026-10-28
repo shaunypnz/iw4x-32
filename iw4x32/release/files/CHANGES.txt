@@ -1,3 +1,5 @@
+v2.10-r5292: IW4x r5292 (kit / launcher update) - this kit is built for official IW4x r5292 and passed the live 64-player test.
+
 v2.8-r5292: IW4x r5292 (kit / launcher update) - this kit is built for official IW4x r5292 and passed the live 32-player test.
 v2.9-r5292: IW4x r5292 (now up to 64 players) - this kit is built for official IW4x r5292 and passed the live 64-player test.
 
