@@ -165,3 +165,4 @@ __pycache__/
 # working scratch: build logs, kit/updater test trees, probe dumps (they hold machine paths - never commit)
 .scratch/
 scratch/
+/task-runs/
