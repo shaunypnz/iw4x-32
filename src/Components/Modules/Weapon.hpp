@@ -20,6 +20,7 @@ namespace Components
     static const Game::dvar_t* BGWeaponOffHandFix;
     static const Game::dvar_t* CGRecoilMultiplier;
 
+    static unsigned int SL_GetStringOfSize_Hk(const char* str, unsigned int user, unsigned int len, int type); // IW4x-32
     static Game::WeaponCompleteDef* LoadWeaponCompleteDef(const char* name);
     static void PatchLimit();
     static void* LoadNoneWeaponHook();

@@ -1,5 +1,7 @@
 #include "Weapon.hpp"
 
+#include <intrin.h>
+
 #include "GSC/Script.hpp"
 
 namespace Components
@@ -8,9 +10,52 @@ namespace Components
   const Game::dvar_t* Weapon::CGRecoilMultiplier;
   const Game::dvar_t* Weapon::BGDisableDoubleTaps;
 
+  // IW4x-32: every map load parses the raw weapon files again into the hunk, and each script string the parser asks
+  // for gains a reference that nothing releases. The count is 16 bits: tag_silencer (115 files) wraps on map 570,
+  // the string gets freed while in use and SL_FreeString then spins forever. A parsed string now holds one reference
+  // for the life of the process, however many maps load it.
+  static thread_local bool parsingRawWeapon = false;
+
+  static void __declspec(naked) SL_GetStringOfSize_Original()
+  {
+    __asm
+    {
+      sub esp, 10h
+      push ebx
+      mov ebx, [esp + 20h]
+      push 436B48h
+      retn
+    }
+  }
+
+  unsigned int Weapon::SL_GetStringOfSize_Hk(const char* str, unsigned int user, unsigned int len, int type)
+  {
+    using original_t = unsigned int(__cdecl*)(const char*, unsigned int, unsigned int, int);
+    const auto stringValue = reinterpret_cast<original_t>(&SL_GetStringOfSize_Original)(str, user, len, type);
+
+    // SL_ConvertToLowercase's own lookup (it releases the string it was given) must stay balanced
+    if (parsingRawWeapon && stringValue && _ReturnAddress() != reinterpret_cast<void*>(0x4305BD))
+    {
+      static std::unordered_set<unsigned int> held;
+      const auto* refString = *reinterpret_cast<char**>(0x1DC2200) + stringValue * 12;
+      const auto refCount = *reinterpret_cast<const std::uint16_t*>(refString);
+
+      if (!held.insert(stringValue).second && refCount >= 2)
+      {
+        Game::SL_RemoveRefToString(stringValue);
+      }
+    }
+
+    return stringValue;
+  }
+
   Game::WeaponCompleteDef* Weapon::LoadWeaponCompleteDef(const char* name)
   {
-    if (auto* rawWeaponFile = Game::BG_LoadWeaponCompleteDefInternal("mp", name))
+    parsingRawWeapon = true;
+    auto* parsedWeaponFile = Game::BG_LoadWeaponCompleteDefInternal("mp", name);
+    parsingRawWeapon = false;
+
+    if (auto* rawWeaponFile = parsedWeaponFile)
     {
       // Fix for rumbles being wrong in the raw files.. This should not happen normally
       // But in effect, it happens very often, so we need to fix it to avoid rumble errors
@@ -647,6 +692,8 @@ namespace Components
 
     // BG_LoadWEaponCompleteDef_FastFile
     Utils::Hook(0x57B650, LoadWeaponCompleteDef, HOOK_JUMP).install()->quick();
+    // IW4x-32: SL_GetStringOfSize, for the raw weapon string references
+    Utils::Hook(0x436B40, SL_GetStringOfSize_Hk, HOOK_JUMP).install()->quick();
     // Disable warning if raw weapon file cannot be found
     Utils::Hook::Nop(0x57AF60, 5);
 
