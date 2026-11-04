@@ -1,6 +1,7 @@
 #include "Controller.hpp"
 
 #include "Dedicated.hpp"
+#include "Renderer.hpp"
 #include "ZoneBuilder.hpp"
 
 #include "../../Controller/Engine/Hook.hpp"
@@ -57,9 +58,9 @@ namespace Components
     return ::Controller::mapping::platform_string(key, ::Controller::engine::active_glyph_family());
   }
 
-  Game::Material* Controller::TextGlyphMaterial(const char* name)
+  Game::Material* Controller::TextGlyphMaterial(const char* name, const Game::Material* base)
   {
-    return ::Controller::engine::text_glyph_material(name);
+    return ::Controller::engine::text_glyph_material(name, base);
   }
 
   void Controller::SubmitRumble()
@@ -168,6 +169,11 @@ namespace Components
 
     theRuntime = std::make_unique<::Controller::runtime>(developer);
     ::Controller::engine::install(*theRuntime);
+
+    Renderer::OnDeviceRecoveryBegin([]
+    {
+      ::Controller::engine::release_glyph_images();
+    });
   }
 
   Controller::~Controller()
