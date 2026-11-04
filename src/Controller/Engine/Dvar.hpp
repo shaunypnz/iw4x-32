@@ -16,6 +16,7 @@ namespace Controller
       dvar_t* in_use {};
       dvar_t* rumble {};
       dvar_t* style {};
+      dvar_t* type {};
 
       dvar_t* haptics {};
       dvar_t* haptic_intensity {};
@@ -98,6 +99,12 @@ namespace Controller
 
     void
     publish_present (const dvars&, bool present) noexcept;
+
+    // Publish the kind of controller in use, which menus follow for their
+    // artwork when gpad_style leaves the choice to the controller.
+    //
+    void
+    publish_type (const dvars&, bool playstation) noexcept;
 
     inline bool
     read (dvar_t* d, bool fallback) noexcept

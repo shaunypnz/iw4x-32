@@ -71,7 +71,54 @@ namespace Controller
         {engine_key::dpad_right,   K_RIGHTARROW},
         {engine_key::apad_right,   K_RIGHTARROW},
         {engine_key::rstick_right, K_RIGHTARROW},
+
+        // The PC menus put on F1 and F2 what the console menus put on Y and
+        // X: game summary, clearing killstreaks and viewing challenges.
+        //
+        {engine_key::button_y,     K_F1},
+        {engine_key::button_x,     K_F2},
       };
+
+      bool
+      handles_key (const Game::ItemKeyHandler* h, int key) noexcept
+      {
+        for (; h != nullptr; h = h->next)
+          if (h->key == key)
+            return true;
+
+        return false;
+      }
+
+      // Whether the focused menu, or its focused item, has a handler of its
+      // own for this key, as the lobby has for the D-pad. Such a key is passed
+      // through as it is rather than as the keyboard key it stands for.
+      //
+      bool
+      focused_menu_handles (int key) noexcept
+      {
+        const Game::menuDef_t* const menu (Menu_GetFocused (uiContext));
+
+        if (menu == nullptr)
+          return false;
+
+        if (handles_key (menu->onKey, key))
+          return true;
+
+        constexpr int visible (0x4);
+        constexpr int focused (0x2);
+
+        for (int i (0); i != menu->itemCount; ++i)
+        {
+          const Game::itemDef_s* const item (menu->items[i]);
+          const int flags (item->window.dynamicFlags[0]);
+
+          if ((flags & visible) != 0 && (flags & focused) != 0 &&
+              handles_key (item->onKey, key))
+            return true;
+        }
+
+        return false;
+      }
 
       bool
       is_dpad (engine_key k) noexcept
@@ -154,6 +201,33 @@ namespace Controller
 
         return cg != nullptr &&
                cg->predictedPlayerState.sprintState.sprintButtonUpRequired != 0;
+      }
+
+      // Spectating, the console moves to the next player with B and the
+      // previous one with A, where the PC game looks at the fire and aim
+      // buttons. Give B and A those commands while the player can cycle.
+      //
+      bool
+      spectator_can_cycle () noexcept
+      {
+        Game::cg_s* const cg (Game::CL_GetLocalClientGlobals (local_client));
+
+        return cg != nullptr &&
+               (cg->predictedPlayerState.otherFlags & Game::POF_SPEC_ALLOW_CYCLE) != 0;
+      }
+
+      const char*
+      spectator_command (engine_key k) noexcept
+      {
+        if (!spectator_can_cycle ())
+          return nullptr;
+
+        switch (k)
+        {
+          case engine_key::button_b: return "+attack";
+          case engine_key::button_a: return "+speed_throw";
+          default:                   return nullptr;
+        }
       }
 
       float
@@ -492,7 +566,7 @@ namespace Controller
 
       ks.locSelInputState = LOC_SEL_INPUT_NONE;
 
-      const char* const binding (ks.keys[key].binding);
+      const char* binding (ks.keys[key].binding);
 
       char cmd[1024];
 
@@ -512,6 +586,14 @@ namespace Controller
         if (e == key_event::repeated)
           return;
 
+        // Remember the command a spectator press ran, so that only it comes
+        // back up on release. A press a menu took never gets here.
+        //
+        spectator_commands_[key] = spectator_command (k);
+
+        if (spectator_commands_[key] != nullptr)
+          binding = spectator_commands_[key];
+
         if (binding != nullptr)
         {
           if (binding[0] == '+')
@@ -525,6 +607,12 @@ namespace Controller
       }
       else
       {
+        if (spectator_commands_[key] != nullptr)
+        {
+          binding = spectator_commands_[key];
+          spectator_commands_[key] = nullptr;
+        }
+
         if (binding != nullptr && binding[0] == '+')
         {
           sprintf_s (cmd, "-%s %i %i\n", &binding[1], key, time);
@@ -600,20 +688,20 @@ namespace Controller
     key_dispatcher::
     menu_key_event (engine_key k, bool down) noexcept
     {
-      if (*g_waitingForKey != 0)
+      int key (static_cast<int> (k));
+
+      if (*g_waitingForKey == 0 && !focused_menu_handles (key))
       {
-        UI_KeyEvent (local_client, static_cast<int> (k), down ? 1 : 0);
-        return;
+        const auto m (std::find_if (std::begin (menu_keys), std::end (menu_keys),
+                                    [k] (const menu_key& m) { return m.controller == k; }));
+
+        if (m == std::end (menu_keys))
+          return;
+
+        key = m->keyboard;
       }
 
-      for (const menu_key& m: menu_keys)
-      {
-        if (m.controller == k)
-        {
-          UI_KeyEvent (local_client, m.keyboard, down ? 1 : 0);
-          return;
-        }
-      }
+      UI_KeyEvent (local_client, key, down ? 1 : 0);
     }
 
     bool

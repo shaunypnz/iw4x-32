@@ -45,6 +45,11 @@ namespace Controller
         "gpad_style", 0, 0, 2, DVAR_ARCHIVE,
         "Which button glyphs to present: 0 follows the controller that is "
         "connected, 1 is PlayStation and 2 is Xbox");
+      d.type = Dvar_RegisterInt (
+        "gpad_type", 2, 1, 2, DVAR_ROM,
+        "The kind of controller in use, for menus to follow when gpad_style "
+        "is 0, numbered as gpad_style: 1 is PlayStation and 2 is Xbox, or "
+        "none");
 
       d.haptics = Dvar_RegisterBool (
         "gpad_haptics", true, DVAR_ARCHIVE,
@@ -312,6 +317,22 @@ namespace Controller
     {
       if (d.present != nullptr && d.present->current.enabled != present)
         Dvar_SetBool (d.present, present);
+    }
+
+    void
+    publish_type (const dvars& d, bool playstation) noexcept
+    {
+      // Use the gpad_style numbering (1 for PlayStation, 2 for Xbox) so that
+      // a menu can test both dvars against the same value.
+      //
+      // Note that there is no value for "no controller": with no device
+      // active we report Xbox, which keeps the menu button art drawn while
+      // gpad_in_use is still set after the pad is unplugged.
+      //
+      const int value (playstation ? 1 : 2);
+
+      if (d.type != nullptr && d.type->current.integer != value)
+        Dvar_SetInt (d.type, value);
     }
   }
 }

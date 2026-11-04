@@ -85,6 +85,11 @@ namespace Controller
 
       bool in_use_ {false};
 
+      // The command each button went down with while spectating, so that it
+      // comes back up with the same one.
+      //
+      std::array<const char*, 256> spectator_commands_ {};
+
       bool reported_deadzone_ {false};
 
       static constexpr float default_trigger_release_margin {0.05f};

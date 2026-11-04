@@ -28,6 +28,7 @@ namespace Components
     unsigned int g_PoolBase = IW4x32_Pool_StockBase;
     unsigned int g_PoolParentCap = IW4x32_Pool_OldParentCap;
     unsigned int g_PoolChildCap = IW4x32_Pool_OldChildCap;
+    unsigned int g_PoolChild0Base = IW4x32_Pool_OldChild0Base;
 
     // compat (engine32c/compat.c)
     bool g_Layout32 = true;      // the image is written with our (32-player) bytes
@@ -1554,6 +1555,7 @@ namespace Components
       {
         g_PoolParentCap = IW4x32_Pool_ParentCap;
         g_PoolChildCap = IW4x32_Pool_ChildCap;
+        g_PoolChild0Base = IW4x32_Pool_Child0Base;
       }
     }
     InstallHooks();
@@ -1591,6 +1593,12 @@ namespace Components
   int* IW4x32::PlayerClientNums()
   {
     return g_PlayerClientNums ? g_PlayerClientNums : &Game::sharedUiInfo->playerClientNums[0];
+  }
+
+  // IW4x-32: the child id base of the pool THIS process runs on (see g_PoolChild0Base).
+  unsigned int IW4x32::PoolChild0Base()
+  {
+    return g_PoolChild0Base;
   }
 
 } // namespace Components

@@ -19,6 +19,11 @@ namespace Components
     static char (*PlayerNames())[32];
     static int* PlayerClientNums();
 
+    // IW4x-32: the first GSC script-variable id that is a child (field, array entry, local) rather than a
+    // parent object. The stock engine says 0x9002; the grown script-variable pool moves it. Anything that
+    // tells a script object id from a child id has to read it here rather than hard-code the engine's value.
+    static unsigned int PoolChild0Base();
+
     // IW4x-32: one server frame into the frame-time histogram that iw4x32_framestats reports (Dedicated's
     // Com_ClampMsec hook sees every frame of a dedicated server).
     static void RecordFrame(int msec);
