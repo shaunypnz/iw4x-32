@@ -52,6 +52,7 @@
 #include "Modules/RawMouse.hpp"
 #include "Modules/RCon.hpp"
 #include "Modules/RemoteControl.hpp"
+#include "Modules/RendererStatus.hpp"
 #include "Modules/Rumble.hpp"
 #include "Modules/Security.hpp"
 #include "Modules/Sentry.hpp"
@@ -170,6 +171,7 @@ namespace Components
     Register(new RemoteControl());
     Register(new Renderer());
     Register(new Scheduler());
+    Register(new RendererStatus()); // IW4x-32: the renderer the game actually initialized, on the video options screens
     Register(new Security());
     Register(new ServerCommands());
     Register(new ServerDemo());
