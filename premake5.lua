@@ -66,6 +66,15 @@ newoption {
   value = "URL"
 }
 
+-- IW4x-32: the Vulkan SDK to link against (premake takes it as --vulkan-sdk=PATH). The headers always
+-- come from deps/vulkan (vendored), so a build without this option still compiles the Vulkan sources;
+-- see deps/premake/vulkan.lua.
+newoption {
+  trigger = "vulkan-sdk",
+  description = "Optional, path to an installed Vulkan SDK whose import library (vulkan-1.lib) the client links against: --vulkan-sdk=PATH.",
+  value = "PATH"
+}
+
 newaction {
   trigger = "version",
   description = "Returns the version string for the current commit of the source code.",
@@ -245,6 +254,7 @@ workspace "iw4x"
       "%{prj.location}/src",
       "./src",
       "./lib/include",
+      path.join(dependencies.basePath, "vulkan/include"),  -- IW4x-32: the Vulkan headers of the backend contract
     }
     resincludedirs {
       "$(ProjectDir)src" -- fix for VS IDE
