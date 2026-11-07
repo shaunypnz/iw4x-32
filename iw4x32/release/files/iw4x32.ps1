@@ -32,8 +32,8 @@ $ErrorActionPreference = 'Stop'
 $Repo = 'shaunypnz/iw4x-32'
 # IW4x-32: the player count files\iw4x.dll is built for (Game::MAX_CLIENTS) - what 'host' runs
 $Players = 64
-$OFFICIAL_VER = 'r5292'
-$OFFICIAL_DLL = '890a310c9b594824ff3da71d24647821991c9ab5d1f2f9870fd9a07cb2341ba4'
+$OFFICIAL_VER = 'r5318'
+$OFFICIAL_DLL = 'd9f1440a6e17f397b1eb8a7d770d1be8043b9ea276b9c8775a4677cdaa10615d'
 $OFFICIAL_EXE = '49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009'
 $V1_EXE = '2609c2687dd2ffb3f32c7687ed04f57b38ef6879c14b1c546faf8bfd8f35ea6b'   # iw4x.exe of an IW4x-32 v1.x install
 # the IW4x-32 release key (RSA-3072 modulus, exponent): an update is taken only from a latest.json signed with it
