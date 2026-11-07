@@ -32,6 +32,9 @@ jobs:
       - name: Add msbuild to PATH
         uses: microsoft/setup-msbuild@v2
 
+      - name: Install pinned Vulkan headers (verified public dependency)
+        run: python iw4x32/tools/fetch_vulkan_headers.py
+
       - name: Generate project files
         run: tools/premake5 vs2022
 

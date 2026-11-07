@@ -166,3 +166,6 @@ __pycache__/
 .scratch/
 scratch/
 /task-runs/
+
+# IW4x-32: checksum-verified CI dependency downloaded by fetch_vulkan_headers.py
+/deps/vulkan/
