@@ -2,34 +2,8 @@
 top of a normal IW4x install; your `iw4x.exe` stays the official one. Normal 18-player IW4x servers keep working.
 
 <!-- whats-new -->
-### What's new in v2.12-r5318
-Built for official **IW4x r5318** (previous release: r5292) and live-tested on a 64-slot server (32 bots + a real client), and 32 slots with 31 bots, 48 slots with 24 bots. It carries every IW4x fix from r5292 to r5318:
-- Fix controller glyph images outliving device on vid_restart
-- Add minidump to fatal error reports
-- Fix fatal error when graphics driver resets GPU
-- Fix hint text drawing button glyphs from unloaded zones
-- Fix disc read error not naming the damaged file
-- Add script functions to corrupt script state reports
-- Fix empty error dialog on recursive errors
-- Fix unclear error when the game files are missing
-- Remove presence reports to master server
-- Remove verified player count from server browser
-- Change server browser back to show reported player count
-- Remove verified and reported player counts from server info
-- Fix crash when releasing a corrupt script object
-- Fix out of memory when compiling scripts of large mods
-- Add comment on gpad_type numbering
-- Change gpad_type to gpad_style numbering
-- Let menus follow gpad_style for button art
-- Address review on controller prompts
-- Match console spectating and hint glyphs with a controller
-- Fix controller button prompts and menu dropdowns
-- Add verified and reported player counts to server info
-- Fix assertion failure when opening server info
-- Change server browser to show verified player count
-- Add verified player count to server browser
-- Add presence reports to master server
-- Fix crash when toast icon is freed by fastfile reload
+### What's new in v2.13-r5318
+Built for official **IW4x r5318** (previous release: r5318) and live-tested on a 64-slot server (32 bots + a real client), and 32 slots with 31 bots, 48 slots with 24 bots.
 <!-- /whats-new -->
 
 ### Install
