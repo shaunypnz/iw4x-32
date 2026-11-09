@@ -42,6 +42,59 @@ def bytehex(s):
     return bytes.fromhex(s)
 
 
+def pool_rules(poolsec):
+    """The geometry rules the exe imposes on the script-variable pool (see the notes in the 'pool' section and
+    iw4x32/tools/test_pool_free_list.py). Returns the geometry it checked, and refuses a set that breaks one:
+    a header built on a broken geometry compiles, loads, and faults in the allocator's free-list walk later.
+
+        child0_base = parent_cap + 1        index 0 is the header, 1..parent_cap the parent pool
+        child1_base = child0_base + child_cap, entries = child1_base + child_cap
+        both caps under 0x10000             every link inside an entry is a WORD counting from its bank's
+                                            first entry (the bank init at 0x61C0F0 stores index - first, the
+                                            free-block search at 0x61C1B0 adds first back and scales by 16)
+        (entries - 2) % 6 == 0             the script-thread dump counts the block six entries per step
+                                            (0x4066ae mov esi, (entries-2)/6) and sizes its record array from
+                                            that count, then walks it again one entry at a time (0x406771
+                                            mov [esp + 0x10], entries - 2): only an exact multiple of six lets
+                                            one constant be both counts, so the fill cannot pass the array
+    """
+    g = dict((k, num(poolsec[k])) for k in ("parent_cap", "child0_base", "child_cap", "child1_base",
+                                            "entries"))
+    bad = []
+    if g["child0_base"] != g["parent_cap"] + 1:
+        bad.append("child0_base %s is not parent_cap + 1" % hx(g["child0_base"]))
+    if g["child1_base"] != g["child0_base"] + g["child_cap"]:
+        bad.append("child1_base %s is not child0_base + child_cap" % hx(g["child1_base"]))
+    if g["entries"] != g["child1_base"] + g["child_cap"]:
+        bad.append("entries %s is not child1_base + child_cap" % hx(g["entries"]))
+    for k in ("parent_cap", "child_cap"):
+        if g[k] >= 0x10000:
+            bad.append("%s %s is not under 0x10000 - the pool's links are WORDs" % (k, hx(g[k])))
+    if (g["entries"] - 2) % 6:
+        bad.append("entries - 2 is %d, not a whole multiple of six - the dump counts six entries per step "
+                   "(0x4066ae) and walks them one by one (0x406771)" % (g["entries"] - 2))
+    # A grown pool rewrites the derived geometry forms too - the span the GSC name hash divides by is
+    # child_cap - 2 (0x412de7 mov esi, 0xc7ff / div esi feeds the free-block search at 0x61C1B0, next to
+    # `and ecx, 1 ; imul ecx, ecx, child_cap`, which builds the very same bank's first index). Leave one of
+    # them stock over a grown bank and the bucket is computed for the stock bank: the walk lands on a live
+    # entry, reads that variable's own bytes as a link, and follows them out of the block.
+    if g["parent_cap"] != num(poolsec["old_parent_cap"]) or g["child_cap"] != num(poolsec["old_child_cap"]):
+        olds = set(num(s["old"]) for s in poolsec["constant_sites"])
+        derived = {"parent_cap - 1": num(poolsec["old_parent_cap"]) - 1,
+                   # the parent-object id range end (0x44a0f0's cmp eax, 0x19000): ids are 0x10000 + index
+                   "0x10000 + parent_cap - 1": 0x10000 + num(poolsec["old_parent_cap"]) - 1,
+                   "child_cap - 2": num(poolsec["old_child_cap"]) - 2,
+                   "entries - 2": num(poolsec["old_entries"]) - 2,
+                   "(entries - 2) / 6": (num(poolsec["old_entries"]) - 2) // 6}
+        for name, value in sorted(derived.items()):
+            if value not in olds:
+                bad.append("no constant site names the derived form %s (%s) - a grown bank with that span "
+                           "stock hashes chains into entries it does not own" % (name, hx(value)))
+    if bad:
+        raise SystemExit("gen_tables: pool geometry breaks the engine's own rules:\n  " + "\n  ".join(bad))
+    return g
+
+
 def parse(src):
     """engine_patches.json -> the entries the header and the layout hash are built from"""
     base = num(src["image_base"])
@@ -120,6 +173,7 @@ def parse(src):
     poolsec = src.get("pool")
     pool_addr, pool_const = [], []
     if poolsec:
+        pool_rules(poolsec)
         for s in poolsec["address_sites"]:
             pool_addr.append(dict(operand=num(s["operand_va"]), old=num(s["old"]), offset=num(s["offset"])))
         for s in poolsec["constant_sites"]:

@@ -277,14 +277,47 @@ def main():
         # instruction's ONE match for the old value - the rule the tables are built with. A site whose operand_va
         # is off by two bytes passes every count and makes the patcher refuse the exe at run time, so it is
         # checked here, where a mistake costs seconds instead of a live test.
-        stock_consts = {num(psec[k]): k[4:] for k in ("old_parent_cap", "old_child0_base", "old_child_cap",
-                                                      "old_child1_base")}
-        stock_consts[num(psec["old_child0_base"]) + num(psec["old_child_cap"]) - 1] = "child0_last"
-        stock_consts[num(psec["old_entries"]) - 1] = "child1_last"
-        new_of = {"parent_cap": num(psec["parent_cap"]), "child0_base": num(psec["child0_base"]),
-                  "child_cap": num(psec["child_cap"]), "child1_base": num(psec["child1_base"]),
-                  "child0_last": num(psec["child0_base"]) + num(psec["child_cap"]) - 1,
-                  "child1_last": num(psec["entries"]) - 1}
+        #
+        # The geometry numbers .text folds are not only the six stock ones: the compiler also folds DERIVED
+        # forms, and every one of them has to follow its base or the pool runs half grown (measured on the
+        # test host at 25-48 connections, banks below cap, fault at the free-list unlink 0x437190):
+        #   parent_cap - 1  the parent pool's last index, a walk bound (0x4a5fd3 cmp esi, 0x9000)
+        #   child_cap  - 2  the child bank's GSC name-hash modulus (39 sites: mov reg, 0xc7ff / div reg,
+        #                   each next to `and reg,1 ; imul reg,reg,child_cap`, which is the bank's base)
+        #   entries    - 2  the whole block's walk bound (0x406771)
+        #   (entries-2)/6   that same bound through a division: the script-thread dump counts the block six
+        #                   entries per step and sizes its record array from that count, then fills it walking
+        #                   the block one entry at a time (0x4066ae mov esi, 0x5aab) - rewrite one bound and not
+        #                   the other and the fill overruns the array (the 63-bot crash at 0x61C6BF)
+        #   0x10000 + parent_cap - 1  the end of the parent-object id range: an object id is 0x10000 + its parent
+        #                   index, and the id decoder (0x44a0f0, inlined at 0x44b11f/0x4a0345/0x4bc0ed/0x61cda4/
+        #                   0x61d026: cmp reg, 0x19000) sends any id past it to kind 6 - so left stock over a grown
+        #                   parent bank every object above index 0x9000 loses its refcount add/release and the
+        #                   unlink at 0x61D340 spins on a chain the release never cleaned (63-bot hang, 54 clients)
+        def geom_forms(pc, cc, c0, c1, ent):
+            return ((pc, "parent_cap", pc), (pc - 1, "parent_last", pc - 1),
+                    (0x10000 + pc - 1, "parent_id_end", 0x10000 + pc - 1), (c0, "child0_base", c0),
+                    (cc, "child_cap", cc), (cc - 2, "child_span", cc - 2), (c1, "child1_base", c1),
+                    (c1 - 1, "child0_last", c1 - 1), (ent, "entries", ent),
+                    (ent - 1, "child1_last", ent - 1), (ent - 2, "block_span", ent - 2),
+                    ((ent - 2) // 6, "block_walk6", (ent - 2) // 6))
+
+        old_forms = geom_forms(*(num(psec[k]) for k in ("old_parent_cap", "old_child_cap",
+                                                        "old_child0_base", "old_child1_base",
+                                                        "old_entries")))
+        new_forms = geom_forms(*(num(psec[k]) for k in ("parent_cap", "child_cap", "child0_base",
+                                                        "child1_base", "entries")))
+        stock_consts, new_of = {}, {}
+        for (value, kind, mapped), (value2, kind2, mapped2) in zip(old_forms, new_forms):
+            want(kind not in new_of and value not in stock_consts,
+                 "pool geometry: %s named twice in one geometry set" % kind)
+            if value in stock_consts and stock_consts[value] != kind:
+                # two spellings of one number (child0_base - 1 == parent_cap): they must mean the same thing
+                want(new_of[stock_consts[value]] == mapped2,
+                     "pool geometry: %#x is both %s and %s, which map to %#x and %#x"
+                     % (value, stock_consts[value], kind, new_of[stock_consts[value]], mapped2))
+            stock_consts[value] = kind
+            new_of[kind] = mapped2
         for s in psec["address_sites"] + psec["constant_sites"]:
             if "bytes" not in s:
                 bad.append("pool site %s carries no instruction bytes - every pool site must, so the tables can "
@@ -300,8 +333,8 @@ def main():
                  % (s["insn_va"], s["operand_va"], s["old"], s["bytes"], s.get("insn_text", "")))
         for s in psec["constant_sites"]:
             kind = stock_consts.get(num(s["old"]))
-            want(kind is not None, "pool constant site %s: %s is not a stock pool geometry value"
-                 % (s["insn_va"], s["old"]))
+            want(kind is not None, "pool constant site %s: %s is not a stock pool geometry value "
+                 "(nor a derived form of one)" % (s["insn_va"], s["old"]))
             want(kind is not None and num(s["new"]) == new_of[kind],
                  "pool constant site %s: %s -> %s, want %s" % (s["insn_va"], s["old"], s["new"],
                                                                "0x%x" % new_of[kind] if kind else "-"))

@@ -10,11 +10,40 @@ namespace Components
     //
     static double res (0.0);
 
-    void NetSleep(int n)
-    {
-      if (n < 0)
-        n = 0;
+    // IW4x-32: the pump's own counters, printed on the server console's IW4X32_CPU line (see
+    // IW4x32::RecordFrame). A crowded server that stops answering rcon while it keeps running frames is either
+    // not looking at its socket, looking and finding nothing, or reading errors - these totals say which.
+    // Game thread only, and they only ever count.
+    //
+    static unsigned long long g_WaitSelects (0), g_WaitActivity (0), g_WaitSelectFails (0), g_WaitPumps (0);
 
+    unsigned long long WaitSelects()
+    {
+      return g_WaitSelects;
+    }
+
+    unsigned long long WaitActivity()
+    {
+      return g_WaitActivity;
+    }
+
+    unsigned long long WaitSelectFails()
+    {
+      return g_WaitSelectFails;
+    }
+
+    unsigned long long WaitPumps()
+    {
+      return g_WaitPumps;
+    }
+
+    // Wait up to n ms for a datagram on the game socket and say whether select saw the socket readable.
+    //
+    // IW4x-32: split out of NetSleep so the dedicated server's wait can look at the socket without sleeping.
+    // Behaviour unchanged: no socket -> a plain sleep and no activity; select fails -> warn and no activity.
+    //
+    static bool SocketWait(int n)
+    {
       fd_set fs;
       FD_ZERO(&fs);
 
@@ -37,7 +66,7 @@ namespace Components
       if (m == INVALID_SOCKET)
       {
         Game::Sys_Sleep(n);
-        return;
+        return false;
       }
 
       timeval tv {n / 1000, (n % 1000) * 1000};
@@ -45,29 +74,70 @@ namespace Components
 
       if (r == SOCKET_ERROR)
       {
+        g_WaitSelectFails++;
         Logger::Warning(Game::CON_CHANNEL_SYSTEM, "WinAPI: select failed: {}\n", Game::NET_ErrorString());
-        return;
+        return false;
       }
+
+      g_WaitSelects++;
+
+      if (r > 0)
+        g_WaitActivity++;
+
+      return r > 0;
+    }
+
+    // Collect whatever the socket is holding. The engine's own pump takes the whole queue in one call, so this
+    // is a matter of when it runs, not how much it takes.
+    //
+    static void PumpSockets()
+    {
+      g_WaitPumps++;
+
+      if (Dedicated::IsRunning())
+        Game::Com_ServerPacketEvent();
+      else
+        Game::Com_ClientPacketEvent();
+    }
+
+    void NetSleep(int n)
+    {
+      if (n < 0)
+        n = 0;
 
       // If we caught some activity, process packets immediately to stay
       // responsive instead of waiting for the next cycle.
       //
-      if (r > 0)
-      {
-        if (Dedicated::IsRunning())
-          Game::Com_ServerPacketEvent();
-        else
-          Game::Com_ClientPacketEvent();
-      }
+      if (!SocketWait(n))
+        return;
+
+      PumpSockets();
     }
 
     void SVFrameWaitFunc()
     {
-      // Yield if we still have a significant chunk of time left in the server's
-      // time residual.
+      // IW4x-32: a dedicated server collects its packets here once per frame, whatever select said.
+      //
+      // Measured on the test box with a 64-slot server and 63 bots (task-runs/probe_udp_p1793354781): once about
+      // 50 slots are filled, the engine's own pump stops being reached at all - the counter on the jmp that its
+      // pump uses to get to NET_GetPacket (0x4ECFF0 -> 0x4652b0) sat at exactly 1739 for three and a half
+      // minutes while frames kept running (1000-frame windows of 29 s, no frame over 250 ms), the pools sat at
+      // 55 % / 64 %, and the box's own /proc/net/udp showed 2,880 bytes of queued, undelivered-to-the-game data
+      // on the game socket. Nothing was answered any more: not rcon, not getstatus, and the server stopped even
+      // logging that it had been asked. The client's `sendto` succeeds and the box's loopback is fine (a control
+      // listener on a neighbouring port answers in the same breath), so the datagrams are there, in the queue,
+      // uncollected.
+      //
+      // The wait cannot leave it to the engine once that has happened, and it cannot ask the socket first: the
+      // mod's own select on that socket reported it idle, and MSG_PEEK/FIONREAD read it empty, while the kernel
+      // held 2,880 bytes for it. So collect unconditionally - the engine's pump loop (0x458160) drains the whole
+      // queue in one call and returns on the first empty read, so one call per frame costs one non-blocking
+      // recvfrom when there is nothing, which is what the counters below show.
       //
       if (*Game::sv_timeResidual < 50)
         NetSleep(50 - *Game::sv_timeResidual);
+
+      PumpSockets();
     }
 
     void __declspec(naked) SVFrameWaitStub()

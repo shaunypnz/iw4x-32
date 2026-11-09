@@ -165,7 +165,9 @@ __pycache__/
 # working scratch: build logs, kit/updater test trees, probe dumps (they hold machine paths - never commit)
 .scratch/
 scratch/
-/task-runs/
+# Strata task-run artefacts: live-test console logs, ladder outputs, build logs. Console logs carry the test
+# box's machine paths, so nothing in here may ever reach GitHub (git-privacy-check refuses the push).
+task-runs/
 
 # IW4x-32: checksum-verified CI dependency downloaded by fetch_vulkan_headers.py
 /deps/vulkan/

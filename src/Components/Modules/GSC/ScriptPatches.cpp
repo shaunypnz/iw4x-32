@@ -97,13 +97,30 @@ namespace Components::GSC
 
     if (fs.top < fs.startTop)
     {
+      // A thread that waits copies its frame into the script arena (MT_AllocIndex, 65,536 units of 12 bytes,
+      // free map at 0x1dc0100), and it asks for values * 5 + 11 bytes, which the allocator rounds up to a
+      // power-of-two run of 32-unit words. When no such run is free the engine prints
+      // "MT_AllocIndex: failed memory allocation of %d bytes for script usage", dumps every script thread, and
+      // returns unit 0 - so the frame lands on top of somebody else's block and the VM walks off it. Naming the
+      // arena in this report is what separates that cause from a plain corrupt frame; it costs one scan of
+      // 2,048 words at a point where the match is over anyway.
+      //
+      unsigned int mtUsed (0), mtPeak (0), mtRun (0), mtWorst (0);
+      IW4x32::ScriptArena (mtUsed, mtPeak, mtRun, mtWorst);
+
       const auto details (
         std::format ("script stack is corrupt: top is {} values below the "
-                     "start of the frame (frames {}: {}; fs_game '{}')",
+                     "start of the frame (frames {}: {}; fs_game '{}', script memory "
+                     "{}/{} units, peak {}, free run {} words, worst {})",
                      fs.startTop - fs.top,
                      Game::scrVmPub->function_count,
                      DescribeFrames (),
-                     (*Game::fs_gameDirVar)->current.string));
+                     (*Game::fs_gameDirVar)->current.string,
+                     mtUsed,
+                     65536u,
+                     mtPeak,
+                     mtRun,
+                     mtWorst));
 
       ReportCorruptState ("script_stack", details);
     }

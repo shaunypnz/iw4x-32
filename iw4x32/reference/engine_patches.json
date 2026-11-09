@@ -7,7 +7,7 @@
   "relocations: allocate each array with new_size bytes (zeroed), then rewrite every operand: operand = base(array) + new_array_offset; 'fixed' entries are absolute (cg_tail grows cg_s in place, post_cg_globals must therefore move out of its way)",
   "dual sites: written back to their original bytes while connected to a stock 18-slot server (engine32c/compat.c e32_set_layout), our bytes on a 32-slot server",
   "hooks: jmp to the injected code (engine32c/*.c/.S), which re-executes the replaced instructions",
-  "the pool section is for the wide server and the component leaves the pool where the engine put it unless iw4x32-pool48 is planted next to iw4x.exe",
+  "the pool section is the grown geometry the component runs by default; iw4x32-poolstock planted next to iw4x.exe moves the block but keeps the engine's own geometry",
   "this table set is built for 64 slots. Past 34 players the in-place clientinfo growth no longer fits the room post_cg_globals vacates, so post_cg_globals reaches over cg_entities (0x8EE4B8..0x9F5CA8) and the two own-body cg_entities sites become dual_operands: base + ours_offset in our layout, base + stock_offset on stock 18-slot servers. cg_s grows in place by 0xEDE8 (46 x 0x52C) to 0x8FD2A0, inside the room post_cg_globals vacates - the set fits up to 66 slots"
  ],
  "arrays": [
@@ -9806,18 +9806,18 @@
  ],
  "injected_code": "engine32c/: compat.c (layout switch, marker dvars, connect check), antilag.c (32-client lag compensation), stubs.S (hook stubs), util.c; built with i686-w64-mingw32-gcc 13, linked at 0x8800000",
  "pool": {
-  "note": "the GSC script-variable pool: one contiguous block of 16-byte scrVar_t entries at pool.base (index 0 = header, 1..parent_cap = the parent pool, child0_base.. = child pool 0, child1_base.. = child pool 1). The engine reaches it by absolute address AND by pool index (index = child0_base + n * child_cap), so growing it means relocating the block and rewriting both kinds of site. address_sites: operand_va holds the old absolute address, new = new block base + offset. constant_sites: operand_va holds an old geometry constant, new = the same geometry in the new block. Every link inside the pool is a 16-bit value (the init writes entry+0 = index - pool's first index, the allocator walks the free list as next = base + (index + word)*16), so NEITHER cap may pass 0x10000.",
+  "note": "the GSC script-variable pool: one contiguous block of 16-byte scrVar_t entries at pool.base (index 0 = header, 1..parent_cap = the parent pool, child0_base.. = child pool 0, child1_base.. = child pool 1). The engine reaches it by absolute address AND by pool index (index = child0_base + n * child_cap), so growing it means relocating the block and rewriting both kinds of site. address_sites: operand_va holds the old absolute address, new = new block base + offset - EXCEPT a site anchored on a bank's first entry (offset child0_base*16 or child1_base*16, the child free list lives there): that anchor belongs to the bank, so the component re-derives it from the geometry it runs (IW4x32::PoolAddressOffset) instead of keeping the stock offset. constant_sites: operand_va holds an old geometry constant, new = the same geometry in the new block - including the DERIVED forms the compiler folds: a bank's last index (first + cap - 1), the parent pool's last index (parent_cap - 1, a walk bound, 0x4a5fd3), the child bank's name-hash modulus (child_cap - 2 = 0xc7ff, 39 sites, each a mov + div right next to (index & 1) * child_cap) and the block's walk bound (entries - 2 = 0x22002, 0x406771) and that bound DIVIDED BY SIX ((entries - 2) / 6 = 0x5aab, 0x4066ae: the script-thread dump counts the block's type-0xc variables in a first pass that walks six entries per step and allocates its record array from that count, then walks the block again one entry at a time - keep the six-stride bound stock over a grown block and the second pass fills more records than the array holds, which is what turned a script-pool refusal into the access violation at 0x61C6BF in the 63-bot runs; the geometry therefore keeps entries - 2 a whole multiple of six). A derived form that keeps its stock number while the banks around it grow is not a smaller pool but a corrupt one: the hash walk lands on a live entry, reads the variable's own bytes as a free-list link and follows them out of the block (unlink fault at 0x437190, 25-48 connections, banks below cap). Every link inside the pool is a 16-bit value (the init writes entry+0 = index - pool's first index, the allocator walks the free list as next = base + (index + word)*16), so NEITHER cap may pass 0x10000.",
   "base": "0x1dfa380",
   "old_parent_cap": "0x9001",
   "old_child0_base": "0x9002",
   "old_child_cap": "0xc801",
   "old_child1_base": "0x15803",
   "old_entries": "0x22004",
-  "parent_cap": "0xe000",
-  "child0_base": "0xe001",
-  "child_cap": "0xf800",
-  "child1_base": "0x1d801",
-  "entries": "0x2d001",
+  "parent_cap": "0xf001",
+  "child0_base": "0xf002",
+  "child_cap": "0xffff",
+  "child1_base": "0x1f001",
+  "entries": "0x2f000",
   "alloc_site": "0x4ce05d",
   "excluded_sites": [
    {
@@ -10523,6 +10523,118 @@
     "form": "imm",
     "value": "0x2000000",
     "why": "not a folded pool base: the value is not unique in the instruction"
+   },
+   {
+    "insn_va": "0x48eb68",
+    "bytes": "6800900000",
+    "insn_text": "push 0x9000",
+    "form": "imm",
+    "value": "0x9000",
+    "why": "not a pool walk bound: the function never names the pool block and the value is an allocation size"
+   },
+   {
+    "insn_va": "0x49e241",
+    "bytes": "899600900000",
+    "insn_text": "mov dword ptr [esi + 0x9000], edx",
+    "form": "mem",
+    "value": "0x9000",
+    "why": "not a pool index: a disp32 struct offset in a function that never names the pool block"
+   },
+   {
+    "insn_va": "0x49e265",
+    "bytes": "8d8600900000",
+    "insn_text": "lea eax, [esi + 0x9000]",
+    "form": "mem",
+    "value": "0x9000",
+    "why": "not a pool index: a disp32 struct offset in a function that never names the pool block"
+   },
+   {
+    "insn_va": "0x49e3e8",
+    "bytes": "85ac8e00900000",
+    "insn_text": "test dword ptr [esi + ecx*4 + 0x9000], ebp",
+    "form": "mem",
+    "value": "0x9000",
+    "why": "not a pool index: a disp32 struct offset in a function that never names the pool block"
+   },
+   {
+    "insn_va": "0x49e456",
+    "bytes": "85ac8e00900000",
+    "insn_text": "test dword ptr [esi + ecx*4 + 0x9000], ebp",
+    "form": "mem",
+    "value": "0x9000",
+    "why": "not a pool index: a disp32 struct offset in a function that never names the pool block"
+   },
+   {
+    "insn_va": "0x4e3287",
+    "bytes": "6800900000",
+    "insn_text": "push 0x9000",
+    "form": "imm",
+    "value": "0x9000",
+    "why": "not a pool walk bound: the function never names the pool block and the value is an allocation size"
+   },
+   {
+    "insn_va": "0x508e05",
+    "bytes": "6800900000",
+    "insn_text": "push 0x9000",
+    "form": "imm",
+    "value": "0x9000",
+    "why": "not a pool walk bound: the function never names the pool block and the value is a buffer size"
+   },
+   {
+    "insn_va": "0x51ed01",
+    "bytes": "6800900000",
+    "insn_text": "push 0x9000",
+    "form": "imm",
+    "value": "0x9000",
+    "why": "not a pool walk bound: the function never names the pool block and the value is a buffer size"
+   },
+   {
+    "insn_va": "0x52c1cf",
+    "bytes": "c7059cd7ce0600900000",
+    "insn_text": "mov dword ptr [0x6ced79c], 0x9000",
+    "form": "imm",
+    "value": "0x9000",
+    "why": "not a pool walk bound: a size stored into a struct outside the pool; the function never names the block"
+   },
+   {
+    "insn_va": "0x551aa1",
+    "bytes": "6800900000",
+    "insn_text": "push 0x9000",
+    "form": "imm",
+    "value": "0x9000",
+    "why": "not a pool walk bound: the function never names the pool block and the value is a buffer size"
+   },
+   {
+    "insn_va": "0x658f96",
+    "bytes": "098600900000",
+    "insn_text": "or dword ptr [esi + 0x9000], eax",
+    "form": "mem",
+    "value": "0x9000",
+    "why": "not a pool index: a disp32 struct offset in a function that never names the pool block"
+   },
+   {
+    "insn_va": "0x61c2fc",
+    "bytes": "0fb75004",
+    "insn_text": "movzx edx, word ptr [eax + 4]",
+    "form": "imm",
+    "value": "0x4",
+    "why": "not the whole child bank cap: 0x61C280 walks the block-anchored list and reads that slot's own +0x04, a two-valued membership tag it compares against 1 and 2"
+   },
+   {
+    "insn_va": "0x61c32a",
+    "bytes": "0fb77104",
+    "insn_text": "movzx esi, word ptr [ecx + 4]",
+    "form": "imm",
+    "value": "0x4",
+    "why": "the same slot field copied along the block-anchored list - a membership tag, not a bank cap (0x61C280)"
+   },
+   {
+    "insn_va": "0x61c32e",
+    "bytes": "66897004",
+    "insn_text": "mov word ptr [eax + 4], si",
+    "form": "imm",
+    "value": "0x4",
+    "why": "the write half of that field: re-writing it to a grown bank cap would mis-tag every entry on the list (0x61C280)"
    }
   ],
   "address_sites": [
@@ -14119,13 +14231,33 @@
   ],
   "constant_sites": [
    {
+    "insn_va": "0x406771",
+    "bytes": "c744241002200200",
+    "insn_text": "mov dword ptr [esp + 0x10], 0x22002",
+    "form": "imm",
+    "operand_va": "0x406775",
+    "old": "0x22002",
+    "new": "0x2effe",
+    "kind": "pool_walk"
+   },
+   {
+    "insn_va": "0x4066ae",
+    "bytes": "beab5a0000",
+    "insn_text": "mov esi, 0x5aab",
+    "form": "imm",
+    "operand_va": "0x4066af",
+    "old": "0x5aab",
+    "new": "0x7d55",
+    "kind": "pool_walk6"
+   },
+   {
     "insn_va": "0x40690d",
     "bytes": "69d201c80000",
     "insn_text": "imul edx, edx, 0xc801",
     "form": "imm",
     "operand_va": "0x40690f",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14135,7 +14267,7 @@
     "form": "imm",
     "operand_va": "0x406921",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14145,7 +14277,7 @@
     "form": "imm",
     "operand_va": "0x412d79",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14155,7 +14287,7 @@
     "form": "imm",
     "operand_va": "0x412d7f",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14165,8 +14297,18 @@
     "form": "imm",
     "operand_va": "0x412dbf",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
+   },
+   {
+    "insn_va": "0x412de7",
+    "bytes": "beffc70000",
+    "insn_text": "mov esi, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x412de8",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x412dee",
@@ -14175,7 +14317,7 @@
     "form": "mem",
     "operand_va": "0x412df0",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14185,7 +14327,7 @@
     "form": "imm",
     "operand_va": "0x4165a2",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14195,7 +14337,7 @@
     "form": "imm",
     "operand_va": "0x4165a9",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14205,7 +14347,7 @@
     "form": "imm",
     "operand_va": "0x416610",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14215,7 +14357,7 @@
     "form": "imm",
     "operand_va": "0x419985",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14225,7 +14367,7 @@
     "form": "imm",
     "operand_va": "0x426ce1",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14235,8 +14377,18 @@
     "form": "imm",
     "operand_va": "0x426ce6",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x435b22",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x435b23",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x435b2c",
@@ -14245,7 +14397,7 @@
     "form": "imm",
     "operand_va": "0x435b2e",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14255,8 +14407,18 @@
     "form": "mem",
     "operand_va": "0x435b34",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x435b8c",
+    "bytes": "bfffc70000",
+    "insn_text": "mov edi, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x435b8d",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x435ba3",
@@ -14265,7 +14427,7 @@
     "form": "imm",
     "operand_va": "0x435ba5",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14275,8 +14437,18 @@
     "form": "imm",
     "operand_va": "0x436276",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
+   },
+   {
+    "insn_va": "0x436293",
+    "bytes": "beffc70000",
+    "insn_text": "mov esi, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x436294",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x43629a",
@@ -14285,8 +14457,18 @@
     "form": "mem",
     "operand_va": "0x43629c",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x44062f",
+    "bytes": "bfffc70000",
+    "insn_text": "mov edi, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x440630",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x440644",
@@ -14295,7 +14477,7 @@
     "form": "imm",
     "operand_va": "0x440646",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14305,7 +14487,7 @@
     "form": "imm",
     "operand_va": "0x44ad00",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14315,7 +14497,7 @@
     "form": "imm",
     "operand_va": "0x44b0ea",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14325,8 +14507,18 @@
     "form": "imm",
     "operand_va": "0x44b0f0",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x44b28d",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x44b28e",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x44b297",
@@ -14335,7 +14527,7 @@
     "form": "imm",
     "operand_va": "0x44b299",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14345,7 +14537,7 @@
     "form": "mem",
     "operand_va": "0x44b29f",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14355,7 +14547,7 @@
     "form": "imm",
     "operand_va": "0x44b93a",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14365,7 +14557,7 @@
     "form": "imm",
     "operand_va": "0x44b940",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14375,7 +14567,7 @@
     "form": "imm",
     "operand_va": "0x44d89f",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14385,7 +14577,7 @@
     "form": "imm",
     "operand_va": "0x452b37",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14395,7 +14587,7 @@
     "form": "imm",
     "operand_va": "0x4543ef",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14405,7 +14597,7 @@
     "form": "imm",
     "operand_va": "0x4543f6",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14415,7 +14607,7 @@
     "form": "imm",
     "operand_va": "0x4549e8",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14425,7 +14617,7 @@
     "form": "imm",
     "operand_va": "0x4598fb",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14435,7 +14627,7 @@
     "form": "imm",
     "operand_va": "0x459903",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14445,7 +14637,7 @@
     "form": "imm",
     "operand_va": "0x459936",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14455,7 +14647,7 @@
     "form": "imm",
     "operand_va": "0x45993d",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14465,7 +14657,7 @@
     "form": "imm",
     "operand_va": "0x4599e2",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14475,7 +14667,7 @@
     "form": "imm",
     "operand_va": "0x4599e8",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14485,7 +14677,7 @@
     "form": "imm",
     "operand_va": "0x459a19",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14495,7 +14687,7 @@
     "form": "imm",
     "operand_va": "0x459a20",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14505,7 +14697,7 @@
     "form": "imm",
     "operand_va": "0x459b0d",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14515,7 +14707,7 @@
     "form": "imm",
     "operand_va": "0x459b13",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14525,7 +14717,7 @@
     "form": "imm",
     "operand_va": "0x459b4e",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14535,7 +14727,7 @@
     "form": "imm",
     "operand_va": "0x459b54",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14545,7 +14737,7 @@
     "form": "imm",
     "operand_va": "0x459b8f",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14555,7 +14747,7 @@
     "form": "imm",
     "operand_va": "0x459b96",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14565,7 +14757,7 @@
     "form": "imm",
     "operand_va": "0x4639d9",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14575,8 +14767,18 @@
     "form": "imm",
     "operand_va": "0x46802a",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
+   },
+   {
+    "insn_va": "0x4685eb",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4685ec",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x4685f8",
@@ -14585,7 +14787,7 @@
     "form": "imm",
     "operand_va": "0x4685fa",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14595,7 +14797,7 @@
     "form": "imm",
     "operand_va": "0x468600",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14605,7 +14807,7 @@
     "form": "imm",
     "operand_va": "0x469bdd",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14615,8 +14817,18 @@
     "form": "imm",
     "operand_va": "0x4711f6",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
+   },
+   {
+    "insn_va": "0x471285",
+    "bytes": "bbffc70000",
+    "insn_text": "mov ebx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x471286",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x471291",
@@ -14625,7 +14837,7 @@
     "form": "imm",
     "operand_va": "0x471293",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14635,7 +14847,7 @@
     "form": "imm",
     "operand_va": "0x47129b",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14645,7 +14857,7 @@
     "form": "imm",
     "operand_va": "0x4712af",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14655,8 +14867,18 @@
     "form": "imm",
     "operand_va": "0x47f723",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x480b53",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x480b54",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x480b61",
@@ -14665,7 +14887,7 @@
     "form": "imm",
     "operand_va": "0x480b63",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14675,7 +14897,7 @@
     "form": "mem",
     "operand_va": "0x480b69",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14685,8 +14907,18 @@
     "form": "imm",
     "operand_va": "0x48b9da",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
+   },
+   {
+    "insn_va": "0x48d964",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x48d965",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x48d970",
@@ -14695,7 +14927,7 @@
     "form": "imm",
     "operand_va": "0x48d972",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14705,7 +14937,7 @@
     "form": "imm",
     "operand_va": "0x48d978",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14715,7 +14947,7 @@
     "form": "imm",
     "operand_va": "0x48d9d8",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14725,7 +14957,7 @@
     "form": "imm",
     "operand_va": "0x4a02fe",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14735,7 +14967,7 @@
     "form": "imm",
     "operand_va": "0x4a0304",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14745,7 +14977,7 @@
     "form": "imm",
     "operand_va": "0x4a214e",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14755,8 +14987,18 @@
     "form": "imm",
     "operand_va": "0x4a2154",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x4a5fd3",
+    "bytes": "81fe00900000",
+    "insn_text": "cmp esi, 0x9000",
+    "form": "imm",
+    "operand_va": "0x4a5fd5",
+    "old": "0x9000",
+    "new": "0xf000",
+    "kind": "parent_walk"
    },
    {
     "insn_va": "0x4a7c7e",
@@ -14765,8 +15007,18 @@
     "form": "imm",
     "operand_va": "0x4a7c80",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
+   },
+   {
+    "insn_va": "0x4a8236",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4a8237",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x4a8244",
@@ -14775,7 +15027,7 @@
     "form": "imm",
     "operand_va": "0x4a8246",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14785,8 +15037,18 @@
     "form": "mem",
     "operand_va": "0x4a824c",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x4aaa83",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4aaa84",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x4aaa91",
@@ -14795,7 +15057,7 @@
     "form": "imm",
     "operand_va": "0x4aaa93",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14805,8 +15067,18 @@
     "form": "mem",
     "operand_va": "0x4aaa99",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x4ab666",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4ab667",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x4ab670",
@@ -14815,7 +15087,7 @@
     "form": "imm",
     "operand_va": "0x4ab672",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14825,8 +15097,18 @@
     "form": "mem",
     "operand_va": "0x4ab678",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x4ac679",
+    "bytes": "bfffc70000",
+    "insn_text": "mov edi, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4ac67a",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x4ac68e",
@@ -14835,8 +15117,18 @@
     "form": "imm",
     "operand_va": "0x4ac690",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
+   },
+   {
+    "insn_va": "0x4b0523",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4b0524",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x4b0530",
@@ -14845,7 +15137,7 @@
     "form": "imm",
     "operand_va": "0x4b0532",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14855,8 +15147,18 @@
     "form": "imm",
     "operand_va": "0x4b0539",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x4b5edf",
+    "bytes": "bfffc70000",
+    "insn_text": "mov edi, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4b5ee0",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x4b5ef4",
@@ -14865,7 +15167,7 @@
     "form": "imm",
     "operand_va": "0x4b5ef6",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14875,7 +15177,7 @@
     "form": "imm",
     "operand_va": "0x4b70ca",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14885,7 +15187,7 @@
     "form": "imm",
     "operand_va": "0x4ba5f9",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14895,7 +15197,7 @@
     "form": "imm",
     "operand_va": "0x4bc00f",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14905,7 +15207,7 @@
     "form": "imm",
     "operand_va": "0x4bc015",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -14915,8 +15217,18 @@
     "form": "imm",
     "operand_va": "0x4bc032",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
+   },
+   {
+    "insn_va": "0x4bc088",
+    "bytes": "bdffc70000",
+    "insn_text": "mov ebp, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4bc089",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x4bd769",
@@ -14925,8 +15237,18 @@
     "form": "imm",
     "operand_va": "0x4bd76b",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
+   },
+   {
+    "insn_va": "0x4c0ea4",
+    "bytes": "beffc70000",
+    "insn_text": "mov esi, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4c0ea5",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x4c0ebb",
@@ -14935,7 +15257,7 @@
     "form": "imm",
     "operand_va": "0x4c0ebd",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14945,8 +15267,28 @@
     "form": "mem",
     "operand_va": "0x4c0ed5",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x4c0f05",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4c0f06",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
+   },
+   {
+    "insn_va": "0x4cc533",
+    "bytes": "bfffc70000",
+    "insn_text": "mov edi, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4cc534",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x4cc548",
@@ -14955,7 +15297,7 @@
     "form": "imm",
     "operand_va": "0x4cc54a",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -14965,7 +15307,7 @@
     "form": "imm",
     "operand_va": "0x4cde39",
     "old": "0x9001",
-    "new": "0xe000",
+    "new": "0xf001",
     "kind": "parent_cap"
    },
    {
@@ -14975,7 +15317,7 @@
     "form": "imm",
     "operand_va": "0x4cde5b",
     "old": "0x9001",
-    "new": "0xe000",
+    "new": "0xf001",
     "kind": "parent_cap"
    },
    {
@@ -14985,7 +15327,7 @@
     "form": "imm",
     "operand_va": "0x4cde6c",
     "old": "0x15802",
-    "new": "0x1d800",
+    "new": "0x1f000",
     "kind": "child0_last"
    },
    {
@@ -14995,7 +15337,7 @@
     "form": "imm",
     "operand_va": "0x4cde71",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15005,7 +15347,7 @@
     "form": "imm",
     "operand_va": "0x4cde7d",
     "old": "0x22003",
-    "new": "0x2d000",
+    "new": "0x2efff",
     "kind": "child1_last"
    },
    {
@@ -15015,7 +15357,7 @@
     "form": "imm",
     "operand_va": "0x4cde87",
     "old": "0x15803",
-    "new": "0x1d801",
+    "new": "0x1f001",
     "kind": "child1_base"
    },
    {
@@ -15025,7 +15367,7 @@
     "form": "imm",
     "operand_va": "0x4ce079",
     "old": "0x9001",
-    "new": "0xe000",
+    "new": "0xf001",
     "kind": "parent_cap"
    },
    {
@@ -15035,7 +15377,7 @@
     "form": "imm",
     "operand_va": "0x4ce080",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15045,7 +15387,7 @@
     "form": "imm",
     "operand_va": "0x4ce11d",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15055,8 +15397,18 @@
     "form": "imm",
     "operand_va": "0x4cf2f9",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
+   },
+   {
+    "insn_va": "0x4d07cc",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4d07cd",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x4d07d6",
@@ -15065,7 +15417,7 @@
     "form": "imm",
     "operand_va": "0x4d07d8",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15075,8 +15427,18 @@
     "form": "mem",
     "operand_va": "0x4d07de",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x4e0579",
+    "bytes": "bfffc70000",
+    "insn_text": "mov edi, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4e057a",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x4e058e",
@@ -15085,7 +15447,7 @@
     "form": "imm",
     "operand_va": "0x4e0590",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15095,8 +15457,18 @@
     "form": "imm",
     "operand_va": "0x4e483b",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x4e8bfb",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4e8bfc",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x4e8c05",
@@ -15105,7 +15477,7 @@
     "form": "imm",
     "operand_va": "0x4e8c07",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15115,7 +15487,7 @@
     "form": "mem",
     "operand_va": "0x4e8c0d",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15125,7 +15497,7 @@
     "form": "imm",
     "operand_va": "0x4e8c43",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15135,8 +15507,28 @@
     "form": "mem",
     "operand_va": "0x4e8c5f",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x4e8c94",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4e8c95",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
+   },
+   {
+    "insn_va": "0x4eea99",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4eea9a",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x4eeaa7",
@@ -15145,7 +15537,7 @@
     "form": "imm",
     "operand_va": "0x4eeaa9",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15155,7 +15547,7 @@
     "form": "mem",
     "operand_va": "0x4eeaaf",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15165,7 +15557,7 @@
     "form": "imm",
     "operand_va": "0x4f2c49",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15175,7 +15567,7 @@
     "form": "imm",
     "operand_va": "0x4f75e5",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15185,8 +15577,18 @@
     "form": "imm",
     "operand_va": "0x4f75ec",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x4f867c",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4f867d",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x4f8688",
@@ -15195,7 +15597,7 @@
     "form": "imm",
     "operand_va": "0x4f868a",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15205,7 +15607,7 @@
     "form": "mem",
     "operand_va": "0x4f8690",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15215,7 +15617,7 @@
     "form": "imm",
     "operand_va": "0x4f86c6",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15225,8 +15627,28 @@
     "form": "mem",
     "operand_va": "0x4f86d5",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x4f8710",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4f8711",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
+   },
+   {
+    "insn_va": "0x4f876f",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4f8770",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x4fb0fd",
@@ -15235,7 +15657,7 @@
     "form": "imm",
     "operand_va": "0x4fb0ff",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15245,8 +15667,18 @@
     "form": "imm",
     "operand_va": "0x4fb106",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x4ff742",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x4ff743",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x4ff74c",
@@ -15255,7 +15687,7 @@
     "form": "imm",
     "operand_va": "0x4ff74e",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15265,8 +15697,18 @@
     "form": "mem",
     "operand_va": "0x4ff754",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x504e45",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x504e46",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x504e51",
@@ -15275,7 +15717,7 @@
     "form": "imm",
     "operand_va": "0x504e53",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15285,7 +15727,7 @@
     "form": "mem",
     "operand_va": "0x504e59",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15295,7 +15737,7 @@
     "form": "imm",
     "operand_va": "0x5f5ba2",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15305,7 +15747,7 @@
     "form": "imm",
     "operand_va": "0x5f5ba7",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15315,7 +15757,7 @@
     "form": "imm",
     "operand_va": "0x611bcf",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15325,7 +15767,7 @@
     "form": "imm",
     "operand_va": "0x611bd6",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15335,7 +15777,7 @@
     "form": "imm",
     "operand_va": "0x611cde",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15345,7 +15787,7 @@
     "form": "imm",
     "operand_va": "0x611ce6",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15355,7 +15797,7 @@
     "form": "imm",
     "operand_va": "0x611efe",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15365,7 +15807,7 @@
     "form": "imm",
     "operand_va": "0x611f06",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15375,7 +15817,7 @@
     "form": "imm",
     "operand_va": "0x612de6",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15385,7 +15827,7 @@
     "form": "imm",
     "operand_va": "0x612deb",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15395,7 +15837,7 @@
     "form": "imm",
     "operand_va": "0x612ed0",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15405,7 +15847,7 @@
     "form": "imm",
     "operand_va": "0x612ed9",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15415,7 +15857,7 @@
     "form": "imm",
     "operand_va": "0x61b3da",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15425,7 +15867,7 @@
     "form": "imm",
     "operand_va": "0x61b3e3",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15435,7 +15877,7 @@
     "form": "imm",
     "operand_va": "0x61b7e7",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15445,7 +15887,7 @@
     "form": "imm",
     "operand_va": "0x61b7f2",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15455,7 +15897,7 @@
     "form": "imm",
     "operand_va": "0x61bb89",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15465,7 +15907,7 @@
     "form": "imm",
     "operand_va": "0x61bb94",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15475,7 +15917,7 @@
     "form": "imm",
     "operand_va": "0x61c246",
     "old": "0x9001",
-    "new": "0xe000",
+    "new": "0xf001",
     "kind": "parent_cap"
    },
    {
@@ -15485,7 +15927,7 @@
     "form": "imm",
     "operand_va": "0x61c24d",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15495,7 +15937,7 @@
     "form": "imm",
     "operand_va": "0x61c3a9",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15505,8 +15947,18 @@
     "form": "imm",
     "operand_va": "0x61c3af",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x61c471",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x61c472",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x61c47b",
@@ -15515,7 +15967,7 @@
     "form": "imm",
     "operand_va": "0x61c47d",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15525,8 +15977,18 @@
     "form": "imm",
     "operand_va": "0x61c483",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x61c4ae",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x61c4af",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x61c4b8",
@@ -15535,7 +15997,7 @@
     "form": "imm",
     "operand_va": "0x61c4ba",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15545,8 +16007,18 @@
     "form": "imm",
     "operand_va": "0x61c4c0",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x61c51d",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x61c51e",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x61c527",
@@ -15555,7 +16027,7 @@
     "form": "imm",
     "operand_va": "0x61c529",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15565,7 +16037,7 @@
     "form": "mem",
     "operand_va": "0x61c52f",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15575,7 +16047,7 @@
     "form": "imm",
     "operand_va": "0x61c56e",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15585,7 +16057,7 @@
     "form": "imm",
     "operand_va": "0x61c57d",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15595,7 +16067,7 @@
     "form": "imm",
     "operand_va": "0x61c5d3",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15605,7 +16077,7 @@
     "form": "imm",
     "operand_va": "0x61c5e3",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15615,7 +16087,7 @@
     "form": "imm",
     "operand_va": "0x61ca13",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15625,7 +16097,7 @@
     "form": "imm",
     "operand_va": "0x61ca19",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15635,7 +16107,7 @@
     "form": "imm",
     "operand_va": "0x61cd5f",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15645,7 +16117,7 @@
     "form": "imm",
     "operand_va": "0x61ce3a",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15655,8 +16127,18 @@
     "form": "mem",
     "operand_va": "0x61ce40",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x61ce89",
+    "bytes": "bbffc70000",
+    "insn_text": "mov ebx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x61ce8a",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x61cf08",
@@ -15665,7 +16147,7 @@
     "form": "imm",
     "operand_va": "0x61cf0a",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15675,8 +16157,18 @@
     "form": "mem",
     "operand_va": "0x61cf10",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x61cf6e",
+    "bytes": "bbffc70000",
+    "insn_text": "mov ebx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x61cf6f",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x61cfc9",
@@ -15685,7 +16177,7 @@
     "form": "imm",
     "operand_va": "0x61cfcb",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15695,7 +16187,7 @@
     "form": "imm",
     "operand_va": "0x61cfd7",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15705,7 +16197,7 @@
     "form": "imm",
     "operand_va": "0x61d1af",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15715,7 +16207,7 @@
     "form": "imm",
     "operand_va": "0x61d1b6",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15725,7 +16217,7 @@
     "form": "imm",
     "operand_va": "0x61d203",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15735,7 +16227,7 @@
     "form": "imm",
     "operand_va": "0x61d305",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15745,8 +16237,18 @@
     "form": "mem",
     "operand_va": "0x61d310",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x61d32b",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x61d32c",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x61d3c0",
@@ -15755,7 +16257,7 @@
     "form": "imm",
     "operand_va": "0x61d3c2",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15765,7 +16267,7 @@
     "form": "imm",
     "operand_va": "0x61d3cb",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15775,7 +16277,7 @@
     "form": "imm",
     "operand_va": "0x61d3d1",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15785,8 +16287,18 @@
     "form": "imm",
     "operand_va": "0x61d3dc",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x61d404",
+    "bytes": "beffc70000",
+    "insn_text": "mov esi, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x61d405",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x61d70e",
@@ -15795,7 +16307,7 @@
     "form": "imm",
     "operand_va": "0x61d710",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15805,7 +16317,7 @@
     "form": "imm",
     "operand_va": "0x61d716",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15815,7 +16327,7 @@
     "form": "imm",
     "operand_va": "0x61d726",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15825,8 +16337,18 @@
     "form": "imm",
     "operand_va": "0x61d72c",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x61d75b",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x61d75c",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x61d82a",
@@ -15835,8 +16357,18 @@
     "form": "imm",
     "operand_va": "0x61d82b",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x61d88e",
+    "bytes": "b9ffc70000",
+    "insn_text": "mov ecx, 0xc7ff",
+    "form": "imm",
+    "operand_va": "0x61d88f",
+    "old": "0xc7ff",
+    "new": "0xfffd",
+    "kind": "bank_span"
    },
    {
     "insn_va": "0x61d898",
@@ -15845,7 +16377,7 @@
     "form": "imm",
     "operand_va": "0x61d89a",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15855,7 +16387,7 @@
     "form": "mem",
     "operand_va": "0x61d8a0",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15865,7 +16397,7 @@
     "form": "imm",
     "operand_va": "0x61d9a4",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15875,7 +16407,7 @@
     "form": "imm",
     "operand_va": "0x61daeb",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15885,7 +16417,7 @@
     "form": "imm",
     "operand_va": "0x61dc7a",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15895,7 +16427,7 @@
     "form": "imm",
     "operand_va": "0x61dc81",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15905,7 +16437,7 @@
     "form": "imm",
     "operand_va": "0x61e239",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15915,7 +16447,7 @@
     "form": "imm",
     "operand_va": "0x61e241",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15925,7 +16457,7 @@
     "form": "imm",
     "operand_va": "0x61e70d",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15935,7 +16467,7 @@
     "form": "imm",
     "operand_va": "0x61e714",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15945,7 +16477,7 @@
     "form": "imm",
     "operand_va": "0x61e7b3",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15955,7 +16487,7 @@
     "form": "imm",
     "operand_va": "0x61e7ba",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15965,7 +16497,7 @@
     "form": "imm",
     "operand_va": "0x61eda8",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15975,7 +16507,7 @@
     "form": "imm",
     "operand_va": "0x61ee11",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -15985,7 +16517,7 @@
     "form": "imm",
     "operand_va": "0x61f08f",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -15995,7 +16527,7 @@
     "form": "imm",
     "operand_va": "0x61f097",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -16005,7 +16537,7 @@
     "form": "imm",
     "operand_va": "0x61f0bc",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -16015,7 +16547,7 @@
     "form": "imm",
     "operand_va": "0x61f0c1",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -16025,7 +16557,7 @@
     "form": "imm",
     "operand_va": "0x61f26e",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -16035,7 +16567,7 @@
     "form": "imm",
     "operand_va": "0x61f273",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -16045,7 +16577,7 @@
     "form": "imm",
     "operand_va": "0x61f401",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -16055,7 +16587,7 @@
     "form": "imm",
     "operand_va": "0x61f407",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -16065,7 +16597,7 @@
     "form": "imm",
     "operand_va": "0x61f51d",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -16075,7 +16607,7 @@
     "form": "imm",
     "operand_va": "0x61f522",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -16085,7 +16617,7 @@
     "form": "imm",
     "operand_va": "0x61f61e",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -16095,7 +16627,7 @@
     "form": "imm",
     "operand_va": "0x61f623",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -16105,7 +16637,7 @@
     "form": "imm",
     "operand_va": "0x61f654",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -16115,7 +16647,7 @@
     "form": "imm",
     "operand_va": "0x61f659",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -16125,7 +16657,7 @@
     "form": "imm",
     "operand_va": "0x61f6e6",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -16135,7 +16667,7 @@
     "form": "imm",
     "operand_va": "0x61f6ee",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -16145,7 +16677,7 @@
     "form": "imm",
     "operand_va": "0x6219c3",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -16155,7 +16687,7 @@
     "form": "imm",
     "operand_va": "0x6219dd",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -16165,7 +16697,7 @@
     "form": "imm",
     "operand_va": "0x6219ee",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -16175,7 +16707,7 @@
     "form": "imm",
     "operand_va": "0x621a09",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -16185,7 +16717,7 @@
     "form": "imm",
     "operand_va": "0x621a19",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -16195,7 +16727,7 @@
     "form": "imm",
     "operand_va": "0x621a2a",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -16205,7 +16737,7 @@
     "form": "imm",
     "operand_va": "0x621a53",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -16215,7 +16747,7 @@
     "form": "imm",
     "operand_va": "0x621a63",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -16225,7 +16757,7 @@
     "form": "imm",
     "operand_va": "0x6221da",
     "old": "0xc801",
-    "new": "0xf800",
+    "new": "0xffff",
     "kind": "child_cap"
    },
    {
@@ -16235,7 +16767,7 @@
     "form": "imm",
     "operand_va": "0x6221f5",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -16245,7 +16777,7 @@
     "form": "imm",
     "operand_va": "0x622284",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
    },
    {
@@ -16255,11 +16787,71 @@
     "form": "imm",
     "operand_va": "0x6223d3",
     "old": "0x9002",
-    "new": "0xe001",
+    "new": "0xf002",
     "kind": "child0_base"
+   },
+   {
+    "insn_va": "0x44a104",
+    "bytes": "3d00900100",
+    "insn_text": "cmp eax, 0x19000",
+    "form": "imm",
+    "operand_va": "0x44a105",
+    "old": "0x19000",
+    "new": "0x1f000",
+    "kind": "parent_id_end"
+   },
+   {
+    "insn_va": "0x44b11f",
+    "bytes": "3d00900100",
+    "insn_text": "cmp eax, 0x19000",
+    "form": "imm",
+    "operand_va": "0x44b120",
+    "old": "0x19000",
+    "new": "0x1f000",
+    "kind": "parent_id_end"
+   },
+   {
+    "insn_va": "0x4a0345",
+    "bytes": "3d00900100",
+    "insn_text": "cmp eax, 0x19000",
+    "form": "imm",
+    "operand_va": "0x4a0346",
+    "old": "0x19000",
+    "new": "0x1f000",
+    "kind": "parent_id_end"
+   },
+   {
+    "insn_va": "0x4bc0ed",
+    "bytes": "3d00900100",
+    "insn_text": "cmp eax, 0x19000",
+    "form": "imm",
+    "operand_va": "0x4bc0ee",
+    "old": "0x19000",
+    "new": "0x1f000",
+    "kind": "parent_id_end"
+   },
+   {
+    "insn_va": "0x61cda4",
+    "bytes": "81ff00900100",
+    "insn_text": "cmp edi, 0x19000",
+    "form": "imm",
+    "operand_va": "0x61cda6",
+    "old": "0x19000",
+    "new": "0x1f000",
+    "kind": "parent_id_end"
+   },
+   {
+    "insn_va": "0x61d026",
+    "bytes": "3d00900100",
+    "insn_text": "cmp eax, 0x19000",
+    "form": "imm",
+    "operand_va": "0x61d027",
+    "old": "0x19000",
+    "new": "0x1f000",
+    "kind": "parent_id_end"
    }
   ],
-  "child0_last": "0x1d800",
-  "child1_last": "0x2d000"
+  "child0_last": "0x1f000",
+  "child1_last": "0x2efff"
  }
 }

@@ -8,11 +8,14 @@
 
 #include "IW4x32.hpp"
 #include "IW4x32Tables.hpp"
-#include "Command.hpp"
-#include "Events.hpp"
+#include "Command.hpp" // IW4x-32: iw4x32_poolstats / iw4x32_framestats
+#include "Network.hpp"  // IW4x-32: the connectionless dispatch counters on the console CPU line
+#include "Threading.hpp" // IW4x-32: the dedicated server's packet-pump counters (FrameTime::Wait*)
+#include "Events.hpp"  // IW4x-32: register them once the server is up
 #include "Logger.hpp"
 #include <cstring> // IW4x-32: memcpy / strcmp in the engine patch tables
 #include <cstdlib> // IW4x-32: atoi on the client's slot-count marker
+#include <intrin.h> // IW4x-32: __readfsdword - the loader list read in CrashModules
 
 namespace Components
 {
@@ -22,13 +25,13 @@ namespace Components
     void* g_Pool = nullptr; // the relocated GSC script-variable pool (IW4x-32)
     bool g_Patched = false;
 
-    // IW4x-32: the pool THIS process actually runs on - block address and geometry. The grown pool is off by
-    // default, so these are the engine's own numbers unless iw4x32-pool48 moved them (IW4x32::PoolStats reads
-    // them, see below - a probe that assumed the table geometry would read headroom that is not there).
+    // IW4x-32: the pool geometry THIS process really runs on - block address plus caps. They stay the engine's
+    // own numbers when iw4x32-poolstock planted the block back to the stock geometry (see PatchEngine). A probe
+    // that assumed the tables' geometry would report headroom that the running server does not have.
     unsigned int g_PoolBase = IW4x32_Pool_StockBase;
     unsigned int g_PoolParentCap = IW4x32_Pool_OldParentCap;
     unsigned int g_PoolChildCap = IW4x32_Pool_OldChildCap;
-    unsigned int g_PoolChild0Base = IW4x32_Pool_OldChild0Base;
+    unsigned int g_PoolChild0Base = IW4x32_Pool_OldChild0Base; // IW4x-32: the first child id (PoolChild0Base)
 
     // compat (engine32c/compat.c)
     bool g_Layout32 = true;      // the image is written with our (32-player) bytes
@@ -243,12 +246,40 @@ namespace Components
     // IW4x-32: the GSC script-variable pool. One contiguous block of 16-byte scrVar_t entries: index 0 is the
     // header, 1..ParentCap the parent pool, then the two child pools (fields, array entries, locals, endons).
     // The engine reaches it by absolute address AND by pool index (index = Child0Base + n * ChildCap), so
-    // growing it is a relocation: allocate the block, rewrite both kinds of site. Measured on the test server,
-    // 47 clients sat at 88-90 % of the stock 36865-entry parent pool and 89 % of the child pools, and the level
-    // died of it in a few minutes - this build runs with both pools doubled.
+    // growing it is a relocation: allocate the block, rewrite both kinds of site. Measured on the test box with
+    // the server's own counters (iw4x32_poolstats): the cost is a fixed block plus a slope, not one per-player
+    // number - a level load holds ~8,700 parent and ~12,700 per child bank with nobody in, every player adds
+    // ~480 parent and ~430 per bank, and a round change puts ~20,000 more on one bank inside six seconds. So the
+    // banks are sized from that model (the private tree's patch_engine pool_plan) rather than by guessing, and
+    // they run at the ceiling the WORD links allow: 61,441 parent + 2x65,535 child. Two measurements picked
+    // those numbers. The 63-bot wall is the CHILD banks: a run at 49,152 + 2x64,512 printed "exceeded maximum
+    // number of child0 script variables" - the bank's free-run chain ran out while the entries counted only 57 %
+    // used - and the same build at 61,440 + 2x65,535 printed no refusal at all. And the block has to keep
+    // entries - 2 a whole multiple of six, which the dump's six-at-a-time count needs to be exact (see
+    // PoolIndexValue): parent_cap 61,441 (odd) is what makes that true while the child banks sit at 0xffff.
+    // IW4x-32: the geometry to run, and the one rule it has to obey: every link inside the pool is a WORD
+    // (the bank init at 0x61C0F0 stores index - bank's first index), so no bank may hold 0x10000 entries.
+    struct PoolGeometry
+    {
+      unsigned int ParentCap;  // entries in the parent bank
+      unsigned int ChildCap;   // entries in each of the two child banks
+      unsigned int Child0Base; // first child index; 0 = the usual parentCap + 1
+      unsigned char KeepBankTests; // diagnostic: leave the two "index - 1 == parentCap" tests stock
+      unsigned char KeepAddrAnchors; // diagnostic: leave a bank's anchored ADDRESS sites at their stock offset
+    };
+
+    static_assert(IW4x32_Pool_ParentCap < 0x10000 && IW4x32_Pool_ChildCap < 0x10000,
+                  "a pool bank wider than 0x10000 entries overflows the 16-bit links");
+    // IW4x-32: the other geometry rule the exe imposes (see PoolIndexValue): the script-thread dump walks the
+    // block six entries per step, so a block whose entries - 2 is not a whole multiple of six cannot be counted
+    // exactly by one constant - the count would have to round, and either way the dump reads past the block or
+    // stops short of it.
+    static_assert((IW4x32_Pool_Entries - 2) % 6 == 0,
+                  "the pool dump walks the block six entries at a time; entries - 2 must divide by six exactly");
+
     bool AllocatePool()
     {
-      const auto bytes = IW4x32_Pool_Entries * IW4x32_Pool_EntrySize;
+      const auto bytes = IW4x32_Pool_Entries * IW4x32_Pool_EntrySize; // the widest geometry the tables know
       g_Pool = VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
       if (!g_Pool)
       {
@@ -258,18 +289,263 @@ namespace Components
       return true;
     }
 
-    void ApplyPool(bool geometry)
+    // The new value for one index constant under a chosen geometry. The stock forms are distinct numbers, so
+    // the old value alone says which part of the geometry a site encodes: the parent cap, a bank's first index,
+    // a bank's cap, or a bank's last index (child0's last = child1's first - 1, child1's last = entries - 1).
+    // The DERIVED forms count too, and each maps to the same arithmetic on the new caps:
+    //   parent_cap - 1  the parent pool's last index - a walk bound (0x4a5fd3 cmp esi, 0x9000; 0x406740's
+    //                   Scr_DumpScriptThreads loop stops one bank entry early if it stays stock)
+    //   child_cap  - 2  the child bank's GSC name-hash modulus: 39 sites are mov reg, 0xc7ff / div reg, each
+    //                   next to `and reg, 1 ; imul reg, reg, child_cap` (the bank's first index), and the
+    //                   bucket it feeds goes to the free-block search at 0x61C1B0 - entry = block +
+    //                   (bankFirst + bucket) * 16, next = block + (bankFirst + word[entry]) * 16. Left stock
+    //                   over a grown bank the bucket is computed for the stock bank, lands on a live entry, and
+    //                   the walk reads that variable's own bytes as a link and follows them out of the block -
+    //                   the unlink fault at 0x43719B (banks below cap, 25-48 connections), and the wild ebx at
+    //                   0x61DCD4 a few calls later.
+    //   entries    - 2  the whole block's walk bound (0x406771).
+    //   (entries-2)/6   the SAME bound divided by six (0x4066ae): the script-thread dump the engine runs before
+    //                   it prints a script-pool refusal counts the block's type-0xc variables in a first pass
+    //                   that walks six entries per step (6 entries checked per iteration, esi counts down from
+    //                   0x5aab, entries 1..139266), allocates its record array from THAT count, then walks the
+    //                   block again one entry at a time with the 0x22002 bound. A grown block with the six-stride
+    //                   count left stock makes the second pass fill more records than the array holds: the
+    //                   63-bot run faulted at 0x61C6BF with a record pointer of 0x10D6204C, 80 KiB past the end
+    //                   of the heap block the first pass allocated, right after "exceeded maximum number of
+    //                   child0 script variables". This is why the geometry keeps entries - 2 a whole multiple
+    //                   of six: a rounded-up count would read past the block and a rounded-down one is the bug.
+    unsigned int PoolIndexValue(unsigned int oldValue, const PoolGeometry& g)
+    {
+      const auto child0 = g.Child0Base ? g.Child0Base : g.ParentCap + 1;
+      const auto child1 = child0 + g.ChildCap;
+      if (oldValue == IW4x32_Pool_OldParentCap)
+        return g.ParentCap;
+      if (oldValue == IW4x32_Pool_OldParentCap - 1)
+        return g.ParentCap - 1; // derived: the parent pool's last index
+      // IW4x-32: derived: the end of the parent-object id range. An object id is 0x10000 + its parent index, and
+      // the stock id decoder (0x44a0f0, and its five inlined copies: cmp reg, 0x19000) takes ids below this
+      // bound as parent objects and anything above as kind 6. Left stock over a grown parent bank, every object
+      // at index >= 0x9000 skips its refcount add/release (kind 6 falls past the `cmp ecx, 4 / jae`), so freed
+      // objects stay on endon chains and the unlink loop at 0x61D340 spins forever - the 63-bot hang at ~54
+      // clients, which the 48-client runs never reached because their parent ids stayed below 0x9000.
+      if (oldValue == 0x10000 + IW4x32_Pool_OldParentCap - 1)
+        return 0x10000 + g.ParentCap - 1;
+      if (oldValue == IW4x32_Pool_OldChild0Base)
+        return child0;
+      if (oldValue == IW4x32_Pool_OldChildCap)
+        return g.ChildCap;
+      if (oldValue == IW4x32_Pool_OldChildCap - 2)
+        return g.ChildCap - 2; // derived: the child bank's name-hash modulus
+      if (oldValue == IW4x32_Pool_OldChild1Base)
+        return child1;
+      if (oldValue == IW4x32_Pool_OldChild1Base - 1)
+        return child1 - 1;
+      if (oldValue == IW4x32_Pool_OldEntries - 1)
+        return child1 + g.ChildCap - 1; // the block's last index, INCLUSIVE: entries - 1. The bank init at
+                                        // 0x4CDE30 is handed (first, last) with last inclusive, so returning
+                                        // entries here grew child1 one entry past the block on every grown
+                                        // geometry - the offline rule check in iw4x32/tools/
+                                        // test_pool_free_list.py is what caught it.
+      if (oldValue == IW4x32_Pool_OldEntries - 2)
+        return child1 + g.ChildCap - 2; // derived: the block's walk bound (0x406771 - a COUNT, decremented
+                                        // to zero at 0x40684D: entries - 2 entries from the first one)
+      if (oldValue == (IW4x32_Pool_OldEntries - 2) / 6)
+        return (child1 + g.ChildCap - 2) / 6; // derived: that same bound divided by six (0x4066ae) - see above:
+                                              // the dump's six-at-a-time count. Exact under the tables' geometry
+                                              // (the static_assert by the bank-width one below is what keeps it
+                                              // exact), so no rounding is involved either way.
+      return oldValue; // not one of the stock geometry forms - leave it alone
+    }
+
+    // IW4x-32: does a WORD the allocator read as a link address a real entry of its own space? Two spaces,
+    // proven from the stock code: the free-list / hash fields count from the BANK's first index (0x61C1B0:
+    // next = block + (bankFirst + link) * 16, and the bank init at 0x61C0F0 stores index - first), while the
+    // used-list fields carry ABSOLUTE pool indices (0x437190: entry = (block + 0x12) + scratch * 16). A link
+    // outside its space is not an entry - it is some variable's own bytes read as a link. Nothing here is read
+    // back by the engine: this is the witness the ladder prints when the pool is being corrupted, so a fault PC
+    // is not the only evidence of the next geometry mistake.
+    bool PoolLinkOk(unsigned int link, unsigned int cap)
+    {
+      return link < cap; // every entry address is first + link, scaled by the 16-byte entry
+    }
+
+    // IW4x-32: WHICH cap a link is judged against, per field, read off the two walkers. +0x00 and +0x0c are
+    // walked by 0x61C1B0 in the entry's own bank: next = block + (bankFirst + word) * 16. +0x0e is walked by
+    // 0x61D2E0, and for a PARENT entry that walk runs in a CHILD bank - the stock code picks it as
+    // (param_1 & 1) * child_cap + child0_base, a parent variable's script lives in the child bank its index
+    // pairs with, and the link is relative to that bank. Judging a parent's +0x0e against the parent cap calls
+    // a healthy pool poisoned: the first 64-slot run's IW4X32_POOL_WORD said bad=82 with word=0xC355 in a bank
+    // of 49152 - a value well inside the 64512-entry child bank it actually addresses. A witness that lies is
+    // worse than none, so the sweep judges the space the stock walker uses. (The parity itself is not checked:
+    // a link that names the wrong child bank of the pair is a different fault, and this rule cannot see it.)
+    unsigned int PoolLinkCap(unsigned int field, unsigned int first, unsigned int last)
+    {
+      if (first == 1 && field == 0x0e) // first == 1 is the parent bank: index 0 is the header
+        return g_PoolChildCap;
+      return last - first;
+    }
+
+    // IW4x-32: the WORD offsets inside an entry that the stock allocator reads back as a link, each one named at
+    // the instruction that reads it. Every one is added to the bank's FIRST index and scaled by 16:
+    //   +0x00 the free / used list next and +0x0c the name-hash chain next - 0x61C1B0 walks both as
+    //         entry = block + (bankFirst + word) * 16 (movzx ecx, word [edx] / movzx eax, word [ecx + 0xc])
+    //   +0x02 the prev half of those two lists - 0x61CA8C movzx ecx, word [edi + 0x2] then
+    //         lea edx, [ecx + esi] ; shl edx, 4, which is an entry address
+    //   +0x04 the free-RUN chain the allocator hands entries out of: the bank's head sits at
+    //         entry(bankFirst) + 0x04 (0x61CB78 movzx ebx, word [esi * 0x10 + block + 0x04]), 0x61CB90 walks it
+    //         as entry(bankFirst + word), the bank init writes it at 0x61C14F (mov word [eax - 0x8], si) and the
+    //         unlink at 0x43725B relinks it (mov word [esi + block + 0x14], dx). A head of 0 is what raises
+    //         "exceeded maximum number of child0/child1 script variables" (0x61C240 - the strings sit at 0x7370E8
+    //         and 0x6E4C90), so a bank that still holds half its entries free can refuse an entry and only this
+    //         chain shows why. Judging it is why +0x04 joined the list: without it the sweep called a pool that
+    //         was dying on this chain healthy (bad=0 through the whole 63-bot run that faulted in the pool walk
+    //         at 0x61C6BF).
+    //   +0x0e the chain 0x61D2E0 walks when a parent variable dies.
+    // Not links: +0x06, and +0x08 with its +0x0a half - the status dword carries the type and the name hash.
+    constexpr unsigned short IW4x32_Pool_LinkFields[] = {0x00, 0x02, 0x04, 0x0c, 0x0e};
+
+    // IW4x-32: how far a bank's free-RUN chain reaches when it is walked the way the allocator walks it, and how
+    // many free entries that chain never reaches. The used/free ENTRY counts can only say a bank is full; the
+    // allocator's own refusal (0x61C240) also happens when the chain is cut or loops with half the bank free.
+    // Counts only - nothing here writes. reached = entries the walk touched; broken = the walk left the bank or
+    // met an entry twice; missing = entries the status says are free that no chain reached.
+    unsigned int PoolChainReached(const unsigned char* entries, unsigned int first, unsigned int cap,
+                                  unsigned char* seen, unsigned int& head, unsigned int& broken, unsigned int& missing)
+    {
+      head = *reinterpret_cast<const unsigned short*>(entries +
+                                                      static_cast<std::size_t>(first) * IW4x32_Pool_EntrySize + 0x04);
+      broken = 0, missing = 0;
+      memset(seen + first, 0, cap);
+      unsigned int reached = 0;
+      for (auto pass = 0u; pass < 2; pass++) // two chain spaces, both walked by the allocator: 0x61CB78 takes the
+      {                                      // head from entry(bankFirst) + 0x04 and 0x61CB96 then follows
+        const auto field = pass ? 0x04 : 0x00; // entry(bankFirst + word[+0x00]); 0x61C14F / 0x43725B keep +0x04
+        auto at = first;
+        for (auto step = 0u; step <= cap; step++)
+        {
+          const auto word = *reinterpret_cast<const unsigned short*>(
+              entries + static_cast<std::size_t>(at) * IW4x32_Pool_EntrySize + field);
+          if (word == 0)
+            break; // 0 is the end-of-chain sentinel
+          const auto next = first + word;
+          if (next >= first + cap)
+          {
+            broken++; // the chain left the bank - a link that is not an entry of this bank
+            break;
+          }
+          if (seen[next]++ != 0)
+          {
+            broken++; // the walk met an entry twice: a cycle, so the rest of the bank is unreachable
+            break;
+          }
+          reached++;
+          at = next;
+        }
+      }
+      for (auto i = 0u; i < cap; i++)
+        if (!(entries[static_cast<std::size_t>(first + i) * IW4x32_Pool_EntrySize + 8] & 0x60) && !seen[first + i])
+          missing++;
+      return reached;
+    }
+
+    // IW4x-32: how many WORDs in the pool's link fields address something outside their own bank, plus the first
+    // offender (that bank's first index, the entry index, the field offset and the WORD itself). An entry sits at
+    // (bankFirst + index) * 16 and every link inside it is a WORD counting from that bank's first index: +0x00
+    // the free/used list next and +0x0c the name-hash chain next - 0x61C1B0 follows both as
+    // entry = block + (bankFirst + word) * 16 - while +0x0e is the pair 0x61D2E0 walks when a parent variable
+    // dies. The other WORDs of an entry are not links (the status dword at +0x08 carries the name hash at +0x0a),
+    // so only these three are judged. A WORD at or past the bank's cap is not an entry: the address it feeds
+    // leaves the block for the large ones and the unlink faults a call later. Counting them is how a poisoned
+    // link is seen BEFORE the fault - the fault PC never names the value, and the value is what names the
+    // geometry that was wrong. Read-only, like every other pool probe.
+    unsigned int PoolBadLinks(unsigned int& bankFirst, unsigned int& index, unsigned int& field,
+                              unsigned int& link, unsigned int* byField = nullptr, unsigned int* byBank = nullptr)
+    {
+      const auto* entries = reinterpret_cast<const unsigned char*>(g_PoolBase);
+      const unsigned int banks[3][2] = {{1, g_PoolParentCap},
+                                        {g_PoolParentCap + 1, g_PoolChildCap},
+                                        {g_PoolParentCap + 1 + g_PoolChildCap, g_PoolChildCap}};
+      unsigned int bad = 0;
+      // IW4x-32: the count split by FIELD and by BANK. One aggregate number hid which field is poisoned: every
+      // offender the live runs named sits in the 50k-64.5k range - legal in a child bank, illegal in a parent
+      // one - and the value is the value the fault carried in edi/eax (banks 49152+64512: bad=82, first field
+      // +02, word CBFA, edi CBFA; banks 61441+65535: bad=26, first field +02, word FC16, edi FC16). Either the
+      // unlink really faults on a poisoned parent link, or the parent bank's +00/+02 lists are not
+      // parent-relative and the sweep cries wolf. A per-field split is what tells those apart, and it is one
+      // counter in the sweep that already walks every entry.
+      for (auto bankNo = 0u; bankNo < 3u; bankNo++)
+      {
+        const auto first = banks[bankNo][0], cap = banks[bankNo][1];
+        for (auto i = 0u; i < cap; i++)
+        {
+          const auto* entry = entries + static_cast<std::size_t>(first + i) * IW4x32_Pool_EntrySize;
+          for (const auto f : IW4x32_Pool_LinkFields)
+          {
+            const auto word = *reinterpret_cast<const unsigned short*>(entry + f);
+            if (PoolLinkOk(word, PoolLinkCap(f, first, first + cap)))
+              continue;
+            if (bad == 0)
+              bankFirst = first, index = i, field = f, link = word;
+            if (byField && f < 16)
+              byField[f]++;
+            if (byBank && bankNo < 3)
+              byBank[bankNo]++;
+            bad++;
+          }
+        }
+      }
+      return bad;
+    }
+
+    // The parent cap shows up in two roles: as a bank bound (push 0x9001 in the bank init at 0x4CDE30) and as
+    // a bank-identity test (sub eax, 0x9001 - "is this index the first entry of the next bank?"). The byte in
+    // front of the operand says which: 0x68 push, 0x2d sub eax. iw4x32-poolb keeps the tests to see whether
+    // they are the sites the level compile cannot stand.
+    bool IsBankTest(unsigned int operandVa)
+    {
+      return *reinterpret_cast<const unsigned char*>(operandVa - 1) == 0x2d;
+    }
+
+    // The pool is addressed by absolute address as well, and those addresses are not all header fields: the
+    // child0 bank's FIRST entries (offset 0x90020 = 0x9002 * 16, and the fields beside it) are where the child
+    // free list lives, so that anchor belongs to the bank and moves with it. Leaving it at the stock offset -
+    // which is what the table's fixed offsets do under a grown geometry - points the child free list into the
+    // parent pool: every child allocation then hands back a parent entry, and the first script the level
+    // compiles dies ("Could not find label 'main' in script 'codescripts/delete'"). Header fields (offsets
+    // 0..0x1f, the pool's own counters) sit at the same place in every geometry and keep their offset.
+    unsigned int PoolAddressOffset(unsigned int oldOffset, const PoolGeometry& g)
+    {
+      const auto entry = oldOffset / IW4x32_Pool_EntrySize;
+      const auto field = oldOffset % IW4x32_Pool_EntrySize;
+      const auto child0 = g.Child0Base ? g.Child0Base : g.ParentCap + 1;
+      const auto child1 = child0 + g.ChildCap;
+      if (entry == IW4x32_Pool_OldChild0Base)
+        return child0 * IW4x32_Pool_EntrySize + field;
+      if (entry == IW4x32_Pool_OldChild1Base)
+        return child1 * IW4x32_Pool_EntrySize + field;
+      return oldOffset;
+    }
+
+    void ApplyPool(const PoolGeometry* geometry)
     {
       const auto base = static_cast<unsigned int>(reinterpret_cast<unsigned int>(g_Pool));
       for (const auto& a : IW4x32_PoolAddresses)
       {
-        const auto value = base + a.offset;
+        auto offset = a.offset;
+        if (geometry && !geometry->KeepAddrAnchors)
+          offset = PoolAddressOffset(offset, *geometry);
+        const auto value = base + offset;
         WriteProtected(reinterpret_cast<void*>(a.operandVa), &value, sizeof(value));
       }
       if (!geometry) // the A/B: same pool, same geometry, only the block moved
         return;
       for (const auto& c : IW4x32_PoolConstants)
-        WriteProtected(reinterpret_cast<void*>(c.operandVa), &c.newValue, sizeof(c.newValue));
+      {
+        if (geometry->KeepBankTests && c.oldValue == IW4x32_Pool_OldParentCap && IsBankTest(c.operandVa))
+          continue;
+        const auto value = PoolIndexValue(c.oldValue, *geometry);
+        WriteProtected(reinterpret_cast<void*>(c.operandVa), &value, sizeof(value));
+      }
     }
 
     // IW4x-32: an operand inside a moved array that also depends on the body layout (wide table sets: the
@@ -332,32 +608,181 @@ namespace Components
                                      : &Game::sharedUiInfo->playerClientNums[0];
     }
 
-    // A file next to iw4x.exe switches one part of the patch on or off: iw4x32-disable is the whole
-    // component, iw4x32-pool48 / iw4x32-poolstock switch the script-variable pool on (see PatchEngine).
-    // The pool is the one table GSC compiles against, so when a level fails to load it is the first thing
-    // to A/B, and a switch costs one file rather than a second table set.
-    // IW4x-32: how many entries of one pool bank hold a live variable. The engine's own in-use test: bit 0x60 of
-    // the status byte at entry + 8 (the low 5 bits are the type). Read-only - counting a bank cannot change it.
-    int PoolBankUsed(const unsigned char* entries, unsigned int first, unsigned int last)
+    // IW4x-32: how many entries of one pool bank hold a live variable. The engine's own in-use test is bit 0x60
+    // of the status byte at entry + 8 (its low 5 bits are the type) - the pool bank init at 0x61C0F0 and the
+    // allocator's walk at 0x4CE050 both test that bit. Read-only: counting a bank cannot change it.
+    int PoolBankUsed(const unsigned char* entries, unsigned int first, unsigned int last,
+                     unsigned int* highest = nullptr, unsigned int* freeRun = nullptr,
+                     unsigned int* badLinks = nullptr, unsigned int* badIndex = nullptr, unsigned int* badLink = nullptr)
     {
       auto used = 0;
+      auto top = 0u;
+      auto run = 0u, best = 0u;
+      auto linkBad = 0u;
       for (auto index = first; index < last; index++)
       {
+        if (badLinks)
+        {
+          // IW4x32: the same three link fields PoolBadLinks judges, from the one field list. The used-list
+          // heads (block + 0x10 + index * 16, which is where the unlink at 0x437190 starts and is 0x10 ahead of
+          // the entry grid the sweep walks) are NOT fields of an entry - a sweep that read them as links would
+          // call a healthy pool poisoned, and a witness that lies at the moment the run needs believing is worse
+          // than no witness. iw4x32/tools/test_pool_free_list.py refuses a second, hand-written list.
+          const auto* entry = entries + static_cast<std::size_t>(index) * IW4x32_Pool_EntrySize;
+          for (const auto field : IW4x32_Pool_LinkFields)
+          {
+            const auto link = *reinterpret_cast<const unsigned short*>(entry + field);
+            if (PoolLinkOk(link, PoolLinkCap(field, first, last)))
+              continue;
+            if (linkBad == 0 && badIndex && badLink)
+            { // the first offender is the one worth naming - and only when the caller gave somewhere to put it.
+              // IW4x-32: this is what killed the 63-bot live runs of three rounds: PrintPoolStats asked for the
+              // PARENT bank's bad-link COUNT without an index/word to receive it, so the first bad link the
+              // parent bank ever produced wrote through a null pointer. The fault read exactly like an engine
+              // fault (C0000005, write to 0, the link WORD in a register) and the run died in PrintPoolStats,
+              // ~10 s after the bots came in, while the engine was still healthy - which is why a 47-bot run
+              // passed (no bad link yet, so the write never happened) and every 63-bot run did not.
+              *badIndex = index;
+              *badLink = link;
+            }
+            linkBad++;
+          }
+        }
         if (entries[static_cast<std::size_t>(index) * IW4x32_Pool_EntrySize + 8] & 0x60)
+        {
           used++;
+          top = index; // the banks are scanned upward, so the last hit is the highest live index
+          run = 0;
+        }
+        else if (++run > best)
+          best = run;
       }
+      if (highest)
+        *highest = top;
+      // A bank's free ENTRIES say nothing about whether a script array can be allocated: the allocator needs a
+      // contiguous RUN (a GSC array is one block of entries), so a bank can be 35 % free and still refuse the
+      // array. The longest free run is what says that, and it costs one more counter in a pass that runs anyway.
+      if (freeRun)
+        *freeRun = best;
+      if (badLinks)
+        *badLinks = linkBad;
       return used;
     }
 
-    // Server frame time, one window per iw4x32_framestats call - every probe row is its own window. Fixed
-    // buckets and no allocation, because RecordFrame runs once per server frame on the game thread.
+    // IW4x-32: the OTHER script arena, which the pool banks cannot account for. MT_AllocIndex (0x4BECF0) hands
+    // out units of 12 bytes from the fixed block at 0x1d00100 - 65,536 units, 768 KiB - and keeps its free map
+    // as 2,048 words at 0x1dc0100: a set bit is a free unit, taking a run clears bits and MT_FreeIndex
+    // (0x439230) puts them back. Every WAITING script thread's archived stack comes out of it, and the request
+    // is generous: VM_ArchiveStack (0x61DB70) asks for values * 5 + 11 as BYTES, the allocator turns that into
+    // ceil(bytes / 12) units and then rounds the whole block up to a power-of-two number of units, so a thread
+    // waiting with 76 values on its frame (5*76+11 = 391 bytes) costs 64 units = 768 bytes, and one with 371
+    // values costs 128 units. When no free run of that size exists the engine prints
+    // "MT_AllocIndex: failed memory allocation of %d bytes for script usage", dumps every script thread and the
+    // arena (Scr_DumpScriptThreads 0x4066A0 - the "count: n, var usage: n" lines that fill a dying server's
+    // log), sets the script-memory-failed flag at DAT_02040d06, and hands back unit 0: the thread's archived
+    // stack is then written over the block unit 0 belongs to. That is the failure the 63-bot live runs show -
+    // the dump lines start at the second the server stops answering, with the pool banks at 55-65 % of cap -
+    // and the pool counters alone cannot see it, so the arena gets measured here.
+    //
+    // What a request needs is not just free units but a FREE RUN of them: classes from 5 up only accept runs of
+    // 2^(class - 5) whole words (a word is 32 units), which is why the scan reports the longest run of
+    // fully-free words next to the free count. Read-only: the map is a counter, nothing here writes it.
+    constexpr unsigned int g_MtFreeMap = 0x1dc0100; // 2,048 words, one bit per 12-byte unit of the arena
+    constexpr int MT_WORDS = 2048;
+    constexpr int MT_UNITS = MT_WORDS * 32;   // 65,536 units, 768 KiB
+    constexpr int MT_LOG_FRAMES = 16;         // ~0.5 s: a burst between two pool samples is what kills a match
+    // IW4x-32: the heartbeat. A live run that stops answering rcon and stops its last console line at the same
+    // moment cannot be read: "the frame loop died" and "the frame loop is fine but nothing answers the net" look
+    // identical in the log, and they are different jobs. So the stall watchdog's own thread writes one line - a
+    // frame counter and the arena's high-water mark - every HEARTBEAT_MS. Those numbers come from counters the
+    // frame loop already maintains: this witness allocates nothing, takes no lock and cannot change what it
+    // measures; it only says whether frames kept running after the server went quiet.
+    constexpr unsigned int HEARTBEAT_MS = 5000;
+    unsigned int g_MtPeakEver = 0;            // the arena's peak over the whole run, not per window
+    unsigned int g_MtPeakUsed = 0;
+    unsigned int g_MtWorstRun = MT_WORDS;
+    unsigned int g_MtRun = 0;
+    unsigned int g_MtUsed = 0;
+
+    void SampleScriptArena()
+    {
+      const auto* map = reinterpret_cast<const unsigned int*>(g_MtFreeMap);
+      auto freeBits = 0;
+      auto run = 0u, best = 0u;
+      for (auto word = 0; word < MT_WORDS; word++)
+      {
+        if (map[word] == 0xFFFFFFFFu)
+        {
+          run++;
+          if (run > best)
+            best = run;
+        }
+        else
+          run = 0;
+        auto bits = map[word]; // Kernighan: no intrinsic, no /arch flag, 2,048 words per sample
+        while (bits)
+        {
+          bits &= bits - 1;
+          freeBits++;
+        }
+      }
+      g_MtUsed = static_cast<unsigned int>(MT_UNITS - freeBits);
+      g_MtRun = best;
+      if (g_MtUsed > g_MtPeakUsed)
+        g_MtPeakUsed = g_MtUsed;
+      if (g_MtUsed > g_MtPeakEver) // across the whole run: PrintScriptArena's own peak resets with the window
+        g_MtPeakEver = g_MtUsed;
+      if (best < g_MtWorstRun)
+        g_MtWorstRun = best;
+    }
+
+    // The arena line, one per pool sample: units in use now and at the peak, the longest free run of whole
+    // words now and the shortest seen, and the arena's size. A server that is dying on script memory reads
+    // free units near 0 or a longest run below what a waiting thread's frame needs (1-4 words for a Bot
+    // Warfare loop); a healthy one has tens of thousands free and runs of hundreds of words.
+    void PrintScriptArena()
+    {
+      Logger::Print("IW4X32_MT;{};{};{};{};{};{}\n", g_MtUsed, g_MtPeakUsed, MT_UNITS, g_MtRun, g_MtWorstRun,
+                    GetTickCount64());
+    }
+
+    // IW4x-32: server frame time, one window per iw4x32_framestats call, so every probe row is its own window.
+    // Fixed buckets, no allocation - RecordFrame runs once per server frame on the game thread. The msec is what
+    // the engine itself clamps and judges against its 500 msec hitch warning (Dedicated::Com_ClampMsec): it is the
+    // frame's whole interval, and a server ahead of its schedule sleeps inside it. The CPU line below is the
+    // work-bound half of the same window - a pace-bound frame spends little process CPU.
     constexpr int FRAME_BUCKETS = 257; // 1 ms per bucket; the last one is "this slow or worse"
-    constexpr int FRAME_SLOW_MS = 250; // the "playable or not" line the ladder prints
+    constexpr int FRAME_SLOW_MS = 250; // the "unplayable" line the ladder prints
+    constexpr int FRAME_LOG_FRAMES = 1000; // ~50 s of a 20 Hz server: one CPU line in the server console per window
+    constexpr int POOL_LOG_FRAMES = 200;   // ~10 s: the pool's history survives in the log, not only over rcon
     unsigned int g_FrameBuckets[FRAME_BUCKETS] = {};
     unsigned long long g_FrameSlow = 0;
     unsigned long long g_FrameTotal = 0;
     unsigned long long g_FrameSum = 0;
     unsigned long long g_FrameWorst = 0;
+    unsigned long long g_FrameRealMs = 0;  // wall clock between two iw4x32_framestats calls
+    unsigned long long g_CpuMs = 0;        // last GetProcessTimes total, so the reply is the window's delta
+    // The console window has its own counters: an rcon probe clears the window above every couple of seconds, and
+    // the console line is meant to cover a long stretch of the match whatever the probe does.
+    unsigned long long g_LogFrames = 0;
+    unsigned long long g_LogRealMs = 0;
+    unsigned long long g_LogWorst = 0;
+    unsigned long long g_LogSlow = 0;
+    unsigned long long g_LogCpuMs = 0;
+    unsigned long long g_LogWall0 = 0; // GetTickCount64 at the window's first frame - see the CPU line's last field
+    unsigned int g_PoolLogFrames = 0; // the pool scan walks every entry, so it runs on its own window
+    unsigned int g_MtLogFrames = 0;   // the arena scan is 2,048 words, so it can run on a much shorter window
+    bool g_GateNamed = false;         // the gate owner's name is printed once, not every window
+
+    unsigned long long ProcessCpuMs()
+    {
+      FILETIME creation, exit, kernel, user;
+      if (!GetProcessTimes(GetCurrentProcess(), &creation, &exit, &kernel, &user))
+        return 0;
+      const auto hundredNs = (static_cast<unsigned long long>(kernel.dwHighDateTime) << 32) + kernel.dwLowDateTime +
+                             (static_cast<unsigned long long>(user.dwHighDateTime) << 32) + user.dwLowDateTime;
+      return hundredNs / 10000; // 100 ns ticks -> ms
+    }
 
     int FramePercentile(const unsigned long long count, const int percent)
     {
@@ -375,39 +800,156 @@ namespace Components
       return 0;
     }
 
-    // IW4x-32: the server's own measurement commands. The test box refuses /proc/<pid>/mem for a reader that did
-    // not fork the process (ptrace_scope=1), and tools/pool_probe.py wants the GSC script-variable pool and the
-    // server frame time of a live server - so the process counts them and the probe asks over rcon. Both are
-    // pure counters: nothing here writes engine state, and the pool scan only reads.
+    unsigned char g_ChainSeen[IW4x32_Pool_Entries] = {}; // visit marks for PoolChainReached (the widest pool the
+                                                          // tables know); static - 178 KiB does not belong on the
+                                                          // game thread's stack, and one report at a time is enough
+
+    // IW4x-32: the server reports its own pool use and frame time. The test box closes /proc/<pid>/mem to a reader
+    // that did not fork the process (kernel.yama.ptrace_scope=1), and tools/pool_probe.py wants both numbers from
+    // a live server - so the process counts them and the probe asks over rcon. Pure counters: nothing here writes
+    // engine state, and the pool scan only reads.
+    // The line goes to the console log as well as to rcon (RecordFrame prints it every POOL_LOG_FRAMES): a server
+    // that is dying stops answering rcon, and the ladder needs the pool history right up to the last frame.
+    void PrintPoolStats()
+    {
+      const auto* entries = reinterpret_cast<const unsigned char*>(g_PoolBase);
+      const auto child0 = g_PoolParentCap + 1; // index 0 is the header, 1..cap the parent pool, then 2 banks
+      const auto child1 = child0 + g_PoolChildCap;
+      unsigned int topParent = 0, top0 = 0, top1 = 0, runP = 0, run0 = 0, run1 = 0;
+      unsigned int badP = 0, bad0 = 0, bad1 = 0, badIndex = 0, badLink = 0;
+      const auto bank0 = PoolBankUsed(entries, child0, child1, &top0, &run0, &bad0, &badIndex, &badLink);
+      const auto bank1 = PoolBankUsed(entries, child1, child1 + g_PoolChildCap, &top1, &run1);
+      // IW4x-32: the parent sweep gets the same two output slots - it had none, and the function wrote the
+      // offender's index and WORD through the missing pointers (see PoolBankUsed). Whichever bank is scanned
+      // first and has an offender names the line, which is what IW4X32_POOL_LINK's last two fields mean.
+      const auto parentUsed = PoolBankUsed(entries, 1, child0, &topParent, &runP, &badP, &badIndex, &badLink);
+      // The last field is GetTickCount64 (ms since the box booted): a server that stops answering rcon leaves its
+      // pool history in the log, and the ladder needs to know WHEN each sample was taken, not just every how many
+      // frames. The engine's own msec is clamped, so frame counts alone cannot date a sample.
+      Logger::Print("IW4X32_POOL;{};{};{};{};{}\n", parentUsed, g_PoolParentCap,
+                    bank0 + bank1, 2 * g_PoolChildCap, GetTickCount64());
+      Logger::Print("IW4X32_POOL_BANKS;{};{};{}\n", bank0, bank1, g_PoolChildCap);
+      // The highest live index in each bank: used_parent, top parent index, top bank index. A pool index is not
+      // a count - the engine writes a thread's own entry index into 16 bits when it archives the thread's stack
+      // (VM_ArchiveStack stores it as a short at block + 8), so an index past 0xFFFF is a fault waiting, not a
+      // statistic. Only the parent pool sits under that ceiling; the child banks live above it by construction.
+      Logger::Print("IW4X32_POOL_MAXI;{};{};{}\n", parentUsed, topParent, top0 > top1 ? top0 : top1);
+      // Longest contiguous free run per bank (entries). A bank with 20,000 free entries but a longest run of 3
+      // cannot serve a 100-entry array; capacity and run are different failures and the runs are what a dying
+      // server needs explained.
+      Logger::Print("IW4X32_POOL_RUN;{};{};{}\n", runP, run0, run1);
+      // IW4x-32: the allocator's own view of the same banks - the free-run head it reads at entry(bankFirst) +
+      // 0x04, how far the walk gets from it, and how many entries the status byte calls free that no chain
+      // reaches. A server that refuses an entry while half its banks are free (the engine's "exceeded maximum
+      // number of child0/child1 script variables", 0x61C240) has a chain problem, not a capacity one, and these
+      // four numbers per bank say which: head 0 or broken > 0 is the chain, missing > 0 is entries the allocator
+      // can never see again.
+      unsigned int headP = 0, head0 = 0, head1 = 0, brkP = 0, brk0 = 0, brk1 = 0, missP = 0, miss0 = 0, miss1 = 0;
+      const auto reachP = PoolChainReached(entries, 1, g_PoolParentCap, g_ChainSeen, headP, brkP, missP);
+      const auto reach0 = PoolChainReached(entries, child0, g_PoolChildCap, g_ChainSeen, head0, brk0, miss0);
+      const auto reach1 = PoolChainReached(entries, child1, g_PoolChildCap, g_ChainSeen, head1, brk1, miss1);
+      Logger::Print("IW4X32_POOL_CHAIN;{};{};{};{};{};{};{};{};{};{};{};{}\n", headP, reachP, brkP, missP, head0,
+                    reach0, brk0, miss0, head1, reach1, brk1, miss1);
+      // Free-list links that point outside their own bank (count per bank, then the first offender's index and
+      // the WORD it holds, then what a cap-wide link would read as). 0;0;0 is a healthy pool - a free list whose
+      // links all fit their bank. Anything else means the pool is being walked on a geometry that is not the one
+      // it was initialised with, which is the state that faults inside the unlink at 0x437190 a call or two later.
+      Logger::Print("IW4X32_POOL_LINK;{};{};{};{};{:#x}\n", badP, bad0, bad1, badIndex, badLink);
+      // The link fields of every entry in all three banks (see PoolBadLinks): how many of them point outside
+      // their own bank, then the first offender's bank, entry, field and WORD. 0 is a healthy pool; a non-zero
+      // count says the pool is being walked on a geometry it was not initialised with, which is the state that
+      // faults inside the unlink at 0x437190 a call or two later - the same sweep the crash report runs.
+      unsigned int linkBank = 0, linkIndex = 0, linkField = 0, linkWord = 0;
+      unsigned int linkFieldBad[16] = {}, linkBankBad[3] = {};
+      const auto linkBad = PoolBadLinks(linkBank, linkIndex, linkField, linkWord, linkFieldBad, linkBankBad);
+      Logger::Print("IW4X32_POOL_WORD;{};{};{};{};{:#x}\n", linkBad, linkBank, linkIndex, linkField, linkWord);
+      // IW4x-32: the same sweep split by FIELD and by BANK - the aggregate and the first offender cannot tell
+      // a poisoned parent free list (the task's premise) from a witness that judges a field against the wrong
+      // bank's cap, and both printed bad=26..82 with the offender inside the child bank's range.
+      Logger::Print("IW4X32_POOL_WORD_BY;{};{};{};{};{};{};{};{}\n", linkFieldBad[0], linkFieldBad[2],
+                    linkFieldBad[4], linkFieldBad[0x0c], linkFieldBad[0x0e], linkBankBad[0], linkBankBad[1],
+                    linkBankBad[2]);
+
+      // IW4x-32: who the server actually holds, read off the engine's own client array. A run whose status query
+      // answers no players while its console shows the server still taking bots has to be judged against the
+      // array, not against the query: the engine's count, how many of those slots hold a client that is
+      // connected or in the level, the highest such slot, and the ceiling the DLL was built for. Read-only.
+      unsigned int held = 0, highSlot = 0;
+      const auto slots = *Game::svs_clientCount;
+      for (auto i = 0; i < slots && i < static_cast<int>(Game::MAX_CLIENTS); i++)
+        if (Game::svs_clients[i].header.state >= Game::CS_CONNECTED)
+        {
+          held++;
+          highSlot = static_cast<unsigned int>(i);
+        }
+      Logger::Print("IW4X32_PLAYERS;{};{};{};{}\n", slots, held, highSlot, Game::MAX_CLIENTS);
+
+      PrintScriptArena();
+    }
+
+    // IW4x-32: the crash probe is planted in AddStatsCommands, and both halves of it live below - the marker
+    // switch and the witness check it runs. (void) on the second declaration, not (): the offline test reads
+    // the definition by that exact text and a declaration written the same way would stand in for it.
+    bool DisabledByFile(const char* name);
+    void CrashSelfTest(void);
+
     void AddStatsCommands()
     {
+      // IW4x-32: the crash witness's own check, planted by a marker so a run can ask for it without looking
+      // like a crash (see CrashSelfTest). It says whether the lines a live run is about to be read through
+      // were actually written - three runs of this task were read through a witness that had stopped writing.
+      if (DisabledByFile("iw4x32-crashprobe"))
+        CrashSelfTest();
+
       Command::AddSV("iw4x32_poolstats", [](const Command::Params*)
       {
-        const auto* entries = reinterpret_cast<const unsigned char*>(g_PoolBase);
-        const auto child0 = g_PoolParentCap + 1; // index 0 is the header, 1..cap the parent pool, then 2 banks
-        const auto child1 = child0 + g_PoolChildCap;
-        const auto parentUsed = PoolBankUsed(entries, 1, child0);
-        const auto bank0 = PoolBankUsed(entries, child0, child1);
-        const auto bank1 = PoolBankUsed(entries, child1, child1 + g_PoolChildCap);
+        PrintPoolStats();
+      });
 
-        Logger::Print("IW4X32_POOL;{};{};{};{}\n", parentUsed, g_PoolParentCap,
-                      bank0 + bank1, 2 * g_PoolChildCap);
-        Logger::Print("IW4X32_POOL_BANKS;{};{};{}\n", bank0, bank1, g_PoolChildCap);
+      // IW4x-32: the receive path over rcon, for a probe that wants the numbers before the next console window
+      // closes. Totals since startup, same fields as the console line's tail. (The rcon path's own counters were
+      // dropped in this task: the live run died before any rcon ask, so they answered nothing, and the run must
+      // stay as close to the 64-slot candidate as the pool repair itself.)
+      //
+      Command::AddSV("iw4x32_netstats", [](const Command::Params*)
+      {
+        Logger::Print("IW4X32_NET;{};{};{};{};{};{};{}\n", Network::DispatchTotal(), Network::DispatchHandled(),
+                      Network::NetReadErrors(),
+                      FrameTime::WaitPumps(), FrameTime::WaitSelects(), FrameTime::WaitActivity(),
+                      FrameTime::WaitSelectFails());
+        Logger::Print("IW4X32_NETQ;{}\n", Network::SocketQueue()); // fd;port;rcvbuf;queued;peek;head;wsa
+        Logger::Print("IW4X32_NET_PUMP;{};{};{};{}\n", Network::NetGetCalls(), Network::ServerPumpCalls(),
+                      FrameTime::WaitPumps(),
+                      Network::ReceiveGates()); // who asked, and what gates it
+        if (const auto* codes = Network::NetErrorCodes(); *codes)
+          Logger::Print("IW4X32_NET_ERR;{}\n", codes);
       });
 
       Command::AddSV("iw4x32_framestats", [](const Command::Params*)
       {
         const auto frames = g_FrameTotal;
+        const auto cpuMs = ProcessCpuMs();
         Logger::Print("IW4X32_FRAME;{};{};{};{};{};{};{}\n", FramePercentile(frames, 50), FramePercentile(frames, 95),
                       FramePercentile(frames, 99), g_FrameWorst, g_FrameSlow, frames,
                       frames ? g_FrameSum / frames : 0);
+        // The same window, work-bound: process CPU ms over the frames and over the wall clock between the two
+        // calls. A dedicated server is one dominant thread, so cpu / frames is per-frame work and cpu / real is
+        // the share of one core the server costs. (An rcon reply never reaches the console log, so RecordFrame
+        // prints the same figures there on its own window - that is what the ladder reads.)
+        Logger::Print("IW4X32_CPU;{};{};{}\n", cpuMs - g_CpuMs, g_FrameRealMs, frames);
 
         for (auto bucket = 0; bucket < FRAME_BUCKETS; bucket++)
           g_FrameBuckets[bucket] = 0;
         g_FrameSlow = g_FrameTotal = g_FrameSum = g_FrameWorst = 0;
+        g_CpuMs = cpuMs;
+        g_FrameRealMs = 0;
       });
     }
 
+    // A file next to iw4x.exe switches one part of the patch on or off: iw4x32-disable is the whole
+    // component, iw4x32-poolstock and the pool A/B rungs pick the script-variable pool geometry (PatchEngine).
+    // The pool is the one table GSC compiles against, so when a level fails to load it is the first thing
+    // to A/B, and a switch costs one file rather than a second table set.
     bool DisabledByFile(const char* name)
     {
       char path[MAX_PATH];
@@ -420,49 +962,558 @@ namespace Components
       return GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES;
     }
 
+    // IW4x-32: one u32 from memory the crash may have made unreadable. Every witness below reads a pointer
+    // chain (the loader list, the PE headers, the stack); an unguarded read on a dying thread is a second
+    // fault inside the report, and the report that faulted is what left three rounds of live runs with ONE
+    // witness line: the module line, the pool line and the stack lines were all lost behind one __try, so the
+    // fault at 7789CE5D stayed anonymous. Guarded, each read only costs its own value.
+    bool SafeU32(const void* addr, unsigned int* out)
+    {
+      __try
+      {
+        *out = *reinterpret_cast<const unsigned int*>(addr);
+      }
+      __except (EXCEPTION_EXECUTE_HANDLER)
+      {
+        return false;
+      }
+      return true;
+    }
+
+    // A loader module name is a UNICODE_STRING: u16 length, u16 capacity, then the pointer. Windows keeps it
+    // at entry + 0x38 (BaseDllName.Buffer), and the version that shipped with the box put it somewhere else -
+    // so all three candidate slots are read, the one whose length looks like a name wins, and the line says
+    // which slot it came from. A name that is guessed at is worse than no name: the reader cannot tell the
+    // exe's rewritten code (a table problem) from our DLL (ours) from a module the box owns (a box problem),
+    // and those are three different jobs.
+    bool SafeWideName(unsigned int entry, unsigned int slot, char* dst, unsigned int max)
+    {
+      unsigned int buffer = 0, pair = 0;
+      if (!SafeU32(reinterpret_cast<const void*>(entry + slot), &buffer) || !buffer)
+        return false;
+      if (!SafeU32(reinterpret_cast<const void*>(entry + slot - 4), &pair)) // length + capacity, one u32
+        return false;
+      const auto len = pair & 0xFFFFu;
+      if (len == 0 || len > 0x200 || (len & 1))
+        return false;
+      char probe[24];
+      for (auto c = 0u; c < sizeof(probe); c++)
+        probe[c] = 0;
+      auto readable = true;
+      __try
+      {
+        const auto* name = reinterpret_cast<const unsigned short*>(buffer);
+        for (auto c = 0u; c < len / 2u && c < max - 1; c++)
+        {
+          const auto ch = name[c];
+          if (!ch)
+            break;
+          probe[c] = static_cast<char>(ch & 0xFF); // the loader's short names are ASCII in practice
+        }
+      }
+      __except (EXCEPTION_EXECUTE_HANDLER)
+      {
+        readable = false;
+      }
+      if (!readable || !probe[0])
+        return false;
+      for (auto c = 0u; c < max; c++)
+        dst[c] = probe[c];
+      return true;
+    }
+
+    // What the loader list says about one crash: the module the fault pc lies in (base, size, name and the
+    // name's slot), this DLL's own range (the stack scan needs it - three rounds of stack scans found no
+    // return address because they only looked inside the exe, and a fault inside our relocated DLL leaves no
+    // exe addresses in the first 0x600 bytes of its stack) and the exe's base.
+    struct CrashMods
+    {
+      unsigned int pcBase, pcSize, pcAt, selfBase, selfSize, exeBase;
+      char pcName[24], selfName[24];
+      int listed;
+    };
+
+    // IW4x-32: one report's worth of state, so every witness takes ONE argument and can be guarded on its own:
+    // where the lines go (a real crash writes the console handle, the self test writes a pipe it reads back),
+    // an address inside THIS dll (CrashModules needs it - we are relocated, so the exe's base says nothing
+    // about our range), and what the loader list said. A report that took a bare HANDLE could not name this
+    // DLL, and a stack scan that only knew the exe found no return address at all in three live runs.
+    struct CrashOut
+    {
+      HANDLE h;
+      const void* self;
+      CrashMods mods;
+    };
+
+    // IW4x-32: the module a fault address lies in, by short name, off the loader's own list. The list is walked
+    // by hand because a toolhelp snapshot allocates on a thread that is already dying. x86 offsets: TEB+0x30
+    // PEB, PEB+0x08 ImageBaseAddress, PEB+0x0C Ldr, Ldr+0x0C InLoadOrderModuleList, entry+0x00 Flink/+0x04
+    // Blink, entry+0x18 DllBase, entry+0x20 SizeOfImage.
+    void CrashModules(unsigned int pc, CrashOut& out)
+    {
+      auto* mods = &out.mods;
+      const auto self = out.self;
+      mods->pcBase = mods->pcSize = mods->pcAt = mods->selfBase = mods->selfSize = mods->exeBase = 0;
+      mods->pcName[0] = mods->selfName[0] = 0;
+      mods->listed = 0;
+      unsigned int ldr = 0;
+      const auto peb = __readfsdword(0x30); // fs:0x30 IS the PEB pointer - read it, do not read through it
+      if (!peb || !SafeU32(reinterpret_cast<const void*>(peb + 0x0C), &ldr) || !ldr) // PEB.Ldr
+        return;
+      SafeU32(reinterpret_cast<const void*>(peb + 0x08), &mods->exeBase); // PEB.ImageBaseAddress
+      const auto head = ldr + 0x0C; // the list head lives in the PEB, not in an entry
+      auto next = 0u;
+      if (!SafeU32(reinterpret_cast<const void*>(head), &next))
+        return;
+      // IW4x-32: the cap has to clear a Wine process's whole list - a live run printed "40 module(s) listed"
+      // and then "the fault pc is not in any mapped module", which was not true: the walk stopped at the old
+      // cap before it reached the module that owned the pc (and never found THIS dll either).
+      for (unsigned int link = next, n = 0; link && link != head && n < 128; n++)
+      {
+        unsigned int base = 0, size = 0, blink = 0;
+        if (!SafeU32(reinterpret_cast<const void*>(link), &base))
+          break; // +0x00 is the list's own link: read it first, an entry the walk cannot pass loses every
+                 // module below it
+        blink = base;
+        // IW4x-32: DllBase is entry+0x18, NOT entry+0x00. Reading +0x00 as the base made every module in the
+        // report the address of the NEXT list entry, so no fault pc and no return address ever matched a
+        // module: six live runs printed "fault pc ... is not in any mapped module - 40 listed" for a pc that
+        // sat in a plainly loaded module, selfBase stayed 0 (so the stack scan below could never label a
+        // dll+ frame, and its own comment spent three rounds wondering why it found no return address), and
+        // the whole question - is the fault ours, the exe's, or the box's - stayed unanswered through two
+        // tasks.
+        if (!SafeU32(reinterpret_cast<const void*>(link + 0x18), &base))
+          break;
+        SafeU32(reinterpret_cast<const void*>(link + 0x20), &size);
+        mods->listed++;
+        // IW4x-32: the NARROWEST containing range wins. Under Wine the host-thunk dlls sit wherever the host's
+        // loader put them and their ranges overlap the game's own image - one live run printed a pc that was
+        // plainly inside iw4x.exe as "inside opengl32.dll" (0x345278 + 0x40E000 covers the exe), and that line
+        // spent two rounds looking at a module nobody could fix.
+        if (base && size && base <= pc && pc < base + size && (!mods->pcBase || size < mods->pcSize))
+        {
+          mods->pcBase = base, mods->pcSize = size, mods->pcAt = link;
+          for (const auto slot : {0x30u, 0x28u, 0x38u}) // BaseDllName.Buffer, FullDllName.Buffer, then the next
+            if (SafeWideName(link, slot, mods->pcName, sizeof(mods->pcName))) // slot (Wine carries a struct of
+              break;                                                        // its own between them)
+        }
+        if (self && base && size && reinterpret_cast<unsigned int>(self) >= base &&
+            reinterpret_cast<unsigned int>(self) < base + size)
+        {
+          mods->selfBase = base, mods->selfSize = size;
+          for (const auto slot : {0x30u, 0x28u, 0x38u})
+            if (SafeWideName(link, slot, mods->selfName, sizeof(mods->selfName)))
+              break;
+        }
+        if (!blink || blink == next)
+          break; // InLoadOrderLinks is the pair at +0x00 - Flink, read above, is the next entry
+        link = blink;
+      }
+    }
+
+    // IW4x-32: the poor man's backtrace, shared by the crash report and the stall witness below. Both need
+    // the same thing - every stack value that lies in the exe's .text or in this DLL's range is a
+    // return-address candidate - and a scan that only knows the exe finds nothing in a run whose code sits in
+    // the relocated DLL. Guarded per value: a stack that stops being readable stops the scan, not the report.
+    void StackAddrs(const CrashMods& mods, const unsigned int esp, HANDLE h)
+    {
+      if (!mods.exeBase)
+        return;
+
+      char buf[256];
+      DWORD done;
+      unsigned int lo = 0, hi = 0, scratch = 0;
+      __try
+      {
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(mods.exeBase);
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(mods.exeBase + dos->e_lfanew);
+        lo = mods.exeBase + nt->OptionalHeader.BaseOfCode;
+        hi = lo + nt->OptionalHeader.SizeOfCode;
+      }
+      __except (EXCEPTION_EXECUTE_HANDLER)
+      {
+        lo = hi = 0; // the exe's own headers were unreadable - only the DLL half of the scan can run
+      }
+      int found = 0;
+      for (auto sp = esp; sp + 4 <= esp + 0x600 && found < 16; sp += 4)
+      {
+        if (!SafeU32(reinterpret_cast<const void*>(sp), &scratch))
+          break;
+        const auto v = scratch;
+        const auto inExe = lo && v > lo && v < hi;
+        const auto inDll = mods.selfBase && v >= mods.selfBase && v < mods.selfBase + mods.selfSize;
+        if (!inExe && !inDll)
+          continue;
+        const int m = wsprintfA(buf, "iw4x32:   stack %08X = %08X %s+%08X\n", sp, v,
+                                inExe ? "exe" : "dll", v - (inExe ? mods.exeBase : mods.selfBase));
+        WriteFile(h, buf, m, &done, nullptr);
+        found++;
+      }
+    }
+
     // IW4x-32: a first-chance report. Under Wine MiniDumpWriteDump often produces an empty .dmp, which
     // leaves a crash with no address at all; this puts the faulting address in the console log instead.
     // It only reports, and keeps searching, so IW4x's own exception handling is untouched.
     // The stack scan is a poor man's backtrace: the exe sits at its image base, so every stack value that
     // lies in its .text range is a return-address candidate - a bare fault address never names the caller,
     // and the caller is what says which patch went wrong.
-    LONG WINAPI CrashReport(PEXCEPTION_POINTERS ep)
+    LONG WINAPI CrashReport(PEXCEPTION_POINTERS ep, HANDLE pipe) // IW4x-32: pipe is the self test's output
     {
-      const auto code = ep->ExceptionRecord->ExceptionCode;
+      static LONG reporting = 0; // every witness here reads memory the crash may have made unreadable; a witness
+      if (InterlockedCompareExchange(&reporting, 1, 0) != 0)
+        return EXCEPTION_CONTINUE_SEARCH; // that faults would recurse into itself, so one report per dispatch
+      char buf[256];
+      DWORD done;
+      const auto* rec = ep->ExceptionRecord;
+      const auto code = rec->ExceptionCode;
       if (code == 0xC0000005 || code == 0xC00000FD || code == 0xC000001D || code == 0xC0000094)
       {
         const auto* r = ep->ContextRecord;
-        const auto out = GetStdHandle(STD_ERROR_HANDLE);
-        char buf[256];
-        DWORD done;
+        CrashOut out;
+        out.h = pipe ? pipe : GetStdHandle(STD_ERROR_HANDLE); // the self test reads its own lines back
+        out.self = reinterpret_cast<const void*>(&CrashReport); // inside this DLL, wherever the loader put it
+        out.mods = {};
+        auto& mods = out.mods; // one CrashMods, filled by CrashModules, read by the attribution and the scan
+        // The fault ADDRESS is printed with the pc: ExceptionInformation[1] is the address the instruction
+        // touched, and "eax=0000CBFA" alone never says whether the code read a small value or wrote a big one.
         const int n = wsprintfA(buf,
-          "iw4x32: exception %08X at %08X  eax=%08X ebx=%08X ecx=%08X edx=%08X esi=%08X edi=%08X ebp=%08X esp=%08X\n",
-          code, ep->ExceptionRecord->ExceptionAddress, r->Eax, r->Ebx, r->Ecx, r->Edx, r->Esi, r->Edi, r->Ebp, r->Esp);
-        WriteFile(out, buf, n, &done, nullptr);
-        __try
+          "iw4x32: exception %08X at %08X  wrote=%u fault=%08X  eax=%08X ebx=%08X ecx=%08X edx=%08X esi=%08X "
+          "edi=%08X ebp=%08X esp=%08X\n", code, rec->ExceptionAddress,
+          rec->NumberParameters > 0 ? rec->ExceptionInformation[0] : 0u,
+          rec->NumberParameters > 1 ? rec->ExceptionInformation[1] : 0u,
+          r->Eax, r->Ebx, r->Ecx, r->Edx, r->Esi, r->Edi, r->Ebp, r->Esp);
+        WriteFile(out.h, buf, n, &done, nullptr);
+        const auto pc = static_cast<unsigned int>(reinterpret_cast<unsigned int>(rec->ExceptionAddress));
+        if (g_Patched)
         {
-          const auto mod = reinterpret_cast<unsigned int>(GetModuleHandleA(nullptr));
-          const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(mod);
-          const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(mod + dos->e_lfanew);
-          const auto lo = mod + nt->OptionalHeader.BaseOfCode;
-          const auto hi = lo + nt->OptionalHeader.SizeOfCode;
-          int found = 0;
-          for (unsigned int sp = r->Esp; sp + 4 <= r->Esp + 0x600 && found < 16; sp += 4)
+          CrashModules(pc, out); // which module owns the pc, and where THIS dll sits: see CrashOut
+          const int m = wsprintfA(buf,
+            "iw4x32: fault pc %08X %s %08X+%08X %s (entry %08X, self %s %08X+%08X, exe %08X, %d module(s) listed)\n",
+            pc, mods.pcBase ? "inside" : "inside NO mapped module", mods.pcBase, mods.pcSize,
+            mods.pcName[0] ? mods.pcName : "noname", mods.pcAt, mods.selfName[0] ? mods.selfName : "noname",
+            mods.selfBase, mods.selfSize, mods.exeBase, mods.listed);
+          WriteFile(out.h, buf, m, &done, nullptr);
+          if (!mods.pcBase)
           {
-            const auto v = *reinterpret_cast<const unsigned int*>(sp);
-            if (v <= lo || v >= hi)
-              continue;
-            const int m = wsprintfA(buf, "iw4x32:   stack %08X = %08X\n", sp, v);
-            WriteFile(out, buf, m, &done, nullptr);
-            found++;
+            // No mapped module owns the pc at all - a stale thread that outlived its dll, or the self test.
+            const int k = wsprintfA(buf, "iw4x32:   fault pc %08X is not in any mapped module - %d listed\n",
+                                    pc, mods.listed);
+            WriteFile(out.h, buf, k, &done, nullptr);
+          }
+          else if (mods.pcBase != mods.selfBase && mods.pcBase != mods.exeBase)
+          {
+            // The fault is in neither of the two modules the task can fix. Say so in the log, because the
+            // alternative ("a DLL, maybe ours") sent three rounds looking at the pool.
+            const int k = wsprintfA(buf, "iw4x32:   fault is not in iw4x.exe and not in this DLL - pc %08X - %08X = +%08X\n",
+                                    pc, mods.pcBase, pc - mods.pcBase);
+            WriteFile(out.h, buf, k, &done, nullptr);
           }
         }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-          // the stack itself was unreadable - the fault line above is all the run gets
+        if (g_Pool) // the pool's link state at the fault: a poisoned link is the geometry witness, and the
+        {           // fault PC is one call too far away to name it. Guarded on its own: a pool the crash made
+          __try     // unreadable costs this line, not the stack scan below it.
+          {
+            unsigned int bankFirst = 0, index = 0, field = 0, link = 0;
+            unsigned int fieldBad[16] = {}, bankBad[3] = {};
+            const auto bad = PoolBadLinks(bankFirst, index, field, link, fieldBad, bankBad);
+            const int p = wsprintfA(buf, "iw4x32: pool link bad=%u first=%08X index=%u field=+%02X word=%04X "
+                                         "block=%08X banks=%u+%u x2\n", bad, bankFirst, index, field, link,
+                                         g_PoolBase, g_PoolParentCap, g_PoolChildCap);
+            WriteFile(out.h, buf, p, &done, nullptr);
+            // IW4x-32: the same sweep split by FIELD and by BANK, because the aggregate hid the one thing that
+            // decides the next move. In both geometries the offenders are WORDs in the 50k-64.5k range (legal
+            // in a child bank, illegal in a parent one) and the first offender's value is the value the fault
+            // carried in edi - if they are all +00/+02 in the parent bank, the parent lists are not
+            // parent-relative and the sweep, not the pool, is what is poisoned; if they spread over the child
+            // banks too, the unlink really is walking a broken chain.
+            const int q = wsprintfA(buf, "iw4x32: pool link by field +00=%u +02=%u +04=%u +0c=%u +0e=%u "
+                                         "by bank p=%u c0=%u c1=%u\n", fieldBad[0], fieldBad[2], fieldBad[4],
+                                         fieldBad[0x0c], fieldBad[0x0e], bankBad[0], bankBad[1], bankBad[2]);
+            WriteFile(out.h, buf, q, &done, nullptr);
+
+            // IW4x-32: and the allocator's own chains at the same instant. The link sweep says whether a WORD
+            // points out of its bank; this says whether the free-run chain still reaches the bank's free
+            // entries, which is the failure that raises the engine's "pool full" error with half the bank free -
+            // and the run that faulted in the pool walk printed bad=0, so the links alone were not the story.
+            const auto* entries = reinterpret_cast<const unsigned char*>(g_PoolBase);
+            const auto child0 = g_PoolParentCap + 1, child1 = child0 + g_PoolChildCap;
+            unsigned int headP = 0, head0 = 0, head1 = 0, brkP = 0, brk0 = 0, brk1 = 0, missP = 0, miss0 = 0,
+                         miss1 = 0;
+            const auto reachP = PoolChainReached(entries, 1, g_PoolParentCap, g_ChainSeen, headP, brkP, missP);
+            const auto reach0 = PoolChainReached(entries, child0, g_PoolChildCap, g_ChainSeen, head0, brk0, miss0);
+            PoolChainReached(entries, child1, g_PoolChildCap, g_ChainSeen, head1, brk1, miss1);
+            const int c = wsprintfA(buf, "iw4x32: pool chain parent head=%u reached=%u broken=%u missing=%u; "
+                                         "child0 head=%u reached=%u broken=%u missing=%u\n",
+                                         headP, reachP, brkP, missP, head0, reach0, brk0, miss0);
+            WriteFile(out.h, buf, c, &done, nullptr);
+          }
+          __except (EXCEPTION_EXECUTE_HANDLER)
+          {
+            const int p = wsprintfA(buf, "iw4x32: pool link bad=unknown - the block was unreadable\n");
+            WriteFile(out.h, buf, p, &done, nullptr);
+          }
         }
+        // A poor man's backtrace, over BOTH modules that can be at fault: the exe (at its image base, so
+        // its .text range is known from its own headers) and this DLL (relocated, so its range comes from the
+        // loader list). Guarded per value: a stack that stops being readable stops the scan, not the report.
+        StackAddrs(mods, r->Esp, out.h);
       }
+      reporting = 0; // the guard is per dispatch, not per process: a first-chance violation the engine handles
+                     // must not use up the witness that the crash which kills the server needs
       return EXCEPTION_CONTINUE_SEARCH;
+    }
+
+    // One guarded read of the exe's own headers: an address its .text really holds, for the self test's
+    // synthetic record. It is a function of its own because MSVC refuses __try in a function that also owns
+    // objects to unwind - and the self test owns the text it reads back out of the pipe.
+    bool ExeCodeAddress(unsigned int exeBase, unsigned int* out)
+    {
+      __try
+      {
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(exeBase);
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(exeBase + dos->e_lfanew);
+        *out = exeBase + nt->OptionalHeader.BaseOfCode + 4;
+      }
+      __except (EXCEPTION_EXECUTE_HANDLER)
+      {
+        return false;
+      }
+      return true;
+    }
+
+    // AddVectoredExceptionHandler hands its handler one argument; CrashReport takes the pipe the self test
+    // reads back, so the registration goes through this one-line shim (a real crash gets nullptr = the console).
+    LONG WINAPI CrashWatcher(PEXCEPTION_POINTERS ep)
+    {
+      return CrashReport(ep, nullptr);
+    }
+
+    // IW4x-32: the stall witness. Every live 63-bot run of this task ends the same way and none of them says
+    // how: the server takes bots to the 49th connection, then stops logging, stops answering rcon, and stays
+    // UP - no exception line (the watcher above would have written one), no minidump, no console error. That
+    // shape has three readings - a loop the pool geometry walked into, a block inside the host's platform
+    // layer, or a process the box took away - and they are three different jobs, while the server's own log
+    // ends at "bot48 connected" and cannot tell them apart.
+    //
+    // So a second thread watches the frame count RecordFrame bumps. When it stops moving for STALL_MS it asks
+    // the game thread where it is: suspend, read the context, RESUME, and only then format and write - so this
+    // witness allocates nothing while the game thread is parked. Three looks a second apart: one instruction
+    // three times is a thread sitting in one call, three instructions inside one module is a loop, and a pc
+    // outside both modules the task can fix says the wait belongs to the box.
+    constexpr unsigned int STALL_MS = 10000;      // the engine's own hitch line is 500 ms; 10 s of no frame is dead
+    constexpr unsigned int STALL_LOOKS = 3;
+    constexpr unsigned int STALL_LOOK_MS = 1000;
+    constexpr unsigned int STALL_REPORTS = 4;     // a server that stays hung is not worth a report a second
+    volatile LONG g_FrameTick = 0;                // RecordFrame's count, bumped on the game thread
+    HANDLE g_GameThread = nullptr;                // a handle on the thread that runs the frame loop
+    unsigned int g_StallReports = 0;
+
+    void LookAtGameThread(CONTEXT* ctx)
+    {
+      ctx->ContextFlags = CONTEXT_FULL;
+      ctx->Eip = 0;
+      if (!g_GameThread || SuspendThread(g_GameThread) == static_cast<DWORD>(-1))
+        return; // the handle is gone or the thread already died - no look, and no guessing at one
+      GetThreadContext(g_GameThread, ctx);
+      ResumeThread(g_GameThread);
+    }
+
+    void PrintStall(const unsigned long long stalledMs, const unsigned int tick)
+    {
+      const auto h = GetStdHandle(STD_ERROR_HANDLE); // the crash witness's own path - it reaches server.log
+      char buf[256];
+      DWORD done;
+      CONTEXT looks[STALL_LOOKS] = {};
+      unsigned int pc = 0;
+      for (auto i = 0u; i < STALL_LOOKS; i++)
+      {
+        LookAtGameThread(&looks[i]);
+        if (!looks[i].Eip)
+          break;
+        pc = static_cast<unsigned int>(looks[i].Eip);
+        const int n = wsprintfA(buf, "iw4x32: stall look %u eip=%08X esp=%08X ebp=%08X eax=%08X ebx=%08X "
+                                     "ecx=%08X edx=%08X esi=%08X edi=%08X\n", i + 1, looks[i].Eip, looks[i].Esp,
+                                     looks[i].Ebp, looks[i].Eax, looks[i].Ebx, looks[i].Ecx, looks[i].Edx,
+                                     looks[i].Esi, looks[i].Edi);
+        WriteFile(h, buf, n, &done, nullptr);
+        if (i + 1 < STALL_LOOKS)
+          Sleep(STALL_LOOK_MS);
+      }
+
+      const int t = wsprintfA(buf, "iw4x32: stall %u ms no frame, tick=%u frames\n", static_cast<unsigned int>(stalledMs),
+                              tick);
+      WriteFile(h, buf, t, &done, nullptr);
+      if (!pc)
+        return;
+
+      CrashOut out;
+      out.h = h;
+      out.self = reinterpret_cast<const void*>(&PrintStall); // inside this DLL, wherever the loader put it
+      out.mods = {};
+      CrashModules(pc, out);
+      const int m = wsprintfA(buf, "iw4x32: stalled pc %08X %s %08X+%08X %s (self %s %08X+%08X, exe %08X, "
+                                  "%d module(s) listed)\n", pc, out.mods.pcBase ? "inside" : "inside NO mapped module",
+                                  out.mods.pcBase, out.mods.pcSize, out.mods.pcName[0] ? out.mods.pcName : "noname",
+                                  out.mods.selfName[0] ? out.mods.selfName : "noname", out.mods.selfBase,
+                                  out.mods.selfSize, out.mods.exeBase, out.mods.listed);
+      WriteFile(h, buf, m, &done, nullptr);
+      if (out.mods.pcBase && out.mods.pcBase != out.mods.exeBase && out.mods.pcBase != out.mods.selfBase)
+      {
+        const int k = wsprintfA(buf, "iw4x32:   the stall is not in iw4x.exe and not in this DLL - +%08X in %s\n",
+                                pc - out.mods.pcBase, out.mods.pcName[0] ? out.mods.pcName : "noname");
+        WriteFile(h, buf, k, &done, nullptr);
+      }
+      StackAddrs(out.mods, static_cast<unsigned int>(looks[0].Esp), h);
+      // Where the pool and the arena stood at the stall: the last console sample is up to POOL_LOG_FRAMES old,
+      // and these are the two numbers that say whether the server ran out of something or is stuck in a loop.
+      if (g_Pool)
+      {
+        const auto* entries = reinterpret_cast<const unsigned char*>(g_PoolBase);
+        const auto child0 = g_PoolParentCap + 1, child1 = child0 + g_PoolChildCap;
+        unsigned int headP = 0, head0 = 0, head1 = 0, brkP = 0, brk0 = 0, brk1 = 0, missP = 0, miss0 = 0,
+                     miss1 = 0;
+        const auto reachP = PoolChainReached(entries, 1, g_PoolParentCap, g_ChainSeen, headP, brkP, missP);
+        const auto reach0 = PoolChainReached(entries, child0, g_PoolChildCap, g_ChainSeen, head0, brk0, miss0);
+        PoolChainReached(entries, child1, g_PoolChildCap, g_ChainSeen, head1, brk1, miss1);
+        const int c = wsprintfA(buf, "iw4x32: stall pool chain parent head=%u reached=%u broken=%u missing=%u; "
+                                     "child0 head=%u reached=%u broken=%u missing=%u\n", headP, reachP, brkP, missP,
+                                     head0, reach0, brk0, miss0);
+        WriteFile(h, buf, c, &done, nullptr);
+      }
+      SampleScriptArena();
+      // The arena line, on this thread's own write path: Logger::Print belongs to the game thread and the point
+      // of a stall report is to work when that thread is not running.
+      const int a = wsprintfA(buf, "iw4x32: stall mt used=%u peak=%u run=%u worst=%u units=%u\n", g_MtUsed,
+                              g_MtPeakUsed, g_MtRun, g_MtWorstRun, MT_UNITS);
+      WriteFile(h, buf, a, &done, nullptr);
+    }
+
+    DWORD WINAPI StallWatchdog(LPVOID)
+    {
+      auto last = InterlockedCompareExchange(&g_FrameTick, 0, 0);
+      auto lastMs = GetTickCount64();
+      auto beatMs = lastMs;
+      for (;;)
+      {
+        Sleep(1000);
+        const auto now = InterlockedCompareExchange(&g_FrameTick, 0, 0);
+        const bool moved = now != last;
+        if (moved)
+        {
+          last = now;
+          lastMs = GetTickCount64();
+        }
+        // The heartbeat line: frames and arena high-water, once every HEARTBEAT_MS, from the watchdog's own
+        // thread. It is what tells a frame loop that stopped from a frame loop that ran and answered nobody.
+        if (GetTickCount64() - beatMs >= HEARTBEAT_MS)
+        {
+          beatMs = GetTickCount64();
+          SampleScriptArena(); // two reads of plain globals - the arena map is 2,048 words
+          char beat[96];
+          DWORD done;
+          const int b = wsprintfA(beat, "IW4X32_HB;%u;%u;%u\n", static_cast<unsigned int>(now), g_MtPeakEver,
+                                  g_MtUsed);
+          WriteFile(GetStdHandle(STD_ERROR_HANDLE), beat, b, &done, nullptr);
+        }
+        const auto stalled = GetTickCount64() - lastMs;
+        if (moved || stalled < STALL_MS || g_StallReports >= STALL_REPORTS)
+          continue;
+        g_StallReports++;
+        PrintStall(stalled, static_cast<unsigned int>(now));
+        lastMs = GetTickCount64(); // the next report waits another STALL_MS, so a hung server costs a bounded
+      }                            // number of looks rather than one per second
+    }
+
+    // IW4x-32: the frame loop is what the watchdog measures, so the handle and the thread start on the first
+    // frame, on the game thread itself (DuplicateHandle of GetCurrentThread needs the real thread).
+    void FrameTick()
+    {
+      InterlockedIncrement(&g_FrameTick);
+      if (g_GameThread)
+        return;
+      HANDLE dup = nullptr;
+      if (DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &dup,
+                          THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME | THREAD_QUERY_INFORMATION, FALSE, 0) && dup)
+      {
+        g_GameThread = dup; // set before the thread starts: the watchdog may look at its very first frame
+        const auto thread = CreateThread(nullptr, 0, &StallWatchdog, nullptr, 0, nullptr);
+        if (thread)
+          CloseHandle(thread); // it runs for the life of the process; the handle is not needed after start
+      }
+    }
+
+    // IW4x-32: prove the crash witness works in a run that does not crash. Three live runs of this task were
+    // read through the witness and in every one of them it was the WITNESS that failed - one line out, then an
+    // unguarded read inside the report, and the module / pool / stack lines lost with it. That is why the fault
+    // at 7789CE5D stayed anonymous for three rounds: the one number that decides whether the next move is a
+    // table problem, our code, or the box's platform layer.
+    //
+    // A file named iw4x32-crashprobe next to iw4x.exe (see DisabledByFile) runs this once at startup. It drives
+    // CrashReport with a SYNTHETIC exception record - the code, the fault address and the registers the box's run
+    // carried, an ExceptionAddress (0BADF00D) that maps to no module at all, and a ContextRecord whose esp is
+    // this function's own frame so the scan has real return addresses to find. Nothing is actually faulted: a
+    // real one would be read as the crash the run is there to measure. The report's lines go to a pipe, so the
+    // probe can check that each witness still wrote its line; the probe prints only a summary and never echoes
+    // a line that could be mistaken for a crash.
+    void CrashSelfTest()
+    {
+      const auto peb = __readfsdword(0x30); // fs:0x30 IS the PEB pointer - read it, do not read through it
+      unsigned int exeBase = 0;
+      if (!peb || !SafeU32(reinterpret_cast<const void*>(peb + 0x08), &exeBase) || !exeBase) // PEB.ImageBaseAddress
+      {
+        Logger::Print("IW4X32_PROBE;no peb\n");
+        return;
+      }
+      unsigned int code0 = 0; // an address the exe's own .text really holds, read off its headers
+      if (!ExeCodeAddress(exeBase, &code0))
+        code0 = 0; // its headers were unreadable - the probe says so instead of inventing an address
+      HANDLE rd = nullptr, wr = nullptr;
+      if (!CreatePipe(&rd, &wr, nullptr, 0x2000) || !code0)
+      {
+        Logger::Print("IW4X32_PROBE;no pipe\n");
+        return;
+      }
+      DWORD frame = 0, scratch = 0;
+      EXCEPTION_RECORD rec{};
+      CONTEXT ctx{};
+      EXCEPTION_POINTERS ep{};
+      rec.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
+      rec.ExceptionAddress = reinterpret_cast<void*>(0x0BADF00Du); // no module owns it: the report must say so
+      rec.NumberParameters = 2;
+      rec.ExceptionInformation[0] = 0;         // a read
+      rec.ExceptionInformation[1] = 0x0000CBFA; // the address the box's run faulted on
+      ctx.Eax = 0x0000CBFA, ctx.Edx = 0x0000000E;
+      ctx.Ebp = static_cast<DWORD>(reinterpret_cast<unsigned int>(&frame));
+      ctx.Esp = ctx.Ebp - 0x40; // this frame: real return addresses sit in the next 0x600 bytes
+      ep.ExceptionRecord = &rec;
+      ep.ContextRecord = &ctx;
+      CrashReport(&ep, wr);
+      CloseHandle(wr);
+      char got[2048];
+      for (auto i = 0u; i < sizeof(got); i++)
+        got[i] = 0;
+      DWORD avail = 0;
+      PeekNamedPipe(rd, nullptr, 0, nullptr, &avail, nullptr);
+      auto read = 0u;
+      while (read < sizeof(got) - 1 && ReadFile(rd, got + read, DWORD(sizeof(got) - 1 - read), &scratch, nullptr) &&
+             scratch)
+        read += scratch;
+      CloseHandle(rd);
+      const std::string text(got, read);
+      unsigned int hits = 0;
+      std::string missing; // every witness line that did NOT come out - a probe that only counts hits can
+      for (const auto* want : {"iw4x32: exception", "fault pc", "pool link bad", "stack", "exe+", "dll+", "not in"})
+      {
+        if (text.find(want) != std::string::npos)
+        {
+          hits++;
+          continue;
+        }
+        missing += missing.empty() ? "" : ","; // keep the list short
+        missing += want;
+      }
+      Logger::Print("IW4X32_PROBE;%s;%u;line=%u exe=%08X self=%08X pc=%08X\n", missing.empty() ? "all" : missing.c_str(),
+                    hits, 1u, exeBase, exeBase, code0); // line=/self= are the two anchors the reader wants
     }
 
     // ---------------------------------------------------------------- compat (engine32c/compat.c)
@@ -1505,13 +2556,104 @@ namespace Components
     if (msec < 0)
       return;
 
+    FrameTick(); // IW4x-32: the stall witness counts frames (see StallWatchdog)
+
+    // IW4x-32: one look at the game socket per frame - a compare against the socket seen last time, and on a new
+    // one its handle, bound port and the UDP-error switch go to the log (see Network::GuardSocket). A server that
+    // answers nobody while it runs frames may be reading a socket the probes never reach; this line says so, and
+    // says when it started.
+    //
+    if (const auto* sock = Network::GuardSocket(); sock)
+      Logger::Print("IW4X32_NET_SOCK;{}\n", sock);
+
+    // IW4x-32: once, what owns the byte that gates the whole receive path (see Network::ReceiveGateOwner).
+    //
+    if (!g_GateNamed)
+    {
+      g_GateNamed = true;
+      Logger::Print("IW4X32_GATE;{}\n", Network::ReceiveGateOwner());
+    }
+
     g_FrameBuckets[msec < FRAME_BUCKETS - 1 ? msec : FRAME_BUCKETS - 1]++;
     g_FrameTotal++;
     g_FrameSum += static_cast<unsigned long long>(msec);
+    g_FrameRealMs += static_cast<unsigned long long>(msec);
     if (static_cast<unsigned long long>(msec) > g_FrameWorst)
       g_FrameWorst = static_cast<unsigned long long>(msec);
     if (msec > FRAME_SLOW_MS)
       g_FrameSlow++;
+
+    // IW4x-32: the work-bound figure, on the game thread, where it reaches the console log. The msec above is
+    // what the engine slept or worked - the CPU delta says which. Every counter here is only touched by this
+    // function and by iw4x32_framestats, both on the game thread.
+    if (g_LogFrames == 0)
+      g_LogWall0 = GetTickCount64();
+    g_LogFrames++;
+    g_LogRealMs += static_cast<unsigned long long>(msec);
+    if (static_cast<unsigned long long>(msec) > g_LogWorst)
+      g_LogWorst = static_cast<unsigned long long>(msec);
+    if (msec > FRAME_SLOW_MS)
+      g_LogSlow++;
+    if (g_LogFrames >= FRAME_LOG_FRAMES)
+    {
+      const auto cpuMs = ProcessCpuMs();
+      // cpu / real / frames / worst / slow, then the window's WALL time in ms, then the totals of the engine's
+      // connectionless dispatch (see Network::DispatchTotal): packets that reached CL_HandleCommand, and how many
+      // found a handler. g_LogRealMs is the sum of the msec the engine clamps, so it is not a clock; the wall
+      // field is, and frames-over-wall is what says whether a server that stopped answering rcon was running
+      // frames slowly or not at all. The dispatch totals say which half of the net path went quiet: a server
+      // whose totals keep climbing still reads and dispatches packets, one that stops climbing does not.
+      //
+      // Then the socket half of the same path (see Network::NetRead* and FrameTime::Wait*): the errors the engine
+      // swallowed, how often the server's own wait pumped the socket, and how often select saw it readable. Those
+      // separate "the socket was failing" from "the server never looked" - which the engine's own log cannot,
+      // because it prints nothing for the errors it ignores.
+      //
+      Logger::Print("IW4X32_CPU;{};{};{};{};{};{};{};{};{};{};{};{}\n", cpuMs - g_LogCpuMs, g_LogRealMs,
+                    g_LogFrames, g_LogWorst, g_LogSlow, GetTickCount64() - g_LogWall0,
+                    Network::DispatchTotal(), Network::DispatchHandled(),
+                    Network::NetReadErrors(),
+                    FrameTime::WaitPumps(), FrameTime::WaitSelects(), FrameTime::WaitActivity(),
+                    FrameTime::WaitSelectFails());
+      if (const auto* codes = Network::NetErrorCodes(); *codes)
+        Logger::Print("IW4X32_NET_ERR;{}\n", codes); // a socket error is worth dating, so it must not stay silent
+      g_LogCpuMs = cpuMs; // NOT g_CpuMs: the rcon window belongs to iw4x32_framestats alone. Clearing it from
+                          // here is what made the ladder's frame columns read 0 frames whenever this line landed
+                          // between two probe samples (the histogram buckets are shared the same way).
+      g_LogRealMs = 0;
+      g_LogFrames = 0;
+      g_LogWorst = g_LogSlow = 0;
+    }
+    // IW4x-32: the script arena (MT) is sampled far more often than the pool is printed: the burst that kills a
+    // full-bot match is seconds wide, and a scan that runs once per 10 s can sit between the burst and the
+    // server's last frame. Two peaks are kept, so the printed line says what the window was, not only where it
+    // ended.
+    if (g_MtLogFrames++ >= MT_LOG_FRAMES)
+    {
+      g_MtLogFrames = 0;
+      SampleScriptArena();
+    }
+    if (g_PoolLogFrames++ >= POOL_LOG_FRAMES)
+    {
+      g_PoolLogFrames = 0;
+      PrintPoolStats(); // a server that dies stops answering rcon: the console log keeps the last samples
+
+      // IW4x-32: and what the game socket says about itself at the same moment - its bound port, the size of its
+      // receive queue's budget, the bytes sitting in that queue and the command word of the first waiting
+      // datagram (MSG_PEEK, never dequeued). A server that answers nobody is either not looked at, overrun, or
+      // reading a socket nobody probes; this line is the only thing that tells those apart, and it has to be in
+      // the log, because rcon is exactly what stopped answering. See Network::SocketQueue.
+      //
+      // Then who asked: how often the engine's receive function was reached at all, how often the dedicated
+      // server frame function ran its own pump, and how often this fork's wait pumped - and the three globals
+      // that decide whether any of those can happen (see Network::ReceiveGates). A queue full of unread
+      // datagrams plus a pump count that has stopped means a gate shut; a queue that stays empty means the
+      // datagrams never got here; a pump that keeps climbing while nothing is answered means the engine looked
+      // and walked past them.
+      //
+      Logger::Print("IW4X32_NETQ;{};{};{};{};{}\n", Network::SocketQueue(), Network::NetGetCalls(),
+                    Network::ServerPumpCalls(), FrameTime::WaitPumps(), Network::ReceiveGates());
+    }
   }
 
   void IW4x32::PatchEngine()
@@ -1526,19 +2668,47 @@ namespace Components
       Logger::Print("IW4x32: iw4x32-disable found - not patching");
       return;
     }
-    // IW4x-32: the grown script-variable pool is OFF by default. Measured on the test server (32 slots,
-    // 31 bots + a client): with the pool relocated AND its geometry constants rewritten the server never
-    // loads a level ("Could not find label 'main' in script 'codescripts/delete'" - the first script the
-    // level compiles), while the same build with the pool left alone loads mp_rust and fills 32 slots.
-    // The geometry rewrite is the part that dies: relocating the block and leaving the engine's own
-    // geometry constants alone (iw4x32-poolstock) loads the level too. Until that is understood the wide
-    // server runs on the stock pool, which is what every 32-slot release ran on.
-    const bool poolStock = DisabledByFile("iw4x32-poolstock"); // the A/B: move the block, keep the geometry
-    const bool withPool = DisabledByFile("iw4x32-pool48") || poolStock;
-    if (!withPool)
-      Logger::Print("IW4x32: the script-variable pool stays where the engine put it (iw4x32-pool48 turns the grown pool on)");
+    // IW4x-32: the grown script-variable pool is ON by default. The demand is a fixed block plus a slope, not a
+    // per-player count: measured with iw4x32_poolstats on 64-slot runs, one level load costs 8,700 parent and
+    // 12,700 per bank, and each further player costs ~480 parent / ~430 per bank (1 / 33 players: 22,800 and
+    // 28,900 / 29,100; 1 / 49 players: 32,600 and 40,200 / 39,900). The stock geometry (36,865 parent + 2x51,201
+    // per bank) runs out of the parent bank near 44-50 bots, which is where a 63-bot run died with "exceeded
+    // maximum number of parent script variables" and then "script stack is corrupt".
+    // Growing it used to break level compile - "Could not find label 'main' in script 'codescripts/delete'" -
+    // because the table's address sites carry fixed offsets: a grown geometry left the child0 bank's free-list
+    // anchor (offset child0_base * 16) inside the parent bank, so every child allocation handed back a parent
+    // entry. PoolAddressOffset re-derives those anchors from the geometry in force, and with that the grown
+    // pool loads mp_rust and compiles the level (test box, 64 slots).
+    // IW4x-32: the markers stay as escape hatches and as A/B rungs - every one writes a self-consistent layout
+    // except for the site class it names, so "the level loads" still says what that class can stand. poolc
+    // (child banks only) and poolo (parent-cap sites only, banks unmoved) loaded; poolp (parent bank only)
+    // and poolt (grown with the address anchors kept stock) did not - the anchor was the bug.
+    const bool poolStock = DisabledByFile("iw4x32-poolstock");   // move the block, keep the geometry
+    const bool poolParent = DisabledByFile("iw4x32-poolp");      // grow the parent bank only
+    const bool poolChild = DisabledByFile("iw4x32-poolc");       // grow the two child banks only
+    const bool poolParentSites = DisabledByFile("iw4x32-poolo"); // only the parent-cap sites, banks unmoved
+    const bool poolTests = DisabledByFile("iw4x32-poolb");       // grown, bank-identity tests kept stock
+    const bool poolAnchor = DisabledByFile("iw4x32-poolt");      // grown, child bank address anchors kept stock
+    const bool withPool = !poolStock;
     if (poolStock)
       Logger::Print("IW4x32: iw4x32-poolstock found - the pool block moves, its geometry does not");
+    const PoolGeometry grown{IW4x32_Pool_ParentCap, IW4x32_Pool_ChildCap, 0, 0, 0};
+    const PoolGeometry parentOnly{IW4x32_Pool_ParentCap, IW4x32_Pool_OldChildCap, 0, 0, 0};
+    const PoolGeometry childOnly{IW4x32_Pool_OldParentCap, IW4x32_Pool_ChildCap, 0, 0, 0};
+    const PoolGeometry parentSitesOnly{IW4x32_Pool_ParentCap, IW4x32_Pool_OldChildCap,
+                                       IW4x32_Pool_OldChild0Base, 0, 0};
+    const PoolGeometry grownOldTests{IW4x32_Pool_ParentCap, IW4x32_Pool_ChildCap, 0, 1, 0};
+    const PoolGeometry grownOldAnchor{IW4x32_Pool_ParentCap, IW4x32_Pool_ChildCap, 0, 0, 1};
+    const PoolGeometry* geometry = poolStock ? nullptr : poolParent ? &parentOnly
+                                       : poolChild ? &childOnly
+                                       : poolParentSites ? &parentSitesOnly
+                                       : poolTests ? &grownOldTests
+                                       : poolAnchor ? &grownOldAnchor
+                                       : &grown;
+    if (geometry)
+      Logger::Print("IW4x32: script-variable pool {} + 2x{} entries (child0 base {})", geometry->ParentCap,
+                    geometry->ChildCap,
+                    geometry->Child0Base ? geometry->Child0Base : geometry->ParentCap + 1);
     if (!VerifyEngine()) // nothing is written unless every byte the tables expect is there
       return;
     if (!AllocateArrays())
@@ -1549,20 +2719,20 @@ namespace Components
     ApplyToEngine();
     if (withPool)
     {
-      ApplyPool(!poolStock);
+      ApplyPool(geometry);
       g_PoolBase = static_cast<unsigned int>(reinterpret_cast<unsigned int>(g_Pool));
-      if (!poolStock) // iw4x32-poolstock moves the block but keeps the engine's geometry
+      if (geometry)
       {
-        g_PoolParentCap = IW4x32_Pool_ParentCap;
-        g_PoolChildCap = IW4x32_Pool_ChildCap;
-        g_PoolChild0Base = IW4x32_Pool_Child0Base;
+        g_PoolParentCap = geometry->ParentCap;
+        g_PoolChildCap = geometry->ChildCap;
+        g_PoolChild0Base = geometry->Child0Base ? geometry->Child0Base : geometry->ParentCap + 1;
       }
     }
     InstallHooks();
     InstallClientMaskHooks(); // IW4x-32: more than 32 players - see MaskAllBut
     Utils::Hook(0x5028B0, PartyTimeout_Stub, HOOK_JUMP).install()->quick(); // IW4x-32: see PartyTimeout_Stub
     PointDllGlobals();
-    AddVectoredExceptionHandler(1, &CrashReport); // IW4x-32: see CrashReport
+    AddVectoredExceptionHandler(1, &CrashWatcher); // IW4x-32: see CrashReport / CrashWatcher
     FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
 
     g_Patched = true;
@@ -1572,6 +2742,18 @@ namespace Components
                   IW4x32_DualCount, IW4x32_HooksCount, static_cast<int>(Game::MAX_CLIENTS),
                   withPool ? "relocated" : "left where the engine put it", IW4x32_Pool_ParentCap,
                   IW4x32_Pool_ChildCap);
+  }
+
+  // IW4x-32: the script arena at the moment a report asks for it. SampleScriptArena rescans the free map rather
+  // than handing back the last window's numbers: the script-stack guard calls this as it ends a match, and the
+  // question there is what the arena held in that second.
+  void IW4x32::ScriptArena(unsigned int& used, unsigned int& peak, unsigned int& run, unsigned int& worstRun)
+  {
+    SampleScriptArena();
+    used = g_MtUsed;
+    peak = g_MtPeakUsed;
+    run = g_MtRun;
+    worstRun = g_MtWorstRun;
   }
 
   bool IW4x32::IsPatched()

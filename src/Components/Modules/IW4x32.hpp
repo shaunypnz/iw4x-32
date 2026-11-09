@@ -28,6 +28,11 @@ namespace Components
     // Com_ClampMsec hook sees every frame of a dedicated server).
     static void RecordFrame(int msec);
 
+    // IW4x-32: the script arena (the 65,536 x 12-byte units MT_AllocIndex hands out) measured right now: units
+    // in use, the peak since startup, the longest run of fully-free words (32 units each) and the shortest such
+    // run seen. A report that ends a match has to say whether the arena was empty when it did.
+    static void ScriptArena(unsigned int& used, unsigned int& peak, unsigned int& run, unsigned int& worstRun);
+
   private:
     static void PatchEngine();
   };

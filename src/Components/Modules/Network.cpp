@@ -268,6 +268,16 @@ namespace Components
   {
     __asm
     {
+      // IW4x-32: what error the socket actually failed with, counted (see NetReadErrors). eax is the WSA code
+      // and the engine answers for WSAEWOULDBLOCK ("nothing waiting") before it gets here, so every code seen is
+      // a real socket error. pushad/popad keeps the engine's registers - the compares below read eax.
+      //
+      pushad
+      push eax
+      call NetErrorCodeSeen
+      add esp, 4
+      popad
+
       cmp eax, 2746h
       jz returnIgnore
 
@@ -283,6 +293,345 @@ namespace Components
     }
   }
 
+  // IW4x-32: the socket errors this fork silences. The engine reads the game socket in one place - NET_GetPacket
+  // at 0x4652B0 - and PacketErrorCheck below jumps it past the error print for WSAECONNRESET and WSAENETRESET,
+  // so a socket that started failing looks exactly like a server that stopped reading: frames run, nobody gets
+  // an answer, and the log says nothing about either. These codes are what tell the two apart.
+  //
+  // Counting them here, rather than by hooking the engine's recvfrom call: a stub over that call adds a call of
+  // its own in the middle of the engine's frame and it took the whole server down with it (a 63-bot run died
+  // during startup, the fault one call deeper than the patched thunk). What is patched instead is whole 5-byte
+  // call / jump instructions that only ever count and tail-jump (see NetGetCountStub / ServerPumpStub), and the
+  // socket is asked directly about itself (see SocketQueue).
+  //
+  static unsigned long long g_NetErrors = 0;
+  static unsigned long long g_NetGetCalls = 0;
+  static unsigned long long g_ServerPumpCalls = 0;
+
+  struct NetErrorCode
+  {
+    int code;
+    unsigned long long seen;
+  };
+
+  static NetErrorCode g_NetCodes[6] = {};
+  static unsigned long long g_NetCodeOverflow = 0;
+
+  unsigned long long Network::NetReadErrors()
+  {
+    return g_NetErrors;
+  }
+
+  unsigned long long Network::NetGetCalls()
+  {
+    return g_NetGetCalls;
+  }
+
+  unsigned long long Network::ServerPumpCalls()
+  {
+    return g_ServerPumpCalls;
+  }
+
+  void Network::NetGetCounted()
+  {
+    g_NetGetCalls++;
+  }
+
+  void Network::ServerPumpCounted()
+  {
+    g_ServerPumpCalls++;
+  }
+
+  // IW4x-32: counting without changing anything. The engine's receive function (NET_GetPacket, 0x4652B0) is only
+  // ever reached through the 5-byte `jmp 0x4652b0` at 0x4ECFF0 - one reference in the whole exe, so a counted
+  // stub there sees every read the engine makes, whoever asked. With that number, the pump counters below and
+  // SocketQueue's queue depth, a server that answers nobody while it runs frames is one of three things, and the
+  // log says which: nobody came to look; someone looked and the socket held nothing; or someone looked, the
+  // socket held something, and the engine walked past it.
+  //
+  __declspec(naked) void Network::NetGetCountStub()
+  {
+    __asm
+    {
+      pushad
+      call NetGetCounted
+      popad
+
+      mov eax, 4652B0h // NET_GetPacket - the target of the jmp this stub stands in for
+      jmp eax
+    }
+  }
+
+  // The pump the dedicated server does for ITSELF. The engine's server frame function (0x627040) calls the pump
+  // (0x458160) in two places - once per pass of its main pass (0x6271B7) and once inside the catch-up loop that
+  // runs when it is behind schedule (0x6272BA) - and both are whole 5-byte `call` instructions, so a counted
+  // stub can stand in either and make the call itself: push the address the engine would have returned to, then
+  // jump to the target. Same stack, same registers, one number added.
+  //
+  // This replaces the counter that stood at 0x45827C, which was a broken instrument: that call sits on the
+  // back-edge of the pump's drain loop, so a pump that reads nothing - the case worth seeing - never reaches it,
+  // and it read 0 in every run. The two sites here are reached whether or not a datagram shows up.
+  //
+  __declspec(naked) void Network::ServerPumpStub()
+  {
+    __asm
+    {
+      pushad
+      call ServerPumpCounted
+      popad
+
+      push 6271BCh
+      mov eax, 458160h // Sys_ReadPacket - the pump the server frame function calls
+      jmp eax
+    }
+  }
+
+  __declspec(naked) void Network::ServerCatchUpPumpStub()
+  {
+    __asm
+    {
+      pushad
+      call ServerPumpCounted
+      popad
+
+      push 6272BFh
+      mov eax, 458160h
+      jmp eax
+    }
+  }
+
+  // IW4x-32: the engine's own gates on the receive path, read as plain bytes.
+  //
+  // A 64-slot server that runs frames and answers nobody has stopped collecting datagrams, and the collection
+  // path is not one road but three, each behind a global (every address below read off the pristine exe):
+  //
+  //   * the server frame function reads its socket only while the byte at 0x2089E20 is set (0x6271A9 gates both
+  //     pump calls); the engine sets it after that function returns (0x62769A) and clears it inside
+  //     SV_WaitServer (0x42570D), which this fork turns into a bare `ret`, so nothing in the fork clears it;
+  //   * the per-frame wait - 0x4BAAAD, where this fork pumps - is only reached while the sv_running dvar says a
+  //     level is running (byte at dvar + 0x10, read at 0x4BAA8F), and the UDP read inside the pump itself
+  //     (0x458194) is gated by that same byte, so a server with no level running is deaf by construction;
+  //   * and while the loader state word at 0x20494F8 is nonzero the wait does nothing at all (0x48B530 returns
+  //     1 and the caller returns without waiting, pumping or running the level).
+  //
+  // Which of the three is shut decides the fix: a shut pump gate is ours to open, a shut sv_running or a stuck
+  // loader means the level died upstream and pumping more will not make the match playable. Printed with the
+  // counters on the same line, so one window answers both questions at once.
+  //
+  const char* Network::ReceiveGates()
+  {
+    static std::string line;
+
+    const auto* owner = *reinterpret_cast<unsigned char* const*>(0x1AD7934);
+    const auto gate = owner ? owner[0x10] : 0xFF; // no owner installed yet
+    const auto pump = *reinterpret_cast<const unsigned char*>(0x2089E20);
+    const auto loader = *reinterpret_cast<const unsigned char*>(0x20494F8);
+
+    line = std::format("{};{};{}", gate, pump, loader);
+    return line.c_str();
+  }
+
+  // What owns the gate global: the engine loads a pointer at 0x1AD7934 and reads a byte at offset 0x10 of what it
+  // points at, and nothing in this fork knows what that object is (the upstream name for that address is a dvar,
+  // and the offset does not match a dvar's value). Its first field reads as a name, so it is printed once, next
+  // to the gate byte, to stop every later round guessing at it.
+  //
+  const char* Network::ReceiveGateOwner()
+  {
+    static std::string line;
+
+    const auto* owner = *reinterpret_cast<unsigned char* const*>(0x1AD7934);
+
+    if (owner == nullptr)
+      return "none";
+
+    const auto* name = reinterpret_cast<const char*>(owner);
+    auto ok = true;
+
+    for (auto at = 0; at < 24; at++)
+      if (name[at] < 0x20 || name[at] > 0x7E)
+      {
+        ok = false;
+        break;
+      }
+
+    line = std::format("{};gate={}", ok ? std::string(name, 24) : "<not text>", owner[0x10]);
+    return line.c_str();
+  }
+
+  const char* Network::NetErrorCodes()
+  {
+    static std::string line;
+
+    line.clear();
+    for (auto slot = 0; slot < 3; slot++)
+    {
+      const auto& seen = g_NetCodes[slot];
+      if (seen.code == 0)
+        break;
+
+      line += std::format("{}{}x{}", slot ? " " : "", seen.code, seen.seen);
+    }
+
+    if (g_NetCodeOverflow)
+      line += std::format(" +{} more", g_NetCodeOverflow);
+
+    return line.c_str();
+  }
+
+  void Network::NetErrorCodeSeen(const int code)
+  {
+    g_NetErrors++; // every code that reaches here is a real socket error: the engine answers WSAEWOULDBLOCK
+                   // ("nothing waiting") before it gets to this path
+
+    for (auto& slot : g_NetCodes)
+    {
+      if (slot.code == code)
+      {
+        slot.seen++;
+        return;
+      }
+    }
+
+    for (auto& slot : g_NetCodes)
+    {
+      if (slot.code == 0)
+      {
+        slot.code = code;
+        slot.seen = 1;
+        return;
+      }
+    }
+
+    g_NetCodeOverflow++; // no slot left for a seventh distinct code: keep the total honest
+  }
+
+  // IW4x-32: the socket's own identity, and one Windows switch on it.
+  //
+  // The identity half: the receive counters can say "nothing arrived", but they cannot say "nothing arrived at
+  // THIS socket". A rebind - the port taken and the engine falling back to the next one, or a level restart that
+  // runs the net setup again - leaves the probes talking to a port nobody owns any more while the server reads its
+  // own socket in peace. Handle + bound port, printed only when they CHANGE, dates that instead of guessing it.
+  //
+  // The switch half: Windows reports an ICMP "port unreachable" that the socket itself provoked as a recvfrom
+  // failure (WSAECONNRESET), and keeps reporting it for a while. This fork silences exactly that code (see
+  // PacketErrorCheck), so a socket stuck in that report looks identical to a server that stopped reading: frames
+  // run, nothing arrives, the log says nothing. SIO_UDP_CONNRESET is the documented Windows way to stop the
+  // report; it is applied once per socket and its result is printed, because a Wine that does not know the option
+  // has to show that rather than be assumed to honour it.
+  //
+  // SIO_UDP_CONNRESET is _WSAIOW(IOC_VENDOR, 12) = IOC_IN | IOC_VENDOR | 12 = 0x9000000C. MSVC's winsock2.h does
+  // not define it (WinPcap's does, with the same arithmetic), so it is spelled out here - and the spelling is
+  // worth stating, because the number that sat here before (-1073741444) was not this option.
+  //
+  constexpr DWORD SIO_UDP_CONNRESET = 0x9000000c; // IOC_IN 0x80000000 | IOC_VENDOR 0x10000000 | 12
+
+  static SOCKET g_GuardedSocket (INVALID_SOCKET);
+
+  const char* Network::GuardSocket()
+  {
+    const auto s (*Game::ip_socket);
+
+    if (s == g_GuardedSocket)
+      return nullptr; // the same socket as the last window: nothing new to say, and nothing to re-apply
+
+    g_GuardedSocket = s;
+
+    auto option = "none";
+    auto port = -1;
+
+    if (s != INVALID_SOCKET)
+    {
+      const BOOL reportReset = FALSE;
+      auto bytes = 0UL;
+      option = ::WSAIoctl(s, SIO_UDP_CONNRESET, const_cast<BOOL*>(&reportReset), sizeof(reportReset), nullptr, 0,
+                          &bytes, nullptr, nullptr)
+                 ? Utils::String::VA("err%d", ::WSAGetLastError())
+                 : "off";
+
+      sockaddr_in name{};
+      auto len = static_cast<int>(sizeof(name));
+      if (::getsockname(s, reinterpret_cast<sockaddr*>(&name), &len) != SOCKET_ERROR)
+        port = ntohs(name.sin_port);
+    }
+
+    static std::string line;
+    line = std::format("{};{};{}", static_cast<unsigned long long>(s), port, option);
+    return line.c_str();
+  }
+
+  // IW4x-32: ask the socket what it is holding, once per stats window, with socket calls only.
+  //
+  // FIONREAD is the byte count the kernel has queued for us. MSG_PEEK then looks at the first waiting datagram
+  // without taking it out of the queue: the four-byte sequence number comes first, then the command word, and
+  // only that command word is printed - it stops at the first space or unprintable byte, so nothing else a
+  // packet carries (a client's address, its userinfo) can reach the log. SO_RCVBUF is the budget that queue is
+  // capped at, because a kernel drops what does not fit and tells nobody.
+  //
+  // Those three answer the question the in-engine counters cannot: a getstatus sitting unread in the queue means
+  // the engine stopped coming to look, an empty queue means the datagrams never reached this socket, and a queue
+  // at SO_RCVBUF with datagrams missing means the server was overrun. Nothing here consumes or alters a packet.
+  //
+  const char* Network::SocketQueue()
+  {
+    static std::string line;
+
+    const auto s (*Game::ip_socket);
+
+    if (s == INVALID_SOCKET)
+    {
+      line = "nosocket";
+      return line.c_str();
+    }
+
+    auto port = -1;
+    sockaddr_in name{};
+    auto nameLen = static_cast<int>(sizeof(name));
+    if (::getsockname(s, reinterpret_cast<sockaddr*>(&name), &nameLen) != SOCKET_ERROR)
+      port = ntohs(name.sin_port);
+
+    auto rcvbuf = -1;
+    auto bufLen = static_cast<int>(sizeof(rcvbuf));
+    if (::getsockopt(s, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<char*>(&rcvbuf), &bufLen) == SOCKET_ERROR)
+      rcvbuf = -1;
+
+    auto queued = -1;
+    auto peek = -1;
+    auto wsa = 0;
+    char head[16] = "";
+
+    if (::ioctlsocket(s, FIONREAD, reinterpret_cast<u_long*>(&queued)) == SOCKET_ERROR)
+    {
+      wsa = ::WSAGetLastError();
+    }
+    else if (queued > 0)
+    {
+      char probe[64];
+      peek = ::recv(s, probe, static_cast<int>(sizeof(probe)), MSG_PEEK);
+
+      if (peek == SOCKET_ERROR)
+        wsa = ::WSAGetLastError();
+      else
+      {
+        auto out = 0;
+        for (auto at = 4; at < peek && out < 15; at++)
+        {
+          const auto c = static_cast<unsigned char>(probe[at]);
+          if (c <= 0x20 || c > 0x7E)
+            break;
+
+          head[out++] = static_cast<char>(c);
+        }
+
+        head[out] = '\0';
+      }
+    }
+
+    line = std::format("{};{};{};{};{};{};{}", static_cast<unsigned long long>(s), port, rcvbuf, queued, peek,
+                       head, wsa);
+    return line.c_str();
+  }
+
   void Network::OnClientPacket(const std::string& command, const networkCallback& callback)
   {
     CL_Callbacks[Utils::String::ToLower(command)] = callback;
@@ -293,9 +642,25 @@ namespace Components
     CL_RawCallbacks[Utils::String::ToLower(command)] = callback;
   }
 
+  // IW4x-32: the two counters iw4x32's console stats line prints (see Network.hpp). Game thread only.
+  static unsigned long long g_DispatchTotal = 0;
+  static unsigned long long g_DispatchHandled = 0;
+
+  unsigned long long Network::DispatchTotal()
+  {
+    return g_DispatchTotal;
+  }
+
+  unsigned long long Network::DispatchHandled()
+  {
+    return g_DispatchHandled;
+  }
+
   bool Network::CL_HandleCommand(Game::netadr_t* address, const char* command, Game::msg_t* message)
   {
     const auto command_ = Utils::String::ToLower(command);
+
+    g_DispatchTotal++;
 
     const auto offset = command_.size() + 5;
     if (static_cast<std::size_t>(message->cursize) < offset)
@@ -305,6 +670,7 @@ namespace Components
 
     if (const auto rawHandler = CL_RawCallbacks.find(command_); rawHandler != CL_RawCallbacks.end())
     {
+      g_DispatchHandled++;
       rawHandler->second(address, message);
       return true;
     }
@@ -315,6 +681,8 @@ namespace Components
       // Normal handler was not found, return
       return false;
     }
+
+    g_DispatchHandled++;
 
     const std::string data{ reinterpret_cast<char*>(message->data) + offset, message->cursize - offset };
 
@@ -380,6 +748,15 @@ namespace Components
 
     // Prevent recvfrom error spam
     Utils::Hook(0x46531A, PacketErrorCheck, HOOK_JUMP).install()->quick();
+
+    // IW4x-32: count the pump without changing it (see NetGetCountStub). Dedicated servers only.
+    //
+    if (Dedicated::IsEnabled())
+    {
+      Utils::Hook(0x4ECFF0, NetGetCountStub, HOOK_JUMP).install()->quick();
+      Utils::Hook(0x6271B7, ServerPumpStub, HOOK_JUMP).install()->quick();
+      Utils::Hook(0x6272BA, ServerCatchUpPumpStub, HOOK_JUMP).install()->quick();
+    }
 
     // Handle client packets
     Utils::Hook(0x5AA703, CL_HandleCommandStub, HOOK_JUMP).install()->quick();
