@@ -8,7 +8,7 @@
   "dual sites: written back to their original bytes while connected to a stock 18-slot server (engine32c/compat.c e32_set_layout), our bytes on a 32-slot server",
   "hooks: jmp to the injected code (engine32c/*.c/.S), which re-executes the replaced instructions",
   "the pool section is the grown geometry the component runs by default; iw4x32-poolstock planted next to iw4x.exe moves the block but keeps the engine's own geometry",
-  "this table set is built for 64 slots. Past 34 players the in-place clientinfo growth no longer fits the room post_cg_globals vacates, so post_cg_globals reaches over cg_entities (0x8EE4B8..0x9F5CA8) and the two own-body cg_entities sites become dual_operands: base + ours_offset in our layout, base + stock_offset on stock 18-slot servers. cg_s grows in place by 0xEDE8 (46 x 0x52C) to 0x8FD2A0, inside the room post_cg_globals vacates - the set fits up to 66 slots"
+  "this table set is built for 64 slots. Past 34 players the in-place clientinfo growth no longer fits the room post_cg_globals vacates, so post_cg_globals reaches over cg_entities (0x8EE4B8..0x9F5CB8 - the span ends one past &cg_entities[2048] because the engine's own teardown walk ends there: the cmp esi,0x9F5CB8 at 0x4AD2C4 is that array's END bound and moves with it, see end_bounds) and the two own-body cg_entities sites become dual_operands: base + ours_offset in our layout, base + stock_offset on stock 18-slot servers. cg_s grows in place by 0xEDE8 (46 x 0x52C) to 0x8FD2A0, inside the room post_cg_globals vacates - the set fits up to 66 slots"
  ],
  "arrays": [
   {
@@ -21,6 +21,7 @@
    "operands": 115,
    "dual_operands": 0,
    "sentinels": {},
+   "end_bounds": {},
    "excluded_sites": []
   },
   {
@@ -36,6 +37,7 @@
     "0x5e48d3": "0x97984",
     "0x5e50c6": "0x97984"
    },
+   "end_bounds": {},
    "excluded_sites": [
     "0x4160a3",
     "0x4754e3"
@@ -51,6 +53,7 @@
    "operands": 4,
    "dual_operands": 0,
    "sentinels": {},
+   "end_bounds": {},
    "excluded_sites": [
     "0x5e48d3",
     "0x5e50c6"
@@ -66,18 +69,22 @@
    "operands": 7,
    "dual_operands": 0,
    "sentinels": {},
+   "end_bounds": {},
    "excluded_sites": []
   },
   {
    "name": "post_cg_globals",
    "old_lo": "0x8ee4b8",
-   "old_hi": "0x9f5ca8",
-   "new_size": "0x1077f0",
+   "old_hi": "0x9f5cb8",
+   "new_size": "0x107800",
    "grown_in_place": false,
    "role": "client",
-   "operands": 475,
+   "operands": 483,
    "dual_operands": 2,
    "sentinels": {},
+   "end_bounds": {
+    "0x4ad2c4": "0x9f5cb8"
+   },
    "excluded_sites": [
     "0x4664df",
     "0x473d4f",
@@ -99,6 +106,7 @@
    "operands": 277,
    "dual_operands": 0,
    "sentinels": {},
+   "end_bounds": {},
    "excluded_sites": []
   },
   {
@@ -111,6 +119,7 @@
    "operands": 3,
    "dual_operands": 0,
    "sentinels": {},
+   "end_bounds": {},
    "excluded_sites": []
   },
   {
@@ -123,6 +132,7 @@
    "operands": 4,
    "dual_operands": 0,
    "sentinels": {},
+   "end_bounds": {},
    "excluded_sites": []
   },
   {
@@ -138,6 +148,7 @@
     "0x416494": "-0x28",
     "0x41649b": "-0x28"
    },
+   "end_bounds": {},
    "excluded_sites": []
   },
   {
@@ -152,6 +163,7 @@
    "sentinels": {
     "0x57f707": "0xf00"
    },
+   "end_bounds": {},
    "excluded_sites": []
   },
   {
@@ -164,6 +176,7 @@
    "operands": 3,
    "dual_operands": 0,
    "sentinels": {},
+   "end_bounds": {},
    "excluded_sites": []
   },
   {
@@ -180,6 +193,7 @@
     "0x4a23eb": "0x100",
     "0x4b4c08": "0x100"
    },
+   "end_bounds": {},
    "excluded_sites": []
   },
   {
@@ -192,6 +206,7 @@
    "operands": 3,
    "dual_operands": 0,
    "sentinels": {},
+   "end_bounds": {},
    "excluded_sites": [
     "0x445032",
     "0x4a23eb",
@@ -208,6 +223,7 @@
    "operands": 1,
    "dual_operands": 0,
    "sentinels": {},
+   "end_bounds": {},
    "excluded_sites": []
   }
  ],
@@ -1789,6 +1805,15 @@
    "new_array_offset": "0x5358"
   },
   {
+   "insn_va": "0x40d4a6",
+   "operand_va": "0x40d4a8",
+   "insn": "mov edx, dword ptr [0x9f5cb0]",
+   "old": "0x9f5cb0",
+   "new": "0x9d197f8",
+   "array": "post_cg_globals",
+   "new_array_offset": "0x1077f8"
+  },
+  {
    "insn_va": "0x415672",
    "operand_va": "0x415673",
    "insn": "mov eax, dword ptr [0x8f3868]",
@@ -2363,6 +2388,24 @@
    "new": "0x9c177f0",
    "array": "post_cg_globals",
    "new_array_offset": "0x57f0"
+  },
+  {
+   "insn_va": "0x48a7c0",
+   "operand_va": "0x48a7c1",
+   "insn": "mov eax, dword ptr [0x9f5cac]",
+   "old": "0x9f5cac",
+   "new": "0x9d197f4",
+   "array": "post_cg_globals",
+   "new_array_offset": "0x1077f4"
+  },
+  {
+   "insn_va": "0x48d5d7",
+   "operand_va": "0x48d5d8",
+   "insn": "mov eax, dword ptr [0x9f5cb0]",
+   "old": "0x9f5cb0",
+   "new": "0x9d197f8",
+   "array": "post_cg_globals",
+   "new_array_offset": "0x1077f8"
   },
   {
    "insn_va": "0x48d8a4",
@@ -4075,6 +4118,24 @@
    "new_array_offset": "0x5388"
   },
   {
+   "insn_va": "0x4f8ea5",
+   "operand_va": "0x4f8ea6",
+   "insn": "mov dword ptr [0x9f5cb0], eax",
+   "old": "0x9f5cb0",
+   "new": "0x9d197f8",
+   "array": "post_cg_globals",
+   "new_array_offset": "0x1077f8"
+  },
+  {
+   "insn_va": "0x4f933b",
+   "operand_va": "0x4f933c",
+   "insn": "mov dword ptr [0x9f5ca8], eax",
+   "old": "0x9f5ca8",
+   "new": "0x9d197f0",
+   "array": "post_cg_globals",
+   "new_array_offset": "0x1077f0"
+  },
+  {
    "insn_va": "0x4f936c",
    "operand_va": "0x4f936d",
    "insn": "mov dword ptr [0x8f3ca4], eax",
@@ -4084,6 +4145,15 @@
    "new_array_offset": "0x57ec"
   },
   {
+   "insn_va": "0x4f9797",
+   "operand_va": "0x4f9798",
+   "insn": "mov dword ptr [0x9f5cac], eax",
+   "old": "0x9f5cac",
+   "new": "0x9d197f4",
+   "array": "post_cg_globals",
+   "new_array_offset": "0x1077f4"
+  },
+  {
    "insn_va": "0x4f9cfc",
    "operand_va": "0x4f9cfd",
    "insn": "mov dword ptr [0x8f3ca0], eax",
@@ -4091,6 +4161,15 @@
    "new": "0x9c177e8",
    "array": "post_cg_globals",
    "new_array_offset": "0x57e8"
+  },
+  {
+   "insn_va": "0x4fa8d1",
+   "operand_va": "0x4fa8d2",
+   "insn": "mov dword ptr [0x9f5cb4], eax",
+   "old": "0x9f5cb4",
+   "new": "0x9d197fc",
+   "array": "post_cg_globals",
+   "new_array_offset": "0x1077fc"
   },
   {
    "insn_va": "0x4fe3dd",
@@ -5954,6 +6033,15 @@
    "new": "0x9c142a8",
    "array": "post_cg_globals",
    "new_array_offset": "0x22a8"
+  },
+  {
+   "insn_va": "0x4ad2c4",
+   "operand_va": "0x4ad2c6",
+   "insn": "cmp esi, 0x9f5cb8",
+   "old": "0x9f5cb8",
+   "new": "0x9d19800",
+   "array": "post_cg_globals",
+   "new_array_offset": "0x107800"
   },
   {
    "insn_va": "0x405ef5",

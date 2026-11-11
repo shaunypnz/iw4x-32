@@ -526,6 +526,21 @@ namespace Components
   //
   constexpr DWORD SIO_UDP_CONNRESET = 0x9000000c; // IOC_IN 0x80000000 | IOC_VENDOR 0x10000000 | 12
 
+  // IW4x-32: WSAIoctl is ASKED FOR, not imported.
+  //
+  // A plain ::WSAIoctl call puts ws2_32!WSAIoctl in this dll's import table. Our dll is loaded by two hosts: the
+  // official exe under Windows/Wine, which has that name, and the native loader that runs a dedicated server
+  // headless (iw4x32/native), which does not - and a host answers an import it lacks with a stub that prints
+  // "UNIMPLEMENTED ws2_32.dll!WSAIoctl", returns 0 and leaves the caller holding a fake success: this guard would
+  // report the switch "off" on a host that was never asked (the 2026-11-11 headless run, gate
+  // loader.no_unimplemented). Looked up by name instead: Windows and Wine hand over the real function, a host
+  // without it hands over nothing and the guard says "no api" - which is also the honest answer where there is no
+  // ICMP "port unreachable" report to silence in the first place. `decltype(&::WSAIoctl)` names the type without
+  // referencing the function, so the linker emits no import for it; ws2_32 is loaded long before the game owns a
+  // socket, so GetModuleHandleA is enough - nothing is loaded on the frame path.
+  //
+  using WsaIoctl = decltype(&::WSAIoctl);
+
   static SOCKET g_GuardedSocket (INVALID_SOCKET);
 
   const char* Network::GuardSocket()
@@ -542,12 +557,19 @@ namespace Components
 
     if (s != INVALID_SOCKET)
     {
+      static const WsaIoctl wsaIoctl (reinterpret_cast<WsaIoctl>(
+          ::GetProcAddress(::GetModuleHandleA("ws2_32.dll"), "WSAIoctl"))); // once per process, not per frame
+
       const BOOL reportReset = FALSE;
       auto bytes = 0UL;
-      option = ::WSAIoctl(s, SIO_UDP_CONNRESET, const_cast<BOOL*>(&reportReset), sizeof(reportReset), nullptr, 0,
-                          &bytes, nullptr, nullptr)
-                 ? Utils::String::VA("err%d", ::WSAGetLastError())
-                 : "off";
+
+      if (wsaIoctl == nullptr)
+        option = "no api";
+      else
+        option = wsaIoctl(s, SIO_UDP_CONNRESET, const_cast<BOOL*>(&reportReset), sizeof(reportReset), nullptr, 0,
+                         &bytes, nullptr, nullptr)
+                     ? Utils::String::VA("err%d", ::WSAGetLastError())
+                     : "off";
 
       sockaddr_in name{};
       auto len = static_cast<int>(sizeof(name));
