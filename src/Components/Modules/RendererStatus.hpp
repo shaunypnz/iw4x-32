@@ -5,8 +5,8 @@
 namespace Components
 {
   // IW4x-32: the renderer that actually initialized, shown as read-only text on the video options
-  // screens (the front end's Options -> Video, its advanced page, and the pause menu's equivalent)
-  // and printed to the console when it changes.
+  // screens (the front end's Options -> Video, its advanced page, and that same screen when the player
+  // stands on it in a match) and printed to the console when it changes.
   //
   // The answer comes from what the renderer itself proves - the device it created, what answers
   // d3d9.dll, what our loader loaded behind d3d9.dll - through the rules
@@ -73,5 +73,10 @@ namespace Components
     // in has to carry the line's pixels. Asked for by iw4x32_rendererShot, so it costs nothing until a run
     // or a player asks for it.
     static void Shot(IDirect3DDevice9* device);
+
+    // Arm the engine's backend-frame signal for the frame a run asked for (it fires inside
+    // RB_SwapBuffers, where the frame is complete), and take a frame that never got presented.
+    static void ArmShot();
+    static void TakeLateShot();
   };
 }
