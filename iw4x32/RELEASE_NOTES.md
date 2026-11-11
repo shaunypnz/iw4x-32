@@ -2,7 +2,7 @@
 top of a normal IW4x install; your `iw4x.exe` stays the official one. Normal 18-player IW4x servers keep working.
 
 <!-- whats-new -->
-### What's new in v2.15-r5318
+### What's new in v2.16-r5318
 A kit / launcher update on the same official **IW4x r5318**, live-tested on a 64-slot server (32 bots + a real client), and 32 slots with 31 bots, 48 slots with 24 bots.
 <!-- /whats-new -->
 
