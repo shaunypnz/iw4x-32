@@ -90,6 +90,14 @@ def pool_rules(poolsec):
             if value not in olds:
                 bad.append("no constant site names the derived form %s (%s) - a grown bank with that span "
                            "stock hashes chains into entries it does not own" % (name, hx(value)))
+        # ... and every site that IS in the set must actually move: a site whose new value equals its old one is a
+        # geometry constant the pass would leave at the stock number while the banks around it grow, which is the
+        # half-patch that faults in the free-list unlink (0x437190) rather than a smaller pool. iw4x32/tools/
+        # check_pool_ceiling.py re-reads the same rule off the committed json.
+        for s in poolsec["constant_sites"]:
+            if num(s["old"]) == num(s["new"]):
+                bad.append("constant site %s left at its stock value %s while the banks grow"
+                           % (hx(num(s["operand_va"])), hx(num(s["old"]))))
     if bad:
         raise SystemExit("gen_tables: pool geometry breaks the engine's own rules:\n  " + "\n  ".join(bad))
     return g
@@ -118,6 +126,23 @@ def parse(src):
     duals = sorted((dict(insn=num(o["insn_va"]), operand=num(o["operand_va"]), old=num(o["old"]),
                          ours=num(o["ours_offset"]), stock=num(o["stock_offset"]), array=by_name[o["array"]])
                     for o in src.get("dual_operands", [])), key=lambda o: o["operand"])
+
+    # ---- the reference build's static layout: where a binary-patched iw4x.exe puts each array ----
+    # patch_engine applies the same json to the pristine exe as a file pass and puts the enlarged arrays in a
+    # zero-filled section, so every operand of one array carries (that array's base there + its offset). One
+    # number per array: IW4x32_Arrays[].refBase, which IW4x32::PairPrePatchedEngine reads an already-patched
+    # exe back against. It says where a PATCHER put an array, not where a player sits, so it is deliberately
+    # not a layout fact - the layout hash must not move over it.
+    refbase = {}
+    for o in src["relocation_operands"]:
+        if o.get("fixed"):
+            continue  # cg_s grew in place: no base to read back
+        b = (num(o["new"]) - num(o["new_array_offset"])) & 0xFFFFFFFF
+        if refbase.setdefault(o["array"], b) != b:
+            raise SystemExit("array %s: its operands do not share one reference base (%s vs %s)" %
+                             (o["array"], hx(refbase[o["array"]]), hx(b)))
+    for arr in arrays:
+        arr["ref_base"] = refbase.get(arr["name"], 0)
 
     # every array's operands go in one block so the component can walk them per array
     first = {}
@@ -277,6 +302,7 @@ def main():
     o.append("    unsigned int newSize;           // allocate this many zeroed bytes")
     o.append("    unsigned int operandFirst, operandCount;")
     o.append("    unsigned char role, grownInPlace;")
+    o.append("    unsigned int refBase;           // the array base of the reference (binary-patched) layout, 0 = grew in place")
     o.append("  };")
     o.append("")
     o.append("  struct IW4x32Operand")
@@ -347,9 +373,10 @@ def main():
     o.append("  static const IW4x32Array IW4x32_Arrays[] = {")
     for i, arr in enumerate(arrays):
         n = len([x for x in operands if x["array"] == i])
-        o.append("    {%s,%s,%s,%s,%d,%d,%d,%d}," %
+        o.append("    {%s,%s,%s,%s,%d,%d,%d,%d,%s}," %
                  (json.dumps(arr["name"]), hx(num(arr["old_lo"])), hx(num(arr["old_hi"])), hx(num(arr["new_size"])),
-                  first.get(i, len(operands)), n, ROLE[arr["role"]], 1 if arr["grown_in_place"] else 0))
+                  first.get(i, len(operands)), n, ROLE[arr["role"]], 1 if arr["grown_in_place"] else 0,
+                  hx(arr.get("ref_base", 0))))
     o.append("  };")
     o.append("")
     o.append("  static const IW4x32Operand IW4x32_Operands[] = {")

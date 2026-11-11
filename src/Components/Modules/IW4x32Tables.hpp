@@ -24,6 +24,7 @@ namespace Components
     unsigned int newSize;           // allocate this many zeroed bytes
     unsigned int operandFirst, operandCount;
     unsigned char role, grownInPlace;
+    unsigned int refBase;           // the array base of the reference (binary-patched) layout, 0 = grew in place
   };
 
   struct IW4x32Operand
@@ -94,20 +95,20 @@ namespace Components
   inline constexpr unsigned int IW4x32_DualCount = 25;
 
   static const IW4x32Array IW4x32_Arrays[] = {
-    {"svs_clients",0x31d9390,0x3d8dbb0,0x299e400,0,115,1,0},
-    {"level_bgs",0x19bd680,0x1a45d20,0x97488,115,37,1,0},
-    {"g_clients",0x1a45e10,0x1a831a8,0xd9b00,152,4,1,0},
-    {"sortedClients",0x1a8358c,0x1a835d4,0x100,156,7,1,0},
-    {"post_cg_globals",0x8ee4b8,0x9f5ca8,0x1077f0,163,475,0,0},
-    {"cg_tail",0x8ed4c8,0x8ee4b8,0xff0,638,277,0,1},
-    {"ui_playerNames",0x62e4bd4,0x62e4e14,0x800,915,3,0,0},
-    {"ui_playerClientNums",0x62e5054,0x62e509c,0x100,918,4,0,0},
-    {"cg_scores",0x863c38,0x863f08,0xa00,922,11,0,0},
-    {"compass_actors",0x7d7fa8,0x7d85c0,0x10e0,933,12,0,0},
-    {"cl_ring44",0x62c8228,0x62c86f0,0x1100,945,3,0,0},
-    {"cl_voiceDecoders",0x64a39e0,0x64a3a28,0x100,948,8,0,0},
-    {"cl_voiceTalkTime",0x64a3a28,0x64a3a70,0x100,956,3,0,0},
-    {"snd_voiceBufPool",0x1aa5e48,0x1aa63a0,0x1248,959,1,0,0},
+    {"svs_clients",0x31d9390,0x3d8dbb0,0x299e400,0,115,1,0,0x7100000},
+    {"level_bgs",0x19bd680,0x1a45d20,0x97488,115,37,1,0,0x9a9f000},
+    {"g_clients",0x1a45e10,0x1a831a8,0xd9b00,152,4,1,0,0x9b37000},
+    {"sortedClients",0x1a8358c,0x1a835d4,0x100,156,7,1,0,0x9c11000},
+    {"post_cg_globals",0x8ee4b8,0x9f5ca8,0x1077f0,163,475,0,0,0x9c12000},
+    {"cg_tail",0x8ed4c8,0x8ee4b8,0xff0,638,277,0,1,0x0},
+    {"ui_playerNames",0x62e4bd4,0x62e4e14,0x800,915,3,0,0,0x9d1a000},
+    {"ui_playerClientNums",0x62e5054,0x62e509c,0x100,918,4,0,0,0x9d1b000},
+    {"cg_scores",0x863c38,0x863f08,0xa00,922,11,0,0,0x9d1c000},
+    {"compass_actors",0x7d7fa8,0x7d85c0,0x10e0,933,12,0,0,0x9d1d000},
+    {"cl_ring44",0x62c8228,0x62c86f0,0x1100,945,3,0,0,0x9d1f000},
+    {"cl_voiceDecoders",0x64a39e0,0x64a3a28,0x100,948,8,0,0,0x9d21000},
+    {"cl_voiceTalkTime",0x64a3a28,0x64a3a70,0x100,956,3,0,0,0x9d22000},
+    {"snd_voiceBufPool",0x1aa5e48,0x1aa63a0,0x1248,959,1,0,0,0x9d23000},
   };
 
   static const IW4x32Operand IW4x32_Operands[] = {

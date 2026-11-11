@@ -106,6 +106,11 @@ def main():
     ap.add_argument("--exe", default=None,
                     help="a pristine iw4x.exe: re-read every site from it (the tables' old values, byte patches "
                          "and hooks must match the file the patcher will find at run time)")
+    ap.add_argument("--pairable-exe", default=None,
+                    help="an iw4x.exe that says it ALREADY carries this table set (the file pass: patch_engine "
+                          "P1-P7). Re-read IW4x32::PairPrePatchedEngine's rules from the file: exit 0 means the "
+                          "component would pair it instead of patching it, exit 1 names the first site that says "
+                          "otherwise and tallies the pool sites that stayed stock")
     a = ap.parse_args()
 
     src = json.load(open(a.json))
@@ -133,6 +138,16 @@ def main():
              "array %s: range/size %s" % (j["name"], r[1:4]))
         want(val(r[6]) == ROLE[j["role"]], "array %s: role" % j["name"])
         want(val(r[7]) == (1 if j["grown_in_place"] else 0), "array %s: grown_in_place" % j["name"])
+        # IW4x-32: refBase is the array base of the reference (binary-patched) layout - the json's own 'new'
+        # minus new_array_offset, one number per array. The component pairs an already-patched iw4x.exe against
+        # it, so a refBase that drifted from the json would point the DLL at a block the engine does not use.
+        bases = {(num(o["new"]) - num(o["new_array_offset"])) & 0xFFFFFFFF
+                 for o in src["relocation_operands"] if o["array"] == j["name"] and not o.get("fixed")}
+        want(len(r) > 8, "array %s: no refBase field in the header" % j["name"])
+        if len(r) > 8:
+            want((not bases) or bases == {val(r[8])},
+                 "array %s: refBase %s, the json says %s" %
+                 (j["name"], r[8], ",".join("0x%x" % b for b in sorted(bases)) or "none"))
         by_name[j["name"]] = len(by_name)
 
     # ---- operands ----
@@ -417,6 +432,8 @@ def main():
     # ---- optional: every site against the pristine exe it was read out of (--exe) ----
     if a.exe:
         check_against_exe(src, a.exe, bad)
+    if a.pairable_exe:
+        check_pairable_exe(src, a.pairable_exe, bad)
 
     if bad:
         print("check_tables: %d problem(s):" % len(bad))
@@ -482,6 +499,211 @@ def check_against_exe(src, path, bad):
                  "exe: pool site 0x%x does not hold %s" % (num(s["operand_va"]), s["old"]))
             want(at(num(s["insn_va"]), len(bytes.fromhex(s["bytes"]))) == bytes.fromhex(s["bytes"]),
                  "exe: instruction at 0x%x is not [%s]" % (num(s["insn_va"]), s["bytes"]))
+
+
+def check_pairable_exe(src, path, bad):
+    """Re-read the pairing rules (IW4x32::PairArrays / PairPool / PairPrePatchedEngine) from an iw4x.exe that was
+    built by applying THIS table set to the file instead of patching it in memory. The component pairs such an exe
+    - it cannot patch it again, and refusing it leaves the DLL's Game:: pointers on the stock 18-slot arrays while
+    the engine addresses the wide ones - so this file, which already re-reads the tables against the pristine exe,
+    re-reads them against the patched one: what the component would print at run time, printed here instead.
+
+    The pool tally is the part the file-patch build is judged on: a bank that moved while the DERIVED forms of the
+    same geometry stayed stock is not a bigger pool but a corrupt one (the name-hash bucket is computed for the
+    stock bank, the free-block search lands on a live entry, the unlink at 0x437190 follows that variable's own
+    bytes), and the block must keep entries - 2 a whole multiple of six or the script-thread dump's record array
+    is sized short. Both are measured off the exe's own operands, not off the tables."""
+    data = open(path, "rb").read()
+    base = num(src["image_base"])
+    secs, end = pe_sections(data, base)
+
+    def at(va, n):
+        for va_lo, vsz, ro, rsz in secs:
+            if va_lo <= va < va_lo + vsz and va - va_lo < rsz:
+                return data[ro + va - va_lo:ro + va - va_lo + n]
+        return None  # virtual but not in the file: a section the patcher added carries no raw bytes
+
+    def dword(va):
+        raw = at(va, 4)
+        return None if raw is None else struct.unpack("<I", raw)[0]
+
+    def why(cond, rule, va):
+        if not cond:
+            bad.append("pair: %s @ %#x" % (rule, va))
+            return False
+        return True
+
+    # arrays: one base per array, inside this image, not the stock range it replaced; cg_s grew in place
+    shift = {(num(o["new"]) - num(o["old"])) & 0xFFFFFFFF for o in src["relocation_operands"] if o.get("fixed")}
+    shift = shift.pop() if len(shift) == 1 else None
+    bases, operands_stock = {}, 0
+    for o in src["relocation_operands"]:
+        va, value = num(o["operand_va"]), dword(num(o["operand_va"]))
+        if value is None:
+            why(False, "operand outside the file", va)
+            continue
+        if o.get("fixed"):
+            if shift is None or value != (num(o["old"]) + shift) & 0xFFFFFFFF:
+                why(False, "absolute operand", va)
+            continue
+        cand = (value - num(o["new_array_offset"])) & 0xFFFFFFFF
+        if bases.setdefault(o["array"], cand) != cand:
+            why(False, "array operands", va)
+        if value == num(o["old"]):
+            operands_stock += 1
+    for a in src["arrays"]:
+        if a["grown_in_place"]:
+            continue
+        b = bases.get(a["name"], 0)
+        if not why(bool(b) and base <= b < end and base <= b + num(a["new_size"]) - 1 < end,
+                   "array outside the image", num(a["old_lo"])):
+            continue
+        why(not (num(a["old_lo"]) <= b < num(a["old_hi"])), "array left at its stock address", num(a["old_lo"]))
+
+    for s in src["size_constant_operands"]:
+        why(dword(num(s["operand_va"])) == num(s["new"]), "size constant", num(s["operand_va"]))
+    for o in src.get("dual_operands", []):
+        b, value = bases.get(o["array"], 0), dword(num(o["operand_va"]))
+        why(value in ((b + num(o["ours_offset"])) & 0xFFFFFFFF, (b + num(o["stock_offset"])) & 0xFFFFFFFF),
+            "dual operand", num(o["operand_va"]))
+    for group in ("cvar_domains", "code_patches"):
+        for p in src[group]:
+            new = bytes.fromhex(p["new"])
+            raw = at(num(p["va"]), len(new))
+            if raw != new and not (group == "code_patches" and p.get("dual")):
+                why(False, "dvar domain" if group == "cvar_domains" else "code patch", num(p["va"]))
+    for h in src["hooks"]:
+        va, raw = num(h["va"]), at(num(h["va"]), 5)
+        target = 0
+        if raw is not None and raw[0] == 0xE9:
+            target = (va + 5 + struct.unpack("<i", raw[1:5])[0]) & 0xFFFFFFFF
+        why(raw is not None and raw[0] == 0xE9 and base <= target < end, "hook site", va)
+
+    # ---- the pool: geometry READ BACK off the exe, then the rules that block imposed on it ----
+    psec = src.get("pool")
+    if not psec:
+        return
+    old_geom = dict((k, num(psec["old_" + k])) for k in ("parent_cap", "child0_base", "child_cap",
+                                                         "child1_base", "entries"))
+    want_geom = dict((k, num(psec[k])) for k in ("parent_cap", "child0_base", "child_cap",
+                                                 "child1_base", "entries"))
+    read_parent = read_child = 0
+    width_conflict = []
+    for s in psec["constant_sites"]:
+        va, value = num(s["operand_va"]), dword(num(s["operand_va"]))
+        old = num(s["old"])
+        if old == old_geom["parent_cap"]:
+            if read_parent and value != read_parent:
+                width_conflict.append("parent bank width @ %#x" % va)
+            read_parent = value
+        if old == old_geom["child_cap"]:
+            if read_child and value != read_child:
+                width_conflict.append("child bank width @ %#x" % va)
+            read_child = value
+    for msg in width_conflict:
+        bad.append("pair: " + msg)
+    # the geometry the exe names is the geometry it runs: every other constant is judged against THAT, the way
+    # IW4x32::PoolIndexValue does, so an exe whose banks obey the rules but are not the tables' numbers is paired
+    # and reported as itself - only a site that contradicts its own block (or never moved) refuses the pairing.
+    forms = pool_index_forms(old_geom, read_parent, read_child)
+    stock_sites, other_sites, kinds, stock_by_kind = [], [], {}, {}
+    first_mismatch = None
+    for s in psec["constant_sites"]:
+        va, value = num(s["operand_va"]), dword(num(s["operand_va"]))
+        old = num(s["old"])
+        if value == forms.get(old, old):
+            continue
+        kinds[s.get("kind", "?")] = kinds.get(s.get("kind", "?"), 0) + 1
+        (stock_sites if value == old else other_sites).append(va)
+        if value == old:
+            stock_by_kind.setdefault(s.get("kind", "?"), []).append(va)
+        if first_mismatch is None:
+            first_mismatch = ("pool geometry constant left at its stock value" if value == old
+                              else "pool geometry constant of another geometry", va)
+    print("  pool geometry read from %s: parent %s, child bank %s, %d constant site(s): %d agree with the block "
+          "they sit in, %d are still stock, %d name another block%s" %
+          (os.path.basename(path), read_parent or "-", read_child or "-", len(psec["constant_sites"]),
+           len(psec["constant_sites"]) - len(stock_sites) - len(other_sites), len(stock_sites), len(other_sites),
+           "" if not kinds else " (" + ", ".join("%s %d" % kv for kv in sorted(kinds.items())) + ")"))
+    # a site that never moved is a site the file pass has to add: name them by kind, by address, so the patcher
+    # can diff its own pool site list against this one instead of guessing which forms it folded away.
+    for kind in sorted(stock_by_kind):
+        vas = stock_by_kind[kind]
+        print("  left stock (%s, %d): %s" % (kind, len(vas), ", ".join("%#x" % v for v in vas)))
+    why(bool(read_parent) and bool(read_child), "pool bank widths", 0)
+    if read_parent and read_child:
+        if first_mismatch is not None:  # the site the component would refuse on, in the tables' own order
+            bad.append("pair: %s @ %#x" % first_mismatch)
+        why(read_parent < 0x10000 and read_child < 0x10000, "pool bank over the 16-bit links", 0)
+        ent = read_parent + 1 + 2 * read_child
+        if (ent - 2) % 6:
+            why(False, "pool block the script-thread dump cannot count", 0)
+            # stated where the fault is, because the fix is one entry of bank width: the same child banks pair
+            # at a parent cap six apart from the one the exe names.
+            fix = [p for p in range(read_parent, min(0x10000, read_parent + 7))
+                   if (p + 1 + 2 * read_child - 2) % 6 == 0]
+            if fix:
+                print("  fix: these child banks (%d x 2) pair at a parent cap of %d, not %d - %d entries, "
+                      "entries - 2 = %d = 6 x %d (the tables themselves run %d + 2x%d)" %
+                      (read_child, fix[0], read_parent, fix[0] + 1 + 2 * read_child, fix[0] + 2 * read_child - 1,
+                       (fix[0] + 2 * read_child - 1) // 6, want_geom["parent_cap"], want_geom["child_cap"]))
+        if operands_stock == 0 and (read_parent, read_child) != (want_geom["parent_cap"], want_geom["child_cap"]):
+            print("  note: this exe runs parent %d + 2x%d, the tables would allocate parent %d + 2x%d - the "
+                  "component pairs it anyway and reports the banks it read"
+                  % (read_parent, read_child, want_geom["parent_cap"], want_geom["child_cap"]))
+    base_site = 0
+    for s in psec["address_sites"]:
+        va, value = num(s["operand_va"]), dword(num(s["operand_va"]))
+        offset = pool_address_offset(num(s["offset"]), read_parent, read_child, old_geom)
+        if value is None or value < offset or (base_site and value - offset != base_site):
+            bad.append("pair: pool address site @ %#x" % va)
+            continue
+        base_site = value - offset
+    why(bool(base_site) and base <= base_site < end and base_site != num(psec["base"]), "pool block", 0)
+    print("  arrays: %d, %d operand(s) still on their stock address; pool block %s" %
+          (len(src["arrays"]), operands_stock, hex(base_site) if base_site else "-"))
+
+
+def pe_sections(data, base):
+    """(one entry per PE section as (va, virtual size, raw offset, raw size), base + SizeOfImage). A file-pass
+    build adds sections, so an address is only inside the file if its section carries raw bytes for it."""
+    pe = struct.unpack_from("<I", data, 0x3C)[0]
+    nsec = struct.unpack_from("<H", data, pe + 6)[0]
+    off = pe + 24 + struct.unpack_from("<H", data, pe + 20)[0]
+    secs = []
+    for _ in range(nsec):
+        vsz, rva, rsz, ro = struct.unpack_from("<IIII", data, off + 8)
+        secs.append((base + rva, vsz, ro, rsz))
+        off += 40
+    return secs, base + struct.unpack_from("<I", data, pe + 4 + 20 + 0x38)[0]
+
+
+def pool_index_forms(old_geom, parent_cap, child_cap):
+    """Every pool index constant the stock block folds, and what it must hold under the geometry the exe names -
+    IW4x32::PoolIndexValue's table, DERIVED forms included (that is what a file pass that names only the seven bank
+    immediates forgets, and the free-list unlink fault is what follows)."""
+    if not parent_cap or not child_cap:
+        return {}
+    child0, child1 = parent_cap + 1, parent_cap + 1 + child_cap
+    entries, walk = child1 + child_cap, child1 + child_cap - 2
+    pc, cc = old_geom["parent_cap"], old_geom["child_cap"]
+    return {pc: parent_cap, pc - 1: parent_cap - 1,               # the parent bank's width, its walk bound
+            0x10000 + pc - 1: 0x10000 + parent_cap - 1,           # the parent-object id range end
+            old_geom["child0_base"]: child0, cc: child_cap, cc - 2: child_cap - 2,  # the bank's hash modulus
+            old_geom["child1_base"]: child1, old_geom["child1_base"] - 1: child1 - 1,
+            old_geom["entries"] - 1: entries - 1, old_geom["entries"] - 2: walk,
+            (old_geom["entries"] - 2) // 6: walk // 6}            # the dump's six-at-a-time count
+
+
+def pool_address_offset(old_offset, parent_cap, child_cap, old_geom):
+    """The offset a pool ADDRESS site carries under the geometry the exe names (IW4x32::PoolAddressOffset): a site
+    anchored on one of the header entries keeps its offset, one anchored on a bank's first entry moves with it."""
+    entry, field = divmod(old_offset, 16)
+    if entry == old_geom["child0_base"]:
+        return (parent_cap + 1) * 16 + field
+    if entry == old_geom["child1_base"]:
+        return (parent_cap + 1 + child_cap) * 16 + field
+    return old_offset
 
 
 def check_bytes(rows, entries, pool, bad, what):

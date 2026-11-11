@@ -526,6 +526,241 @@ namespace Components
       return oldOffset;
     }
 
+    // ---------------------------------------------------------------- an engine that already carries the patch set
+    //
+    // IW4x-32: patch_engine.py (the IW4x-32 repo) applies the SAME table set to the pristine exe as a file pass:
+    // the enlarged arrays ride in a zero-filled section at the reference layout the json was built from - one
+    // base per array, IW4x32_Arrays[].refBase - the operand / size-constant / byte rewrites are in the file, and
+    // the 14 hook sites already jmp into its injected engine32c image. Such an exe cannot be patched a second
+    // time: ApplyToEngine would trade its array addresses for VirtualAlloc ones and InstallHooks would jmp over
+    // the injected stubs again. And refusing it is not neutral either - the DLL keeps its Game:: pointers on the
+    // stock 18-slot arrays while the engine addresses the wide ones. Measured on the test box, that pairing
+    // prints "iw4x.exe at 0x4014cb is not the r5154 engine the tables were built for (operand)", patches nothing,
+    // and loses clients at ~44 connections. Pairing is the third answer: verify that the exe holds the tables'
+    // PATCHED form, take the arrays and the script-variable pool from the exe, and write nothing except what
+    // patch_engine knows nothing about - the client-mask sites above 32 players and the party timeout guard,
+    // each of which checks its own bytes before hooking.
+    //
+    // Every part below is checked rather than assumed, and what a mismatch would cost:
+    //   arrays - every operand of one array addresses one base, that base lies in this process's image (the
+    //            section is part of it: mapped, and never something we may VirtualFree), and it is not the stock
+    //            region it replaced. A half-patched exe has no single base; a DLL built for another slot count
+    //            reads the wide array as its own and walks off the end of it.
+    //   players- the size constants hold their new values, and those values ARE the array sizes, so they carry
+    //            the slot count the engine was laid out for.
+    //   code   - the cvar domains and code patches hold their new bytes, and each hook site holds a jmp that
+    //            lands inside this image (its own injected section) rather than the stock bytes (nobody hooked
+    //            it) or a target outside it (a hook to some module's stub - ours included).
+    //   pool   - the address sites agree on one block inside the image, and the bank geometry is READ BACK from
+    //            the index constants instead of taken from the tables: the pool probes must report the banks this
+    //            process really runs (see g_Pool*), and a block sized by another plan must not be judged against
+    //            ours. The rules below are the ones that keep the allocator's walks inside the block.
+
+    struct PairResult
+    {
+      unsigned int poolBase = 0;      // the pool block the exe addresses
+      unsigned int parentCap = 0, childCap = 0, child0Base = 0; // the geometry its constants name
+    };
+
+    // The mapped extent of the running iw4x.exe, its added sections included.
+    unsigned int ImageBaseVa() { return static_cast<unsigned int>(reinterpret_cast<unsigned int>(GetModuleHandleA(nullptr))); }
+
+    unsigned int ImageEndVa()
+    {
+      const auto base = reinterpret_cast<const unsigned char*>(GetModuleHandleA(nullptr));
+      const auto nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + *reinterpret_cast<const DWORD*>(base + 0x3C));
+      return ImageBaseVa() + nt->OptionalHeader.SizeOfImage;
+    }
+
+    bool InImage(unsigned int va)
+    {
+      return va >= ImageBaseVa() && va < ImageEndVa();
+    }
+
+    // Why pairing refused: the first site that does not hold the patched form the tables describe.
+    bool PairFail(const char* what, unsigned int where)
+    {
+      Logger::Print("IW4x32: iw4x.exe at {:#x} is not paired - {} does not hold the patched form of these tables",
+                    where, what);
+      return false;
+    }
+
+    // The arrays: every operand of one array addresses one base, that base is inside this process's image (the
+    // patcher's section is part of it - mapped, and never ours to VirtualFree), and it is not the stock region
+    // the array replaced. cg_s's own sites are absolute: they carry the stock value plus CgTailShift.
+    bool PairArrays()
+    {
+      for (unsigned int i = 0; i < IW4x32_ArraysCount; i++)
+      {
+        const auto& a = IW4x32_Arrays[i];
+        unsigned int base = 0;
+        for (unsigned int k = a.operandFirst; k < a.operandFirst + a.operandCount; k++)
+        {
+          const auto& o = IW4x32_Operands[k];
+          const auto value = *reinterpret_cast<unsigned int*>(o.operandVa);
+          if (o.fixed)
+          {
+            if (value != o.old + IW4x32_CgTailShift) // cg_s grew inside the image: a shift, not a base
+              return PairFail("absolute operand", o.operandVa);
+            continue;
+          }
+          // one array addressed from two places is not one layout; the unsigned wrap is right for a sentinel
+          // operand that sits below its array's base
+          if (base && value - o.offset != base)
+            return PairFail("array operands", o.operandVa);
+          base = value - o.offset;
+        }
+        if (a.grownInPlace)
+          continue;
+        if (!base || !InImage(base) || !InImage(base + a.newSize - 1))
+          return PairFail("array outside the image", a.oldLo);
+        if (base >= a.oldLo && base < a.oldHi)
+          return PairFail("array left at its stock address", a.oldLo);
+        g_Arrays[i] = reinterpret_cast<void*>(static_cast<uintptr_t>(base));
+      }
+      return true;
+    }
+
+    unsigned int PairArrayBase(unsigned int index)
+    {
+      return static_cast<unsigned int>(reinterpret_cast<unsigned int>(g_Arrays[index]));
+    }
+
+    // The rewritten half of a byte patch, read from the running exe.
+    bool HasNewBytes(const IW4x32BytePatch& p)
+    {
+      return Matches(reinterpret_cast<const void*>(p.va), &IW4x32_Bytes[p.newFirst], p.len);
+    }
+
+    // The pool block and the bank geometry its index constants name. The widths are READ BACK: the other
+    // half of this project sizes its banks from its own plan (patch_engine's pool_plan for the slot count),
+    // and the DLL's pool probes have to report the banks the process really runs, not the ones these tables
+    // would allocate. Then every derived site - the parent bank's last index, a child bank's name-hash
+    // modulus, the block's walk bound and the six-at-a-time count of it, the object-id bound - is checked
+    // against THAT geometry, because a pool whose banks moved while its derived sites stayed stock is not a
+    // pairing to take: the hash bucket is then computed for the stock bank, the free-block search lands on a
+    // live entry, reads that variable's own bytes as a free-list link, and the unlink faults one call later at
+    // 0x43719B - the crash measured on the test box at 25-52 connections with the banks below cap.
+    bool PairPool(PairResult& out)
+    {
+      unsigned int parentCap = 0, childCap = 0;
+      for (const auto& c : IW4x32_PoolConstants)
+      {
+        const auto value = *reinterpret_cast<unsigned int*>(c.operandVa);
+        if (c.oldValue == IW4x32_Pool_OldParentCap) // the parent bank's width (a bank end or a bank test)
+        {
+          if (parentCap && value != parentCap)
+            return PairFail("parent bank width", c.operandVa);
+          parentCap = value;
+        }
+        if (c.oldValue == IW4x32_Pool_OldChildCap) // a child bank's width
+        {
+          if (childCap && value != childCap)
+            return PairFail("child bank width", c.operandVa);
+          childCap = value;
+        }
+      }
+      if (!parentCap || !childCap)
+        return PairFail("pool bank widths", 0);
+      if (parentCap > 0xffff || childCap > 0xffff)
+        return PairFail("pool bank over the 16-bit links", 0);
+      const unsigned int entries = parentCap + 1 + 2 * childCap; // child0 = parentCap + 1, then two banks
+      if ((entries - 2) % 6)
+      {
+        // This refusal is arithmetic on the two caps, so the way out of it is arithmetic too: keep the child
+        // banks where they are and let the parent bank take the fewest extra entries that make the dump's
+        // count whole. A live run leaves nothing behind but the console tail, so say the numbers here; the
+        // offline gate prints the same line from a file (iw4x32/tools/check_tables.py --pairable-exe).
+        const unsigned int add = 6 - (entries - 2) % 6;
+        Logger::Print("IW4x32: its pool ({} + 2x{} = {} entries) cannot be paired - the script-thread dump "
+                      "walks the block six entries at a time and {} leaves {} over; a parent bank of {} entries "
+                      "would divide",
+                      parentCap, childCap, entries, entries - 2, (entries - 2) % 6, parentCap + add);
+        return PairFail("pool block the script-thread dump cannot count", 0);
+      }
+      const PoolGeometry geom{parentCap, childCap, 0, 0, 0};
+      for (const auto& c : IW4x32_PoolConstants)
+      {
+        const auto value = *reinterpret_cast<unsigned int*>(c.operandVa);
+        const auto want = PoolIndexValue(c.oldValue, geom);
+        if (value == want)
+          continue;
+        return PairFail(value == c.oldValue ? "pool geometry constant left at its stock value"
+                                            : "pool geometry constant of another geometry",
+                        c.operandVa);
+      }
+      unsigned int base = 0;
+      for (const auto& a : IW4x32_PoolAddresses)
+      {
+        const auto value = *reinterpret_cast<unsigned int*>(a.operandVa);
+        const auto offset = PoolAddressOffset(a.offset, geom);
+        if (value < offset || (base && value - offset != base))
+          return PairFail("pool address site", a.operandVa); // the block, or an anchor of another geometry
+        base = value - offset;
+      }
+      if (!base || !InImage(base) || base == IW4x32_Pool_StockBase)
+        return PairFail("pool block", 0);
+      out.poolBase = base;
+      out.parentCap = parentCap;
+      out.childCap = childCap;
+      out.child0Base = geom.Child0Base ? geom.Child0Base : parentCap + 1;
+      return true;
+    }
+
+    // An engine that already carries this table set, verified. Returns the geometry to adopt, or null with the
+    // reason printed. Nothing here writes: pairing is decided from what the exe holds.
+    const PairResult* PairPrePatchedEngine()
+    {
+      static PairResult out;
+      out = PairResult();
+      const auto imageEnd = ImageEndVa();
+      if (!PairArrays())
+        return nullptr;
+      for (const auto& s : IW4x32_SizeConstants)
+        if (*reinterpret_cast<unsigned int*>(s.operandVa) != s.newValue) // the size constants ARE the player count
+        {
+          PairFail("size constant", s.operandVa);
+          return nullptr;
+        }
+      for (const auto& o : IW4x32_DualOperands)
+      {
+        const auto value = *reinterpret_cast<unsigned int*>(o.operandVa);
+        const auto base = PairArrayBase(o.array);
+        if (value != base + o.oursOffset && value != base + o.stockOffset) // the layout switch owns these two
+        {
+          PairFail("dual operand", o.operandVa);
+          return nullptr;
+        }
+      }
+      for (const auto& p : IW4x32_CvarDomains)
+        if (!HasNewBytes(p))
+        {
+          PairFail("dvar domain", p.va);
+          return nullptr;
+        }
+      for (const auto& p : IW4x32_CodePatches) // only a dual site may still hold its stock bytes: the switch writes it
+        if (!p.dual && !HasNewBytes(p))
+        {
+          PairFail("code patch", p.va);
+          return nullptr;
+        }
+      for (const auto& h : IW4x32_Hooks)
+      {
+        // Every hook site must already jmp somewhere inside the exe image - its own injected code. Stock bytes
+        // mean nobody hooked it; a target outside the image is a hook to some module's stub, ours included, and
+        // hooking a hook would run one patcher's stub under another's idea of the layout.
+        const auto jump = *reinterpret_cast<const int*>(h.va + 1);
+        const auto target = h.va + 5 + static_cast<unsigned int>(jump);
+        if (*reinterpret_cast<const unsigned char*>(h.va) != 0xE9 || target < IW4x32_ImageBase || target >= imageEnd)
+        {
+          PairFail("hook site", h.va);
+          return nullptr;
+        }
+      }
+      if (!PairPool(out))
+        return nullptr;
+      return &out;
+    }
     void ApplyPool(const PoolGeometry* geometry)
     {
       const auto base = static_cast<unsigned int>(reinterpret_cast<unsigned int>(g_Pool));
@@ -2710,7 +2945,37 @@ namespace Components
                     geometry->ChildCap,
                     geometry->Child0Base ? geometry->Child0Base : geometry->ParentCap + 1);
     if (!VerifyEngine()) // nothing is written unless every byte the tables expect is there
+    {
+      // IW4x-32: not the stock engine. The other answer is that it is OUR engine - the same table set applied
+      // to the file (patch_engine P1-P7) instead of in memory. Verify it and pair, or say so and touch nothing.
+      // iw4x32-nopair keeps the refusal for an A/B: the same exe, the component refusing it the old way.
+      const auto* paired = DisabledByFile("iw4x32-nopair") ? nullptr : PairPrePatchedEngine();
+      if (paired == nullptr)
+      {
+        for (auto& a : g_Arrays) // PairArrays fills as it verifies: a refusal must leave nothing half-pointed
+          a = nullptr;
+        Logger::Print("IW4x32: iw4x.exe is neither the stock r5154 engine these tables patch, nor an engine that "
+                      "already carries that patch set - nothing is patched");
+        return;
+      }
+      g_Pool = reinterpret_cast<void*>(static_cast<uintptr_t>(paired->poolBase)); // the probes read the block the
+      g_PoolBase = paired->poolBase;                                              // exe addresses; it is never ours
+      g_PoolParentCap = paired->parentCap;                                        // to free
+      g_PoolChildCap = paired->childCap;
+      g_PoolChild0Base = paired->child0Base;
+      InstallClientMaskHooks(); // the client mask above 32 players and the party guard are ours to install: a
+      Utils::Hook(0x5028B0, PartyTimeout_Stub, HOOK_JUMP).install()->quick(); // file-pass patch set knows nothing
+      PointDllGlobals();       // of them, and the DLL's own Game:: pointers now address the arrays in the image
+      AddVectoredExceptionHandler(1, &CrashWatcher);
+      FlushInstructionCache(GetCurrentProcess(), nullptr, 0);
+      g_Patched = true;
+      Logger::Print("IW4x32: paired an already-patched iw4x.exe - {} arrays read from the image, nothing "
+                    "rewritten, its {} hook stubs left as they are, our client-mask hooks added, up to {} players, "
+                    "script pool {:#x} ({} + 2x{} entries, child0 base {:#x})",
+                    IW4x32_ArraysCount, IW4x32_HooksCount, static_cast<int>(Game::MAX_CLIENTS),
+                    paired->poolBase, paired->parentCap, paired->childCap, paired->child0Base);
       return;
+    }
     if (!AllocateArrays())
       return;
     if (withPool && !AllocatePool())
