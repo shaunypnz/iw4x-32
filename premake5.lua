@@ -75,6 +75,61 @@ newoption {
   value = "PATH"
 }
 
+-- IW4x-32: SDL2, the window of the native Vulkan renderer (src/Utils/SDL2/). Like the Vulkan loader it
+-- is a machine's library, not something we ship: --sdl2=PATH names an SDL2 development folder, and
+-- without one the SDL2 calls compile out with IW4X32_NO_SDL2.
+newoption {
+  trigger = "sdl2",
+  description = "Optional, path to an SDL2 development folder (include/SDL2/SDL.h, Lib32/SDL2.lib) the client links against: --sdl2=PATH.",
+  value = "PATH"
+}
+
+-- IW4x-32: is there an SDL2 development folder in reach, and where is it? The answer decides whether
+-- src/Utils/SDL2/ compiles the real window or its refusal, so the rule lives in this file - a build
+-- that reads --sdl2=PATH and SDL2_DIR and then ignores them is worse than one that refuses: an SDL2
+-- install going unused is exactly the mistake a native build makes once. The same rule sits in a
+-- deps/premake/sdl2.lua in trees that carry one; iw4x32_sdl2() is what a checkout without that
+-- file - the release build, whose dependencies are submodules that hold no SDL2 - falls back to.
+function iw4x32_sdl2()
+  local roots = {}
+  local named = _OPTIONS["sdl2"]
+
+  if named and named ~= "" then
+    table.insert(roots, named)
+  end
+
+  if os.getenv("SDL2_DIR") then
+    table.insert(roots, os.getenv("SDL2_DIR"))
+  end
+
+  table.insert(roots, path.join(dependencies.basePath, "sdl2"))
+
+  for _, root in ipairs(roots) do
+    -- SDL2 ships its headers as <SDL2/SDL.h>, which is how src/Utils/SDL2/ includes them: the folder on
+    -- the include path is the one that HOLDS the SDL2 folder, never the SDL2 folder itself.
+    for _, include in ipairs({"include", ""}) do
+      local includeDir = path.join(root, include)
+
+      if os.isfile(path.join(includeDir, "SDL2", "SDL.h")) then
+        local found = {root = root, include = includeDir, lib = nil}
+
+        for _, lib in ipairs({"Lib32", "Lib", "lib"}) do
+          local libDir = path.join(root, lib)
+
+          if os.isfile(path.join(libDir, "SDL2.lib")) or os.isfile(path.join(libDir, "SDL2.dll.a")) then
+            found.lib = libDir
+            break
+          end
+        end
+
+        return found
+      end
+    end
+  end
+
+  return nil
+end
+
 newaction {
   trigger = "version",
   description = "Returns the version string for the current commit of the source code.",
@@ -245,6 +300,11 @@ workspace "iw4x"
   project "iw4x"
     kind "SharedLib"
     language "C++"
+    -- IW4x-32: the glob below is what puts src/Utils/SDL2/ (the SDL2 window and the Vulkan surface of
+    -- the native renderer) in the project: a new file in a folder the glob covers needs no build edit.
+    -- Its SDL2 calls compile out of this Win32 project when no SDL2 development folder is in reach
+    -- (see iw4x32_sdl2() above); iw4x32/tools/vulkan_surface_test.sh compiles the same files with the
+    -- native toolchain, where SDL2 really is there.
     files {
       "./src/**.rc",
       "./src/**.hpp",
@@ -279,6 +339,29 @@ workspace "iw4x"
     forceincludes  { "STDInclude.hpp" }
 
     dependencies.imports()
+
+    -- IW4x-32: SDL2 for src/Utils/SDL2/, applied only when no dependency file answered first - a tree
+    -- with deps/premake/sdl2.lua has that file link SDL2 or define the refusal, and a second mechanism
+    -- doing the same would make the project's flags depend on which one ran last. The line it prints is
+    -- the evidence a build log reads: which answer the tree took, and where the SDL2 came from.
+    if sdl2 == nil then
+      local sdl2Found = iw4x32_sdl2()
+
+      if sdl2Found then
+        includedirs {sdl2Found.include}
+
+        if sdl2Found.lib then
+          libdirs {sdl2Found.lib}
+          links {"SDL2"}
+        end
+
+        print("iw4x32: SDL2 at " .. sdl2Found.include .. " - src/Utils/SDL2/ compiles the window for real"
+              .. (sdl2Found.lib and (" (links " .. sdl2Found.lib .. ")") or " (headers only, no SDL2.lib found)"))
+      else
+        defines {"IW4X32_NO_SDL2"}
+        print("iw4x32: no SDL2 development folder in reach - src/Utils/SDL2/ compiles its refusal (IW4X32_NO_SDL2)")
+      end
+    end
 
         -- Pre-build
         local cwd = os.getcwd()

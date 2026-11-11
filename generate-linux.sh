@@ -98,6 +98,12 @@ se_set=
 no_se=
 se_up=
 
+# IW4x-32: an SDL2 development folder for the native Vulkan window code (src/Utils/SDL2/).
+#
+# Nothing is vendored for it: SDL2 is a machine's library, and premake5.lua's iw4x32_sdl2() is the
+# rule that turns "no SDL2 in reach" into IW4X32_NO_SDL2 rather than into a link error.
+sdl_dir=
+
 bcfg=
 
 while test $# -ne 0; do
@@ -120,6 +126,8 @@ while test $# -ne 0; do
       diag "  --sentry-file <f>   Load the Sentry configuration from this file (sentry.bash by default)."
       diag "  --no-sentry         Compile out crash reporting even if a DSN is configured."
       diag "  --sentry-upload     Upload debug symbols and sources with sentry-cli after building."
+      diag "  --sdl2 <dir>        SDL2 development folder (include/SDL2/SDL.h) for the native Vulkan"
+      diag "                      window code; without one its SDL2 calls compile out (premake5.lua, iw4x32_sdl2)."
       diag
       diag "By default this script will build the debug configuration."
       diag
@@ -201,6 +209,14 @@ while test $# -ne 0; do
       fi
       se_file="$1"
       se_set=true
+      shift
+      ;;
+    --sdl2)
+      shift
+      if test $# -eq 0; then
+        error "folder expected after --sdl2; run $prog -h for details"
+      fi
+      sdl_dir="$1"
       shift
       ;;
     --no-sentry)
@@ -703,6 +719,14 @@ gen_bbuild ()
   pargs="--file=premake5-linux.lua"
   if test -n "$se_dsn"; then
     pargs="$pargs --sentry-dsn=$se_dsn"
+  fi
+
+  # IW4x-32: SDL2 for src/Utils/SDL2/ (the window of the native Vulkan renderer). An option, an
+  # SDL2_DIR in the environment, or nothing at all - premake5.lua's iw4x32_sdl2() decides (a tree that
+  # carries deps/premake/sdl2.lua gets the same rule from that file), and the project prints which
+  # answer it took.
+  if test -n "$sdl_dir"; then
+    pargs="$pargs --sdl2=$sdl_dir"
   fi
 
   # Deliberate unquoted expansion for premake argument word splitting.
