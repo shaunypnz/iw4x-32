@@ -1,5 +1,7 @@
 #pragma once
 
+#include "VulkanResources.hpp" // IW4x-32: the native renderer's device and resource layer
+
 namespace Components
 {
   // IW4x-32: turns the stock iw4x.exe (sized for 18 players) into a 32-player engine at startup,
@@ -32,6 +34,13 @@ namespace Components
     // in use, the peak since startup, the longest run of fully-free words (32 units each) and the shortest such
     // run seen. A report that ends a match has to say whether the arena was empty when it did.
     static void ScriptArena(unsigned int& used, unsigned int& peak, unsigned int& run, unsigned int& worstRun);
+
+    // IW4x-32: the Vulkan resource layer of the native renderer (VulkanResources.cpp) attached to the
+    // device the native path made, or let go of before that device is destroyed. Attaching is what
+    // initializes the layer - there is no device before VulkanDevice::CreateVulkanDevice made one, and
+    // the Device handed in is the proof that there is one now.
+    static bool AttachVulkanDevice(const VulkanDevice::Device& device, const char** error);
+    static void DetachVulkanDevice();
 
   private:
     static void PatchEngine();

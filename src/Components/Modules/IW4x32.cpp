@@ -8,11 +8,12 @@
 
 #include "IW4x32.hpp"
 #include "IW4x32Tables.hpp"
-#include "Command.hpp" // IW4x-32: iw4x32_poolstats / iw4x32_framestats
+#include "Command.hpp" // IW4x-32: iw4x32_poolstats / iw4x32_framestats / iw4x32_vkres
 #include "Network.hpp"  // IW4x-32: the connectionless dispatch counters on the console CPU line
 #include "Threading.hpp" // IW4x-32: the dedicated server's packet-pump counters (FrameTime::Wait*)
 #include "Events.hpp"  // IW4x-32: register them once the server is up
 #include "Logger.hpp"
+#include "VulkanResources.hpp" // IW4x-32: the resource layer the native Vulkan renderer allocates through
 #include <cstring> // IW4x-32: memcpy / strcmp in the engine patch tables
 #include <cstdlib> // IW4x-32: atoi on the client's slot-count marker
 #include <intrin.h> // IW4x-32: __readfsdword - the loader list read in CrashModules
@@ -37,6 +38,10 @@ namespace Components
     bool g_Layout32 = true;      // the image is written with our (32-player) bytes
     bool g_ServerIs32 = true;    // this process hosts a server with more than 18 slots
     int g_ServerSlots = 32;      // IW4x-32: sv_maxclients of this process's server (the connect check reads it)
+
+    // IW4x-32: whether the Vulkan resource layer of the native renderer is attached to a device (see
+    // AttachVulkanDevice). False means no vkCreateImage / vkCreateBuffer of ours has ever been asked for.
+    bool g_VulkanResources = false;
 
     struct DualSite
     {
@@ -1178,6 +1183,23 @@ namespace Components
         g_FrameSlow = g_FrameTotal = g_FrameSum = g_FrameWorst = 0;
         g_CpuMs = cpuMs;
         g_FrameRealMs = 0;
+      });
+    }
+
+    // IW4x-32: iw4x32_vkres - the Vulkan resource layer as numbers, on the client console. A renderer
+    // change that leaks a texture or a vertex buffer shows up as a live count that never comes back
+    // down, and a run that allocated nothing at all shows a layer that was never attached - which is
+    // the difference between "the Vulkan path drew" and "the Vulkan path was never asked to".
+    void AddVulkanResourceCommand()
+    {
+      Command::Add("iw4x32_vkres", []()
+      {
+        Logger::Print("IW4X32_VKRES;{};{};{};{};{}\n",
+                      g_VulkanResources ? 1 : 0,
+                      VulkanResources::HasDeviceLocalMemory() ? 1 : 0,
+                      VulkanResources::LiveBuffers(),
+                      VulkanResources::LiveImages(),
+                      VulkanResources::AllocatedBytes());
       });
     }
 
@@ -2784,6 +2806,7 @@ namespace Components
   {
     PatchEngine();
     Events::OnSVInit(AddStatsCommands); // IW4x-32: the pool / frame-time ladder (see AddStatsCommands)
+    Events::OnClientInit(AddVulkanResourceCommand); // IW4x-32: the native renderer's resource layer (see above)
   }
 
   void IW4x32::RecordFrame(const int msec)
@@ -3046,6 +3069,36 @@ namespace Components
   unsigned int IW4x32::PoolChild0Base()
   {
     return g_PoolChild0Base;
+  }
+
+  // IW4x-32: the Vulkan resource layer of the native renderer (VulkanResources.cpp) attached to the
+  // device the native path made. It initializes here and not at component init because the layer is
+  // nothing without a device: VulkanDevice.cpp's CreateVulkanDevice is what proves the device layer is
+  // up, and the Device object handed in is the proof. An iGPU with no device-local memory is reported
+  // by the layer itself, at this moment, rather than on the hundredth material.
+  //
+  // Read the honest version of "it is in the build": the Release image is /GL + /LTCG, and a function
+  // nothing calls is dropped from it. iw4x.dll therefore contains this layer's counter accessors (the
+  // iw4x32_vkres command above calls them) but not its vkCreateImage / vkAllocateMemory path - the same
+  // is true of the merged VulkanDevice.cpp, whose log strings are absent from the image for the same
+  // reason. The line that makes it live is a caller: the native loader attaching the device it made.
+  bool IW4x32::AttachVulkanDevice(const VulkanDevice::Device& device, const char** error)
+  {
+    if (!VulkanResources::Init(device, error))
+      return false;
+
+    g_VulkanResources = true;
+    Logger::Print("IW4X32: the Vulkan resource layer is live - {} buffer(s), {} image(s), {} byte(s) tracked\n",
+                  VulkanResources::LiveBuffers(), VulkanResources::LiveImages(), VulkanResources::AllocatedBytes());
+    return true;
+  }
+
+  // IW4x-32: free what the layer holds, before the device underneath it is destroyed (vid_restart, a
+  // failed init, shutdown). The layer reports what it destroyed, so a leak is a number in that line.
+  void IW4x32::DetachVulkanDevice()
+  {
+    VulkanResources::Shutdown();
+    g_VulkanResources = false;
   }
 
 } // namespace Components
