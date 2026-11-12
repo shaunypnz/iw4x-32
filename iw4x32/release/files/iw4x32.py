@@ -4,13 +4,17 @@ this file. IW4x-32.sh runs it. Windows: iw4x32.ps1 next to it does the same step
 
   ./IW4x-32.sh                          first time: sets everything up; then the start menu
   ./IW4x-32.sh --play                   IW4x-32 (IW4x-32 servers up to 64 players, and normal ones)
+  ./IW4x-32.sh --native                 IW4x-32 in a native Linux process (Vulkan, no Wine / Proton) - same servers
+  ./IW4x-32.sh --wine                   IW4x-32 the classic way: Steam's Proton, or Wine outside Steam
+  ./IW4x-32.sh --native-server [port]   64-player dedicated server, native (no Wine)
   ./IW4x-32.sh --vanilla                vanilla IW4x (the official IW4x launcher updates and starts it)
-  ./IW4x-32.sh --server [port]          64-player dedicated server (port 28960, runs under Wine)
+  ./IW4x-32.sh --server [port]          64-player dedicated server (port 28960; Wine, or native with --native)
   ./IW4x-32.sh --vanilla-server [port]  normal 18-player IW4x server
   ./IW4x-32.sh --setup [game folder]    do the setup again, e.g. for another game folder
   ./IW4x-32.sh --uninstall              put the official IW4x files back, remove the menu entries
   ./IW4x-32.sh --fix                    the game crashed / hangs and Steam will not start it: close what is left
   --no-update  skip the update check     --dry  only print what would be started
+  --self-test  check this launcher's own logic - both runtimes, the native machine checks, updates; starts no game
   --direct     Steam install: run iw4x.exe with the game's Proton even when the Steam launch option is set
   anything else goes to the game, e.g.  +connect 1.2.3.4:28960
 
@@ -33,7 +37,17 @@ Steam (Proton): the game runs in its own Proton prefix. With the Steam launch op
     bash -c 'exec "${@/iw4mp.exe/iw4x.exe}"' -- %command%
 Steam starts it (and the Play button in Steam works too); without it, the game's Proton is run directly.
 Test hooks: IW4X32_GAME, IW4X32_STEAM, IW4X32_UPDATE_URL, IW4X32_LAUNCHER_RELEASE_URL,
-IW4X32_NO_START=1 (print the command, start nothing), IW4X32_NO_SHORTCUTS=1, IW4X32_YES=1 (uninstall without asking)."""
+IW4X32_NO_START=1 (print the command, start nothing), IW4X32_NO_SHORTCUTS=1, IW4X32_YES=1 (uninstall without asking),
+IW4X32_NATIVE=<path to iw4x-native> (a loader outside the kit - private / test kits), IW4X32_NO_NATIVE=1 (hide the
+native run), IW4X32_NO_CHECKS=1 (skip the native machine checks: the loader's own error answers instead),
+IW4X32_DESKTOP_DIR=<dir> (where the menu entries go).
+
+How to run (the runtime): "iw4x32" starts the real IW4x client - official iw4x.exe + our iw4x.dll - either under
+Steam's Proton / Wine ("wine") or natively, in a 32-bit Linux process with DXVK-native on Vulkan, no Wine and no DX9
+("native"). Same client, same protocol: a native player, a Wine/Proton player and a Windows player join the same
+IW4x server. The native run exists only when the kit has files/iw4x-native (private builds till the owner promotes
+it), so --native there is refused. files/runtime.txt remembers the last choice; --native / --wine pick it for THIS
+start only."""
 import base64, glob, hashlib, io, json, os, re, select, shlex, shutil, signal, subprocess, sys, tarfile, tempfile, time
 import urllib.parse, urllib.request
 
@@ -41,6 +55,26 @@ REPO = "shaunypnz/iw4x-32"
 OFFICIAL_VER = "r5318"
 # IW4x-32: the player count files/iw4x.dll is built for (Game::MAX_CLIENTS) - what "host" runs
 PLAYERS = 64
+# IW4x-32: the native Linux (Vulkan) loader. Promoting it is ONE switch in the release file set: a release that
+# lists files/iw4x-native ships the loader (the update check brings it into every kit), and that is what makes the
+# menu offer the native run - the public kit does not list it, so the option stays hidden there. NATIVE_DEFAULT
+# then makes it the default run: only once phase f passed on the test box, the mixed native + Wine/Proton join
+# passed here and the owner said go (owner 2026-10-23: private builds only until then).
+NATIVE_FILE = "iw4x-native"                                        # under files/, like every other program file
+NATIVE_DEFAULT = False
+RUNTIMES = ["native", "wine"]
+# what a native run needs that a 64-bit desktop does not have by itself: the i386 runtime (the loader is a 32-bit
+# process) and the i386 Vulkan loader that DXVK-native opens. Debian/Ubuntu names - Steam Deck ships them.
+I386_PKGS = {"libc.so.6": "libc6:i386", "libm.so.6": "libc6:i386", "libdl.so.2": "libc6:i386",
+             "libpthread.so.0": "libc6:i386", "librt.so.1": "libc6:i386", "libnsl.so.1": "libnsl2:i386",
+             "libgcc_s.so.1": "libgcc-s1:i386", "libstdc++.so.6": "libstdc++6:i386",
+             "libSDL2-2.0.so.0": "libsdl2-2.0-0:i386", "libvulkan.so.1": "libvulkan1:i386",
+             "libasound.so.2": "libasound2:i386", "libpulse.so.0": "libpulse0:i386",
+             "libX11.so.6": "libx11-6:i386", "libXext.so.6": "libxext6:i386", "libdrm.so.2": "libdrm2:i386",
+             "libwayland-client.so.0": "libwayland-client0:i386", "libxkbcommon.so.0": "libxkbcommon0:i386"}
+I386_OTHER = "(rpm: glibc.i686, libstdc++.i686, SDL2.i686, vulkan-loader.i686)"
+VK_PKGS = {"amd": "mesa-vulkan-drivers (Radeon / RADV)", "intel": "mesa-vulkan-drivers (ANV)",
+           "nvidia": "the nvidia driver package your card needs (it ships its own Vulkan ICD)"}
 OFFICIAL_DLL = "d9f1440a6e17f397b1eb8a7d770d1be8043b9ea276b9c8775a4677cdaa10615d"
 OFFICIAL_EXE = "49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009"
 V1_EXE = "2609c2687dd2ffb3f32c7687ed04f57b38ef6879c14b1c546faf8bfd8f35ea6b"   # iw4x.exe of an IW4x-32 v1.x install
@@ -65,7 +99,9 @@ MW2 = "Call of Duty Modern Warfare 2"
 FILES = os.path.dirname(os.path.abspath(__file__))        # <kit>/files: the program, backup/ and mode.txt
 KIT = os.path.dirname(FILES)                              # the IW4x-32 folder
 GAME = None
-MODES = ["iw4x32", "vanilla", "server", "vanilla-server", "uninstall", "fix"]
+MODES = ["iw4x32", "iw4x32", "vanilla", "server", "vanilla-server", "uninstall", "fix"]
+# IW4x-32: [0] is the native run, [1] the Wine/Proton one - the same "iw4x32" mode, so an older kit's mode.txt and
+# menu entries keep working. Which of the two the number keys mean follows the player's last choice.
 REMOTE_EVERY = 15 * 60        # s between the official launcher's online checks (GitHub: 60 requests an hour)
 # what IW4x-32 v1.x, v2.0 and the v2.1 test builds had in the IW4x-32 folder; everything is IW4x-32.sh + files/ now
 LEGACY = ["AI_CREDITS.txt", "CHANGES.txt", "SHA256SUMS.txt", "IW4x-32 Launcher.bat", "IW4x-32 Setup.bat",
@@ -76,7 +112,8 @@ LEGACY = ["AI_CREDITS.txt", "CHANGES.txt", "SHA256SUMS.txt", "IW4x-32 Launcher.b
           "latest.json", "files/iw4x.exe"]                                   # the last two: v1.x kits
 LEGACY_DIRS = ["source"]                                                    # v1.x: the patch manifests
 DESKTOP = ["iw4x32.desktop", "iw4x32-server.desktop", "iw4x32-vanilla.desktop",
-           "iw4x32-play.desktop", "iw4x32-vanilla-server.desktop"]    # the last two: made by the v2.1 test builds
+           "iw4x32-play.desktop", "iw4x32-vanilla-server.desktop", "iw4x32-native.desktop",
+           "iw4x32-native-server.desktop"]    # the last three: made by the v2.1 test builds; the native pair is new
 
 
 class Opts:
@@ -90,6 +127,7 @@ class Opts:
     game_args = []
     warned = False
     detached = False
+    runtime = None                       # this start only: native | wine (files/runtime.txt is the standing choice)
 
 
 O = Opts()
@@ -99,7 +137,15 @@ def parse(argv):
     i = 0
     while i < len(argv):
         a = argv[i]
-        if a in ("--play", "--iw4x32"):
+        if a == "--self-test":
+            sys.exit(self_test())        # the launcher's own logic: no game, no network, nothing installed
+        if a in ("--native", "--iw4x32-native"):
+            O.mode, O.runtime = "iw4x32", "native"
+        elif a in ("--wine", "--proton", "--iw4x32-wine"):
+            O.mode, O.runtime = "iw4x32", "wine"
+        elif a == "--native-server":
+            O.mode, O.runtime = "server", "native"
+        elif a in ("--play", "--iw4x32"):
             O.mode = "iw4x32"
         elif a in ("--vanilla", "--server", "--vanilla-server", "--uninstall", "--fix"):
             O.mode = a[2:]
@@ -448,7 +494,9 @@ def update_kit(m):
             dst = os.path.join(KIT, p)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             os.replace(os.path.join(stage, p), dst)
-            os.chmod(dst, 0o755 if p.endswith((".sh", ".py")) else 0o644)
+            # IW4x-32: the executable bit is part of the file: the scripts AND the native loader (files/iw4x-native)
+            # come back runnable, or a native kit updates itself into a kit that cannot start anything.
+            os.chmod(dst, 0o755 if p.endswith((".sh", ".py")) or p == "files/" + NATIVE_FILE else 0o644)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
 
@@ -548,7 +596,25 @@ def copy_kit(dest):
 
 
 def apps_dir():
+    d = os.environ.get("IW4X32_DESKTOP_DIR")                       # kit_test.sh / the native kit tests keep it local
+    if d:
+        return d
     return os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "applications")
+
+
+def shortcut_entries():
+    """one app-menu entry per way to run: the default one, the Wine/Proton one, and - when this kit carries the
+    loader - the native Linux one and its server. Same options the menu and the command line take."""
+    out = [("iw4x32.desktop", "IW4x-32", f"Modern Warfare 2 with up to {PLAYERS} players", ""),
+           ("iw4x32-wine.desktop", "IW4x-32 (Wine/Proton)", "the same client under Steam's Proton or Wine", " --wine"),
+           ("iw4x32-server.desktop", "IW4x-32 Server", f"{PLAYERS}-player dedicated server (Wine/Proton)", " --server"),
+           ("iw4x32-vanilla.desktop", "IW4x (vanilla)", "The official IW4x", " --vanilla")]
+    if native_available():
+        out.insert(1, ("iw4x32-native.desktop", "IW4x-32 (native Linux)",
+                       "the real IW4x client on Vulkan, no Wine", " --native"))
+        out.append(("iw4x32-native-server.desktop", "IW4x-32 Server (native Linux)",
+                    f"{PLAYERS}-player dedicated server, no Wine", " --native-server"))
+    return out
 
 
 def make_shortcuts():
@@ -557,16 +623,17 @@ def make_shortcuts():
     sh = os.path.join(KIT, "IW4x-32.sh")
     try:
         os.makedirs(apps_dir(), exist_ok=True)
-        for f, name, comment, arg in (("iw4x32.desktop", "IW4x-32", f"Modern Warfare 2 with up to {PLAYERS} players", ""),
-                                      ("iw4x32-server.desktop", "IW4x-32 Server", f"{PLAYERS}-player dedicated server", " --server"),
-                                      ("iw4x32-vanilla.desktop", "IW4x (vanilla)", "The official IW4x", " --vanilla")):
+        keep = set()
+        for f, name, comment, arg in shortcut_entries():
+            keep.add(f)
             with open(os.path.join(apps_dir(), f), "w") as out:
                 out.write(f"[Desktop Entry]\nType=Application\nVersion=1.0\nName={name}\nComment={comment}\n"
                           f"Exec=sh {shlex.quote(sh)}{arg}\nPath={GAME}\nTerminal=true\nCategories=Game;\n")
-        for f in DESKTOP[3:]:
-            if os.path.exists(os.path.join(apps_dir(), f)):
+        for f in DESKTOP:                                       # older kits' entries, and the native pair once more
+            if f not in keep and os.path.exists(os.path.join(apps_dir(), f)):
                 os.remove(os.path.join(apps_dir(), f))
-        say("menu entries: IW4x-32, IW4x-32 Server, IW4x (vanilla) - in your applications menu (Games)")
+        say("menu entries: " + ", ".join(n for _, n, _, _ in shortcut_entries())
+            + " - in your applications menu (Games)")
     except OSError as e:
         say(f"could not make the menu entries ({e}) - start IW4x-32 with {sh}")
 
@@ -670,9 +737,173 @@ def migrate_legacy():
 def read_mode():
     try:
         w = open(F("mode.txt"), encoding="utf-8", errors="replace").read().split()
-        return w[0] if w and w[0] in MODES[:4] else "iw4x32"
+        return w[0] if w and w[0] in MODES else "iw4x32"
     except OSError:
         return "iw4x32"
+
+
+# ---- how to run it: native Linux (Vulkan) or Wine / Proton ------------------------------------------------------------
+def read_runtime():
+    """files/runtime.txt: the player's last choice (native | wine) - the kit's default when it says nothing"""
+    try:
+        w = open(F("runtime.txt"), encoding="utf-8", errors="replace").read().split()
+        return w[0] if w and w[0] in RUNTIMES else default_runtime()
+    except OSError:
+        return default_runtime()
+
+
+def save_runtime(r):
+    if r in RUNTIMES:
+        try:
+            open(F("runtime.txt"), "w").write(r + "\n")
+        except OSError:
+            pass
+
+
+def native_path():
+    """the loader this kit runs: files/iw4x-native, or - in a private / test kit - the one the environment names"""
+    p = os.environ.get("IW4X32_NATIVE")
+    p = os.path.expanduser(p) if p else F(NATIVE_FILE)
+    return p if os.access(p, os.X_OK) else None
+
+
+def ldconfig_lines():
+    # IW4X32_LDCONFIG: a captured `ldconfig -p` output - the kit tests reproduce a machine that has no i386 runtime
+    p = os.environ.get("IW4X32_LDCONFIG")
+    if p:
+        try:
+            return open(p, errors="replace").read()
+        except OSError:
+            return ""
+    # IW4x-32: ldconfig is not on PATH in every environment a start comes from (a menu entry, a test harness):
+    # an empty answer here would make "no i386 runtime" and "no 32-bit Vulkan driver" both lies, so the usual
+    # Debian/Ubuntu locations are asked by name before the probe gives up on reading the machine.
+    for c in (shutil.which("ldconfig"), "/usr/sbin/ldconfig", "/sbin/ldconfig"):
+        if not c:
+            continue
+        try:
+            return subprocess.run([c, "-p"], capture_output=True, text=True, timeout=30).stdout
+        except (OSError, subprocess.SubprocessError):
+            continue
+    return ""
+
+
+def native_available():
+    """the native run is in THIS kit only when its file set carries the loader - the one switch the promotion is"""
+    return os.environ.get("IW4X32_NO_NATIVE") != "1" and native_path() is not None
+
+
+def default_runtime():
+    return "native" if NATIVE_DEFAULT and native_available() and native_ok()[0] else "wine"
+
+
+def pick_runtime():
+    """how THIS start runs: what was asked for, else files/runtime.txt. Asking for the native run in a kit that has
+    no loader is an error, not a quiet switch to Wine - the player (or the shortcut) asked for something else."""
+    r = O.runtime or read_runtime()
+    if r == "native" and not native_available():
+        say(f"ERROR: this IW4x-32 has no native loader ({NATIVE_FILE} is not in the kit) - there is no native run "
+            "here; start IW4x-32 with --wine, or get a kit that carries it")
+        return None
+    return r
+
+
+def i386_libs():
+    """the sonames this machine has for a 32-bit process: ldconfig tags them (libc6), the 64-bit ones (libc6,x86-64).
+    Empty when ldconfig is missing - then nothing is claimed about the i386 runtime."""
+    return {l.strip().split()[0] for l in ldconfig_lines().splitlines() if "(libc6)" in l and "=>" in l}
+
+
+def missing_i386():
+    """the i386 libraries a native start needs: [] when they are all there"""
+    have = i386_libs()
+    if not have:
+        return []                                    # no ldconfig to ask: the loader itself answers
+    return sorted({pkg for son, pkg in I386_PKGS.items() if son not in have for pkg in [son]})
+
+
+def pkg_names(sonames):
+    """sonames -> the Debian/Ubuntu packages that carry them, in the order a player can paste them"""
+    return " ".join(sorted({I386_PKGS.get(s, s) for s in sonames}))
+
+
+def icd_manifests():
+    """the ICD manifests a Vulkan loader on this machine would read: the system folders, the extra folders
+    IW4X32_VK_ICD_DIR names (the kit tests), and VK_DRIVER_FILES / VK_ICD_FILENAMES - the manifest a run is
+    pinned to, which is how the test host keeps its driver to the GPU it renders on."""
+    dirs = [d for d in ("/usr/share/vulkan/icd.d", "/etc/vulkan/icd.d") if os.path.isdir(d)]
+    extra = os.environ.get("IW4X32_VK_ICD_DIR")
+    if extra:
+        dirs = [d for d in extra.split(os.pathsep) if os.path.isdir(d)] + dirs
+    man = [p for d in dirs for p in glob.glob(glob.escape(d) + "/*.json")]
+    for var in ("VK_DRIVER_FILES", "VK_ICD_FILENAMES"):
+        man += [p for p in os.environ.get(var, "").split(os.pathsep) if p.endswith(".json") and os.path.isfile(p)]
+    return man
+
+
+def icd_is_32(text, have):
+    """can a 32-bit process load this driver? A manifest that says so is read as it says (library_arch, or the
+    i386 path it loads). Most do not say: the radeon_icd.json mesa-vulkan-drivers installs on a multiarch Ubuntu
+    names only "libvulkan_radeon.so", and the LIBRARY decides then - it is loadable in 32-bit exactly when
+    ldconfig has that soname for (libc6), which is what mesa-vulkan-drivers:i386 installs. A manifest that names
+    no library at all is no Vulkan driver."""
+    m = re.search(r'"library_arch"\s*:\s*"(\d+)"', text)
+    if m:
+        return m.group(1) == "32"
+    if re.search(r"/i386-linux-gnu/|/lib32/", text):
+        return True
+    lib = re.search(r'"library_path"\s*:\s*"([^"]+)"', text)
+    return bool(lib) and os.path.basename(lib.group(1)) in have
+
+
+def vk_device():
+    """does this machine have a Vulkan device for a 32-bit process - and if not, which package is missing?
+    Two readings, and both have to be right: the 32-bit Vulkan loader, and an installable client driver a 32-bit
+    process can load - a 64-bit-only driver on a multiarch machine still leaves a 32-bit process with no device.
+    Never starts the game, never opens the GPU: it reads what the machine has installed. IW4X32_VK_ICD_DIR points
+    at extra manifest folders (the kit tests reproduce a machine whose drivers are 64-bit only)."""
+    have = i386_libs()
+    if "libvulkan.so.1" not in have:
+        return False, "no 32-bit Vulkan loader (libvulkan.so.1) here - install it: sudo apt install libvulkan1:i386"
+    man = icd_manifests()
+    n32 = 0
+    for p in man:
+        try:
+            t = open(p, errors="replace").read()
+        except OSError:
+            continue
+        if icd_is_32(t, have):
+            n32 += 1
+    if not n32:
+        who = "no Vulkan driver (ICD) is installed at all" if not man else \
+              "the Vulkan drivers here are 64-bit only (no driver a 32-bit process can load), and iw4x-native " \
+              "is a 32-bit process"
+        return False, (f"{who} - install it: sudo apt install {VK_PKGS['amd']}"
+                       f" (AMD/Intel), {VK_PKGS['nvidia']} (NVIDIA)")
+    return True, f"{n32} of {len(man)} Vulkan driver(s) loadable by a 32-bit process"
+
+
+def native_ok():
+    """can a native run start on this machine? (ok, why-not) - a missing Vulkan device names the driver package,
+    a missing i386 runtime names the exact packages; an unknown answer is a NO, never a quiet maybe"""
+    if not native_available():
+        return False, (f"this IW4x-32 has no native loader ({NATIVE_FILE} is not in it) - the Wine/Proton run is "
+                       "the one this kit ships")
+    if os.environ.get("IW4X32_NO_CHECKS") == "1":
+        return True, "machine checks skipped (IW4X32_NO_CHECKS=1) - the loader's own error answers instead"
+    bad = missing_i386()
+    if bad:
+        return False, (f"missing 32-bit libraries for iw4x-native: {pkg_names(bad)} "
+                       f"- sudo apt install {pkg_names(bad)} {I386_OTHER}")
+    return vk_device()
+
+
+def refuse_native(why):
+    """a native start the machine cannot carry: say what is missing, name the package, and leave a non-zero exit.
+    Never a silent fall-back to Wine - the player chose the native run."""
+    say(f"ERROR: the native Linux run needs something this machine does not have: {why}")
+    say("Wine/Proton still works: ./IW4x-32.sh --wine")
+    return 1
 
 
 def read_key(timeout, keys="\r\n123456"):
@@ -694,33 +925,62 @@ def read_key(timeout, keys="\r\n123456"):
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
+TAIL = ["vanilla", "server", "vanilla-server", "uninstall", "fix"]    # what follows the two Play entries
+
+
 def select_mode():
-    default = read_mode()
-    if os.environ.get("IW4X32_NO_MENU") == "1" or not interactive():
-        return default
-    d = MODES.index(default) + 1
-    print(f"\n  IW4x-32 {installed_version()} - Modern Warfare 2 with up to {PLAYERS} players\n  game: {GAME}")
-    print(f"  {version_status()}\n")
-    print(f"  [1] Play IW4x-32          IW4x-32 servers up to {PLAYERS} players, and normal ones")
-    print("  [2] Play vanilla IW4x     the official IW4x")
-    print(f"  [3] Host a {PLAYERS}-player server   (port {O.port})")
-    print(f"  [4] Host a normal IW4x server (port {O.port})")
-    print("  [5] Uninstall IW4x-32")
-    print("  [6] Game crashed / stuck?  closes what is left of it, so Steam can start it again\n")
-    print(f"  Press 1-6 - or wait: [{d}] starts in 5 s ", end="", flush=True)
-    try:
-        c = read_key(5)
-    except Exception:                                   # no real terminal: a line, then
-        c = sys.stdin.readline().strip()[:1] if select.select([sys.stdin], [], [], 5)[0] else ""
-    pick = int(c) if c in ("1", "2", "3", "4", "5", "6") else d
-    print(pick)
-    mode = MODES[pick - 1]
-    if mode in MODES[:4]:
+    """the start menu. With a native loader in the kit the two ways to run IW4x-32 are side by side - native Linux
+    (DXVK-native on Vulkan, no Wine) and Wine/Proton - and N / W switch how Play and Hosting run; the last choice
+    is remembered in files/runtime.txt. Without a loader in the kit the menu is the old one."""
+    rt = O.runtime or read_runtime()
+    if not native_available():
+        rt = "wine"
+    while True:
+        if os.environ.get("IW4X32_NO_MENU") == "1" or not interactive():
+            return rt
+        nat = native_available()
+        play = 0 if rt == "native" else 1
+        lines_ = (["  [1] Play IW4x-32, native Linux  the real IW4x client on Vulkan - no Wine, no DX9",
+                   "  [2] Play IW4x-32, Wine/Proton   the same client through Steam's Proton or Wine"] if nat else
+                  [f"  [1] Play IW4x-32          IW4x-32 servers up to {PLAYERS} players, and normal ones"])
+        base = len(lines_)
+        lines_ += [f"  [{base + 1}] Play vanilla IW4x     the official IW4x",
+                   f"  [{base + 2}] Host a {PLAYERS}-player server   (port {O.port}; "
+                   f"{'native Linux' if rt == 'native' else 'Wine/Proton'})",
+                   f"  [{base + 3}] Host a normal IW4x server (port {O.port})",
+                   f"  [{base + 4}] Uninstall IW4x-32",
+                   f"  [{base + 5}] Game crashed / stuck?  closes what is left of it, so Steam can start it again"]
+        print(f"\n  IW4x-32 {installed_version()} - Modern Warfare 2 with up to {PLAYERS} players\n  game: {GAME}")
+        print(f"  {version_status()}\n")
+        for l in lines_:
+            print(l)
+        if nat:
+            ok, why = native_ok()
+            print("\n  how it runs: " + ("native Linux (Vulkan)" if rt == "native" else "Wine / Proton")
+                  + ("" if ok else f" - not possible on this PC: {why}") + "   (N or W switches it)")
+        m = read_mode()
+        d = play if m == "iw4x32" else base + TAIL.index(m) if m in TAIL else play
+        print(f"  Press 1-{len(lines_)}" + (", N or W" if nat else "") + f" - or wait: [{d + 1}] starts in 5 s ",
+              end="", flush=True)
         try:
-            open(F("mode.txt"), "w").write(mode + "\n")
-        except OSError:
-            pass
-    return mode
+            c = read_key(5, "\r\n1234567nw")
+        except Exception:                                   # no real terminal: a line, then
+            c = sys.stdin.readline().strip()[:1].lower() if select.select([sys.stdin], [], [], 5)[0] else ""
+        if c in ("n", "w") and nat:
+            rt = "native" if c == "n" else "wine"
+            save_runtime(rt)                                # switching at the menu is a choice: remember it
+            continue
+        print(c if c.isdigit() else "")
+        i = int(c) - 1 if c.isdigit() and 1 <= int(c) <= len(lines_) else d
+        mode = "iw4x32" if i < base else TAIL[i - base]
+        O.runtime = rt
+        if mode in MODES:
+            try:
+                open(F("mode.txt"), "w").write(mode + "\n")
+            except OSError:
+                pass
+        save_runtime(rt)
+        return mode
 
 
 # ---- start things -------------------------------------------------------------------------------------------------------
@@ -757,7 +1017,8 @@ def launch_option_set(appid):
 
 # ---- after a crash: what is left of the game keeps Steam saying "running" ---------------------------------------------
 def is_game_exe(name):
-    return name.lower().startswith(("iw4x.exe", "iw4x (mm)", "iw4mp.exe"))
+    # IW4x-32: the native client's process is the loader itself, not iw4x.exe
+    return name.lower().startswith(("iw4x.exe", "iw4x (mm)", "iw4mp.exe", "iw4x-native"))
 
 
 def leftovers():
@@ -875,6 +1136,30 @@ def play(start):
 
 
 def start_game():
+    """the run the player chose: native Linux (Vulkan, no Wine) or Wine / Proton"""
+    r = pick_runtime()
+    if r is None:
+        return 1
+    return start_game_native() if r == "native" else start_game_wine()
+
+
+def start_game_native():
+    """the real IW4x client in a native 32-bit process: the loader maps the official iw4x.exe and our iw4x.dll from
+    the game folder (IW4X_GAME_DIR) and DXVK-native renders it on Vulkan. No Wine, no Proton, no DX9 driver - and
+    the same protocol, so this client joins the same IW4x servers the Wine and Windows players do."""
+    b = native_path()
+    ok, why = native_ok()
+    if not ok:
+        return refuse_native(why)
+    if not os.path.isfile(G("iw4x.exe")) or not os.path.isfile(G("iw4x.dll")):
+        say(f"ERROR: no iw4x.exe / iw4x.dll in {GAME} - run ./IW4x-32.sh --setup")
+        return 1
+    say(f"starting IW4x-32 natively - 32-bit process, DXVK-native on Vulkan, no Wine ({b})")
+    env = dict(os.environ, IW4X_GAME_DIR=GAME, IW4X32_WINDOWED=os.environ.get("IW4X32_WINDOWED", "1"))
+    return run([b, GAME] + (["--"] + O.game_args if O.game_args else []), cwd=GAME, env=env)
+
+
+def start_game_wine():
     """what the official IW4x launcher does, minus its file check: without steam_appid.txt / SteamAppId Steam takes
     over and starts normal MW2"""
     if not os.path.isfile(G("iw4x.exe")):
@@ -912,7 +1197,12 @@ def start_game():
     return run([f"{proton}/proton", "run", G("iw4x.exe")] + O.game_args, cwd=GAME, env=env)
 
 
-def start_server(slots, cfg, label):
+def start_server(slots, cfg, label, runtime=None):
+    r = runtime or pick_runtime()
+    if r is None:
+        return 1
+    if r == "native":
+        return start_server_native(slots, cfg, label)
     if not os.path.isfile(G("iw4x.exe")):
         say(f"ERROR: no iw4x.exe in {GAME} - run ./IW4x-32.sh --setup")
         return 1
@@ -942,6 +1232,39 @@ def start_server(slots, cfg, label):
     return rc
 
 
+def start_server_native(slots, cfg, label):
+    """the same dedicated server with no Wine in it: our loader maps the official iw4x.exe + our iw4x.dll. A vanilla
+    server (18 slots) is stock IW4x and stays under Wine."""
+    if slots != PLAYERS:
+        say("a vanilla IW4x server runs the official files - that one runs under Wine")
+        return start_server(slots, cfg, label, runtime="wine")
+    b = native_path()
+    ok, why = native_ok()
+    if not ok:
+        return refuse_native(why)
+    if not os.path.isfile(G("iw4x.exe")) or sha(G("iw4x.dll")) != sha(F("iw4x.dll")):
+        say(f"ERROR: IW4x-32 is not installed in {GAME} - run ./IW4x-32.sh --setup")
+        return 1
+    user = G("userraw")
+    if not O.dry and not os.path.isfile(os.path.join(user, cfg)):
+        os.makedirs(user, exist_ok=True)
+        shutil.copy2(F(cfg), os.path.join(user, cfg))
+        say(f"made userraw/{cfg} - set your server name and an rcon password there, then restart the server")
+    sa = ["-dedicated", "-stdout", "+set", "net_port", O.port, "+exec", cfg, "+set", "sv_maxclients", str(slots),
+          "+set", "party_maxplayers", str(slots), "+set", "party_enable", "0", "+map_rotate"]
+    print(label)
+    print(f"  game folder: {GAME}")
+    print(f"  loader:      {b} (no Wine)")
+    print(f"  settings:    {os.path.join(user, cfg)}")
+    print(f"  port:        {O.port} UDP - forward it on your router for players on the internet")
+    print("  bots:        type  spawnBot 10  in the server console")
+    env = dict(os.environ, IW4X_GAME_DIR=GAME)
+    rc = run([b, GAME, "--"] + sa, cwd=GAME, env=env)
+    if not O.dry and os.environ.get("IW4X32_NO_START") != "1":
+        say("the server stopped")
+    return rc
+
+
 def do_uninstall():
     if os.environ.get("IW4X32_YES") != "1":
         if not interactive():
@@ -963,6 +1286,283 @@ def do_uninstall():
     remove_shortcuts()
     say(f"IW4x-32 is uninstalled. You can delete the folder {KIT}")
     return 0
+
+
+# ---- --self-test: this launcher's own logic, on a throwaway tree -----------------------------------------------------
+def self_test():
+    """python3 files/iw4x32.py --self-test - the launcher's own gates, run here: a fake Steam library, a fake game
+    folder, a fake official IW4x launcher and a fake GitHub on localhost, always with IW4X32_NO_START=1, so no game,
+    no Wine and no Proton is ever started and nothing outside the throwaway tree is touched. The native loader here
+    is a stand-in that only prints its command line: what is under test is the launcher's DECISION, its machine
+    checks and the command line it builds. That the real loader really boots the real client is what
+    iw4x32/native/tests/kit_native_launch.sh and the test-host runs measure.
+    Every gate is also run against the bad case it exists to catch: a gate that can only read "fine" is worthless.
+    The machine probes are driven through IW4X32_LDCONFIG / IW4X32_VK_ICD_DIR, so a machine without an i386 runtime
+    or without a 32-bit Vulkan driver - what a player without them sees - is reproducible here."""
+    global FILES
+    import http.server
+    import threading
+    t = tempfile.mkdtemp(prefix="iw4x32-selftest.")
+    CHANGES_MARK = "CHANGES.txt"
+    won = [0, 0]
+
+    def gate(ok, what):
+        print(("  ok   " if ok else "  FAIL ") + what, flush=True)
+        won[0 if ok else 1] += 1
+
+    REV = built_for()                                     # the IW4x release our own dll is built for (its string)
+    OFF = f"OFFICIAL-DLL IW4x {REV}"                      # what the fake official IW4x launcher installs
+    kit = os.path.join(t, "kit")
+    shutil.copytree(KIT, kit, ignore=shutil.ignore_patterns("__pycache__", "backup", "mode.txt", "state.json",
+                                                            "runtime.txt"))
+    FILES = os.path.join(kit, "files")                    # the probes below read THIS kit, not the one running us
+    steam, lib = os.path.join(t, "steam"), os.path.join(t, "lib")
+    game = os.path.join(lib, "steamapps", "common", MW2)
+    os.makedirs(os.path.join(steam, "steamapps"), exist_ok=True)
+    os.makedirs(game, exist_ok=True)
+    open(os.path.join(steam, "steamapps", "libraryfolders.vdf"), "w").write(
+        '"libraryfolders"\n{\n\t"0"\n\t{\n\t\t"path"\t\t"%s"\n\t}\n}\n' % lib)
+    open(os.path.join(game, "iw4mp.exe"), "w").write("STEAM-MW2")
+    proton = os.path.join(lib, "steamapps", "common", "Proton 9.0")
+    os.makedirs(os.path.join(lib, "steamapps", "compatdata", "10190", "pfx"), exist_ok=True)
+    os.makedirs(os.path.join(proton, "files", "share", "fonts"), exist_ok=True)
+    open(os.path.join(proton, "proton"), "w").write("#!/bin/sh\nprintf 'FAKE-PROTON|%s|%s\\n' \"$1\" \"$*\"\n")
+    os.chmod(os.path.join(proton, "proton"), 0o755)
+    open(os.path.join(lib, "steamapps", "compatdata", "10190", "config_info"), "w").write(
+        "Proton 9.0\n%s/files/share/fonts/\n" % proton)
+    lch = os.path.join(game, "iw4x-launcher")
+    open(lch, "w").write('#!/bin/sh\nprintf "%s\\n" "$*" >> "$PWD/launcher-args.txt"\n'
+                         'printf "%s" "$FAKE_IW4X_DLL" > "$PWD/iw4x.dll"\n'
+                         '[ -f "$PWD/iw4x.exe" ] || printf OFFICIAL-EXE > "$PWD/iw4x.exe"\n')
+    os.chmod(lch, 0o755)
+
+    # the fake GitHub: localhost only, its latest.json signed with a THROWAWAY key (the release key is never here)
+    web = os.path.join(t, "web")
+    os.makedirs(web, exist_ok=True)
+    if not shutil.which("openssl"):
+        print("self-test: no openssl to sign the fake releases - the update gates cannot run; no partial pass")
+        return 1
+    key = os.path.join(t, "test-key.pem")
+    subprocess.run(["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:3072", "-out", key],
+                   check=True, capture_output=True)
+    n_hex = subprocess.run(["openssl", "rsa", "-in", key, "-noout", "-modulus"], check=True,
+                           capture_output=True, text=True).stdout.strip().split("=", 1)[1].lower()
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0),
+                                          lambda *a: http.server.SimpleHTTPRequestHandler(*a, directory=web))
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+
+    def publish(d, version):
+        root = os.path.join(web, d)
+        files = {}
+        for dp, _, fns in os.walk(root):
+            for fn in fns:
+                q = os.path.relpath(os.path.join(dp, fn), root).replace(os.sep, "/")
+                files[q] = hashlib.sha256(open(os.path.join(root, q), "rb").read()).hexdigest()
+        json.dump({"version": version, "iw4x": REV,
+                   "official": {"iw4x.exe": hashlib.sha256(b"OFFICIAL-EXE").hexdigest(),
+                                "iw4x.dll": hashlib.sha256(OFF.encode()).hexdigest()},
+                   "base_url": f"{url}/{d}/", "files": files, "legacy": []},
+                  open(os.path.join(web, "latest.json"), "w"))
+        data = open(os.path.join(web, "latest.json"), "rb").read()
+        sig = subprocess.run(["openssl", "dgst", "-sha256", "-sign", key], input=data, check=True,
+                             capture_output=True).stdout
+        open(os.path.join(web, "latest.json.sig"), "wb").write(base64.b64encode(sig))
+
+    # a machine that has everything a native run needs, and two that do not - for the probes' bad cases
+    ldc_all = os.path.join(t, "ldconfig.i386")
+    open(ldc_all, "w").write("".join(f"    {son} (libc6) => /usr/lib/i386-linux-gnu/{son}\n"
+                                     for son in list(I386_PKGS)))
+    ldc_64 = os.path.join(t, "ldconfig.64only")           # multiarch, but nothing we need in 32-bit
+    open(ldc_64, "w").write("".join(f"    {son} (libc6,x86-64) => /lib/x86_64-linux-gnu/{son}\n"
+                                    for son in list(I386_PKGS))
+                            + "    libgmp.so.10 (libc6) => /usr/lib/i386-linux-gnu/libgmp.so.10\n")
+    icd32, icd64, icdnone = (os.path.join(t, x) for x in ("icd32", "icd64", "icdnone"))
+    for d, j in ((icd32, '{"library_path": "libradv_i386.so", "library_arch": "32"}'),
+                 (icd64, '{"library_path": "libradv.so", "library_arch": "64"}'),
+                 (icdnone, '{"library_path": "libGLx.so", "name": "not a Vulkan ICD"}')):
+        os.makedirs(d, exist_ok=True)
+        open(os.path.join(d, "x.json"), "w").write(j + "\n")
+    # IW4x-32: the shape a real Ubuntu machine has. mesa-vulkan-drivers' radeon_icd.json says nothing about its own
+    # architecture - it names "libvulkan_radeon.so" and nothing else - so the LIBRARY is what answers, and
+    # mesa-vulkan-drivers:i386 is what puts that soname on the i386 list. The two ldconfig captures below are that
+    # machine with and without the :i386 package, and the same manifest is read on both.
+    icdplain = os.path.join(t, "icdplain")
+    os.makedirs(icdplain, exist_ok=True)
+    open(os.path.join(icdplain, "radeon_icd.json"), "w").write(
+        '{"ICD": {"api_version": "1.4.335", "library_path": "libvulkan_radeon.so"},\n'
+        ' "file_format_version": "1.0.1"}\n')
+    ldc_icd32, ldc_icd64 = (os.path.join(t, x) for x in ("ldconfig.icd32", "ldconfig.icd64"))
+    shutil.copyfile(ldc_all, ldc_icd32)
+    open(ldc_icd32, "a").write("    libvulkan_radeon.so (libc6) => /usr/lib/i386-linux-gnu/libvulkan_radeon.so\n")
+    shutil.copyfile(ldc_all, ldc_icd64)
+    open(ldc_icd64, "a").write("    libvulkan_radeon.so (libc6,x86-64) => /usr/lib/x86_64-linux-gnu/"
+                               "libvulkan_radeon.so\n")
+    stub = os.path.join(t, "iw4x-native")                 # the stand-in loader: it only says what it was asked
+    open(stub, "w").write('#!/bin/sh\nprintf "STUB-NATIVE|%s|%s\\n" "$PWD" "$*"\n')
+    os.chmod(stub, 0o755)
+    good_native = dict(IW4X32_NATIVE=stub, IW4X32_LDCONFIG=ldc_all, IW4X32_VK_ICD_DIR=icd32)
+
+    def probe(**over):
+        """the machine probes with these settings on top of the ones of a machine that can run native"""
+        old = dict(os.environ)
+        os.environ.update(good_native)
+        for k, v in over.items():
+            os.environ.pop(k, None) if v is None else os.environ.update({k: v})
+        try:
+            return native_ok()
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+
+    def run_kit(*args, **kw):
+        env = dict(os.environ, IW4X32_GAME=game, IW4X32_STEAM=steam, IW4X32_UPDATE_URL=f"{url}/latest.json",
+                   IW4X32_LAUNCHER_RELEASE_URL=f"{url}/none", IW4X32_NO_START="1", IW4X32_YES="1",
+                   IW4X32_NO_MENU="1", IW4X32_TEST_RELEASE_KEY=f"{n_hex}:10001", FAKE_IW4X_DLL=OFF,
+                   XDG_DATA_HOME=os.path.join(t, "xdg"), IW4X32_DESKTOP_DIR=os.path.join(t, "desktop"))
+        for k in ("IW4X32_NATIVE", "IW4X32_NO_NATIVE", "IW4X32_NO_CHECKS", "IW4X32_WINDOWED", "IW4X32_VK_ICD_DIR",
+                  "IW4X32_LDCONFIG"):
+            env.pop(k, None)
+        env.update(kw.get("env") or {})
+        for k in kw.get("unset") or ():
+            env.pop(k, None)
+        r = subprocess.run([sys.executable, os.path.join(kit, "files", "iw4x32.py"), *args], env=env,
+                           capture_output=True, text=True, input="", timeout=180)
+        return r.stdout + r.stderr, r.returncode
+
+    # ---- the machine probes: what a native start is refused for, and the packages it names -----------------------
+    ok, why = probe(**good_native)
+    gate(ok, f"probes: a machine with the i386 runtime and a 32-bit Vulkan driver says yes ({why})")
+    ok, why = probe(IW4X32_LDCONFIG=ldc_64, IW4X32_VK_ICD_DIR=icd32)
+    gate(not ok and "libc6:i386" in why and "libsdl2-2.0-0:i386" in why and "sudo apt install" in why,
+         "probes: no i386 runtime -> names the exact packages: " + why)
+    ok, why = probe(IW4X32_LDCONFIG=ldc_all, IW4X32_VK_ICD_DIR=icd64)
+    gate(not ok and "64-bit only" in why and "mesa-vulkan-drivers" in why,
+         "probes: Vulkan drivers that are 64-bit only -> says so and names the driver package: " + why)
+    ok, why = probe(IW4X32_LDCONFIG=ldc_all, IW4X32_VK_ICD_DIR=icdnone)
+    gate(not ok and "64-bit only" in why, "probes: a json that is no Vulkan ICD -> no device: " + why)
+    ok, why = probe(IW4X32_LDCONFIG=ldc_all)
+    here_ok, here_why = ok, why
+    gate(True, f"probes: THIS machine, read for real: {'yes' if ok else 'no'} ({why})")
+    # the shape of the machines that really run it: an ICD manifest that says nothing about its own architecture,
+    # read on a machine whose driver IS installed for i386 and on one whose driver is 64-bit only
+    ok, why = probe(IW4X32_LDCONFIG=ldc_icd32, IW4X32_VK_ICD_DIR=icdplain)
+    gate(ok, f"probes: a manifest that names no architecture, driver there for i386 -> yes: {why}")
+    ok, why = probe(IW4X32_LDCONFIG=ldc_icd64, IW4X32_VK_ICD_DIR=icdplain)
+    gate(not ok and "64-bit only" in why and "mesa-vulkan-drivers" in why,
+         "probes: that same manifest, driver 64-bit only -> names the driver package: " + why)
+    # the test host pins its driver with VK_DRIVER_FILES: the manifest IT points at is the reading that counts
+    ok, why = probe(IW4X32_LDCONFIG=ldc_icd64, IW4X32_VK_ICD_DIR=None, VK_DRIVER_FILES=os.path.join(icd32, "x.json"))
+    gate(ok, f"probes: VK_DRIVER_FILES pins a 32-bit driver the system folders do not carry -> yes: {why}")
+    ok, why = probe(IW4X32_LDCONFIG=ldc_icd64, IW4X32_VK_ICD_DIR=None,
+                    VK_ICD_FILENAMES=os.path.join(icd64, "x.json"))
+    gate(not ok and "64-bit only" in why, "probes: VK_ICD_FILENAMES pinning a 64-bit driver -> no device: " + why)
+    old_files = FILES
+    FILES = os.path.join(os.path.join(t, "kit"), "files")     # this kit's file set: no iw4x-native in it
+    ok, why = probe(IW4X32_NATIVE=None)
+    gate(not ok and NATIVE_FILE in why, "probes: a kit without files/iw4x-native has no native run: " + why)
+    FILES = old_files
+
+    # ---- the public kit (no loader in its file set): native is refused, Wine/Proton is not demoted ----------------
+    out, rc = run_kit("--native", "--dry")
+    gate(rc != 0 and "no native loader" in out and "command:" not in out,
+         "public kit: --native is refused with a reason and a non-zero exit (no silent switch to Wine)")
+    out, rc = run_kit("--wine", "--dry")
+    gate(rc == 0 and "command:" in out and "iw4x-native" not in out and "proton" in out,
+         "public kit: --wine still starts the game through the game's Proton")
+    out, rc = run_kit("--dry")
+    gate(rc == 0 and "proton" in out and "iw4x-native" not in out,
+         "public kit: with no runtime.txt the run is Wine/Proton (NATIVE_DEFAULT is off)")
+
+    # ---- a kit that carries the loader (a private / test kit) -----------------------------------------------------
+    put = os.path.join(kit, "files", NATIVE_FILE)
+    shutil.copy2(stub, put)
+    os.chmod(put, 0o755)
+    base = dict(good_native)
+    out, rc = run_kit("--native", "--dry", env=base)
+    cmd = [l for l in out.splitlines() if l.strip().startswith("command:")]
+    gate(rc == 0 and cmd and "iw4x-native" in cmd[0] and game in cmd[0] and "wine" not in cmd[0]
+         and "proton" not in cmd[0], "native kit: --native starts the loader, no Wine / Proton in the command")
+    out, rc = run_kit("--native", env=base, unset=("IW4X32_NO_START",))   # the loader really runs and says what it got
+    got = [l for l in out.splitlines() if l.startswith("STUB-NATIVE|")]
+    gate(got and got[0].split("|")[1] == game and got[0].count("|") >= 2,
+         "native kit: the loader was started in the game folder with the game's own arguments")
+    out, rc = run_kit("--native-server", "28961", env=base)
+    gate(rc == 0 and f"sv_maxclients {PLAYERS}" in out and "net_port 28961" in out and "no Wine" in out
+         and "wine iw4x.exe" not in out, f"native kit: hosting a {PLAYERS}-player server natively, on the asked port")
+    out, rc = run_kit("--wine", "--server", "28962", env=base)
+    cmds = [l for l in out.splitlines() if "command:" in l]
+    gate(rc == 0 and cmds and "wine iw4x.exe" in cmds[0] and "iw4x-native" not in cmds[0]
+         and "net_port 28962" in out,
+         "native kit: hosting with --wine is the Proton/Wine server - both ways stay first-class")
+    out, rc = run_kit("--vanilla-server", env=base)
+    gate(rc == 0 and "sv_maxclients 18" in out, "native kit: a vanilla (official) server still runs the official files")
+    out, rc = run_kit("--native", "--dry", env=dict(base, IW4X32_VK_ICD_DIR=icd64))
+    gate(rc != 0 and "mesa-vulkan-drivers" in out and "command:" not in out,
+         "native kit: no Vulkan device for a 32-bit process -> names the driver package and exits non-zero")
+    out, rc = run_kit("--native", "--dry", env=dict(base, IW4X32_LDCONFIG=ldc_64))
+    gate(rc != 0 and "libc6:i386" in out and "command:" not in out,
+         "native kit: missing i386 runtime -> names the exact packages and exits non-zero")
+    gate(os.path.isfile(os.path.join(kit, "files", "runtime.txt"))
+         and open(os.path.join(kit, "files", "runtime.txt")).read().strip() == "native",
+         "native kit: the player's last choice is remembered in files/runtime.txt")
+    out, rc = run_kit("--dry", env=base)
+    gate("iw4x-native" in out and "proton" not in out, "native kit: the remembered choice is what the bare start runs")
+    out, rc = run_kit("--wine", "--dry", env=base)
+    gate("proton" in out and open(os.path.join(kit, "files", "runtime.txt")).read().strip() == "wine",
+         "native kit: --wine switches it back and that is what is remembered")
+
+    # ---- the app-menu entries, one per way to run -----------------------------------------------------------------
+    ddir = os.path.join(t, "desktop")
+    g2 = os.path.join(lib, "steamapps", "common", MW2 + "-two")
+    os.makedirs(g2, exist_ok=True)
+    open(os.path.join(g2, "iw4mp.exe"), "w").write("STEAM-MW2")
+    shutil.copy2(lch, os.path.join(g2, "iw4x-launcher"))
+    out, rc = run_kit("--setup", g2, env=base)
+    names = sorted(os.listdir(ddir)) if os.path.isdir(ddir) else []
+    gate("iw4x32.desktop" in names and "iw4x32-wine.desktop" in names and "iw4x32-native.desktop" in names
+         and "iw4x32-native-server.desktop" in names, "menu entries: one per option, native included: " + " ".join(names))
+    nat = open(os.path.join(ddir, "iw4x32-native.desktop"), errors="replace").read()
+    gate("--native" in nat and "--wine" not in nat, "menu entry: the native one really starts the native run")
+    os.remove(put)                                             # this kit no longer carries the loader (the public one)
+    g3 = os.path.join(lib, "steamapps", "common", MW2 + "-three")
+    os.makedirs(g3, exist_ok=True)
+    open(os.path.join(g3, "iw4mp.exe"), "w").write("STEAM-MW2")
+    shutil.copy2(lch, os.path.join(g3, "iw4x-launcher"))
+    run_kit("--setup", g3)
+    names = sorted(os.listdir(ddir))
+    gate("iw4x32-native.desktop" not in names and "iw4x32-wine.desktop" in names,
+         "public kit: no native menu entries, and the old ones are removed again")
+
+    # ---- self-update: the native loader keeps its exec bit, and a signed release still swaps in --------------------
+    shutil.copy2(stub, put)                                    # the kit carries the loader again for the release
+    os.chmod(put, 0o755)
+    # the version test needs a real difference between the installed kit and the game's copy of it
+    open(os.path.join(kit, "files", CHANGES_MARK), "w", newline="").write("self-test\r\n")
+    os.chmod(os.path.join(kit, "files", NATIVE_FILE), 0o644)   # an install that lost the loader's exec bit
+    shutil.rmtree(os.path.join(web, "rel99"), ignore_errors=True)
+    shutil.copytree(kit, os.path.join(web, "rel99"), ignore=shutil.ignore_patterns("backup"))
+    readme = open(os.path.join(web, "rel99", "README.txt"), encoding="utf-8", errors="replace").read()
+    open(os.path.join(web, "rel99", "README.txt"), "w", newline="").write(
+        readme.replace(installed_version(kit), "v9.99-" + REV, 1))
+    open(os.path.join(web, "rel99", "files", CHANGES_MARK), "w", newline="").write("changed\r\n")
+    # the release's loader differs by one comment, so the update really re-downloads it: that is the only way the
+    # exec bit is measured and not read as "fine" by luck (an unchanged file is never downloaded at all)
+    open(os.path.join(web, "rel99", "files", NATIVE_FILE), "a").write("# v9.99\n")
+    publish("rel99", "v9.99-" + REV)
+    out, rc = run_kit("--play", env=base)                             # NO_START=1: it prints the start, runs nothing
+    gate("v9.99-" + REV in out and installed_version(kit) == "v9.99-" + REV,
+         "update: a signed release whose file set carries the loader updates the kit")
+    gate(os.access(os.path.join(kit, "files", NATIVE_FILE), os.X_OK),
+         "update: files/iw4x-native comes back executable (a native kit is useless without its exec bit)")
+    gate(os.access(os.path.join(kit, "files", "iw4x32.py"), os.X_OK) and os.access(os.path.join(kit, "IW4x-32.sh"), os.X_OK),
+         "update: the scripts keep their exec bits too")
+    os.remove(os.path.join(web, "latest.json.sig"))
+    out, rc = run_kit("--play", env=base)
+    gate("update refused" in out and "command:" in out, "update: an unsigned release is refused and the game starts anyway")
+
+    print(f"\nself-test: {won[0]} passed, {won[1]} failed  (tree: {t})")
+    return 0 if won[1] == 0 else 1
 
 
 def main():
@@ -991,6 +1591,8 @@ def main():
         do_fix()
         mode = select_mode()
     O.mode = mode
+    if O.runtime:
+        save_runtime(O.runtime)                          # a shortcut / --native is the player's choice too
     if mode == "vanilla":
         restore_official()
         if O.dry or os.environ.get("IW4X32_NO_START") == "1":
@@ -1015,7 +1617,9 @@ def main():
     if not O.dry:
         do_update()
     if mode == "server":
-        return start_server(PLAYERS, "server_iw4x32.cfg", f"IW4x-32 server - {PLAYERS} players")
+        nat = pick_runtime() == "native"
+        return start_server(PLAYERS, "server_iw4x32.cfg",
+                            f"IW4x-32 server - {PLAYERS} players" + (", native Linux (no Wine)" if nat else ""))
     say(version_status())
     return play(start_game)
 
