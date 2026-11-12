@@ -38,9 +38,21 @@ namespace Components
     // IW4x-32: the Vulkan resource layer of the native renderer (VulkanResources.cpp) attached to the
     // device the native path made, or let go of before that device is destroyed. Attaching is what
     // initializes the layer - there is no device before VulkanDevice::CreateVulkanDevice made one, and
-    // the Device handed in is the proof that there is one now.
+    // the Device handed in is the proof that there is one now. Attaching also turns the asset router
+    // (VulkanAssetLoader.cpp) on, which is what makes r_backend vulkan mean anything.
     static bool AttachVulkanDevice(const VulkanDevice::Device& device, const char** error);
     static void DetachVulkanDevice();
+
+    // IW4x-32: the renderer backend this process was told to use - the r_backend cvar, "d3d9" (the
+    // default, the path the game has always run on) or "vulkan" (the native renderer's path). The cvar
+    // is registered here because it is the switch the whole renderer epic is selected with; who draws
+    // what is asked of this, never read out of a cvar by the layers themselves.
+    static int RendererBackend();       // RENDERER_BACKEND_D3D9 or RENDERER_BACKEND_VULKAN
+    static const char* RendererBackendName();
+
+    // The two r_backend values, in the order the cvar's enum lists them.
+    static constexpr int RENDERER_BACKEND_D3D9 = 0;
+    static constexpr int RENDERER_BACKEND_VULKAN = 1;
 
   private:
     static void PatchEngine();

@@ -12,8 +12,10 @@
 #include "Network.hpp"  // IW4x-32: the connectionless dispatch counters on the console CPU line
 #include "Threading.hpp" // IW4x-32: the dedicated server's packet-pump counters (FrameTime::Wait*)
 #include "Events.hpp"  // IW4x-32: register them once the server is up
+#include "Scheduler.hpp" // IW4x-32: the asset-router probe runs on the renderer pipeline, where the game makes its textures
 #include "Logger.hpp"
 #include "VulkanResources.hpp" // IW4x-32: the resource layer the native Vulkan renderer allocates through
+#include "VulkanAssetLoader.hpp" // IW4x-32: the asset upload router that answers r_backend vulkan
 #include <cstring> // IW4x-32: memcpy / strcmp in the engine patch tables
 #include <cstdlib> // IW4x-32: atoi on the client's slot-count marker
 #include <intrin.h> // IW4x-32: __readfsdword - the loader list read in CrashModules
@@ -42,6 +44,13 @@ namespace Components
     // IW4x-32: whether the Vulkan resource layer of the native renderer is attached to a device (see
     // AttachVulkanDevice). False means no vkCreateImage / vkCreateBuffer of ours has ever been asked for.
     bool g_VulkanResources = false;
+
+    // IW4x-32: r_backend - which backend this process draws with. An enum cvar so a player or a run
+    // types a word; the order of these names IS the value (IW4x32.hpp's RENDERER_BACKEND_*). It is not
+    // ARCHIVE on purpose: a beta switch that a failed run leaves at "vulkan" must not come back out of
+    // the config file on the next start and strand a player on a backend that cannot draw a frame yet.
+    Game::dvar_t* g_RBackend = nullptr;
+    const char* g_RBackendNames[] = {"d3d9", "vulkan", nullptr};
 
     struct DualSite
     {
@@ -1183,6 +1192,59 @@ namespace Components
         g_FrameSlow = g_FrameTotal = g_FrameSum = g_FrameWorst = 0;
         g_CpuMs = cpuMs;
         g_FrameRealMs = 0;
+      });
+    }
+
+    // IW4x-32: r_backend, the switch the renderer epic is selected with. Registered as an enum so the
+    // console takes the words the task asks for, with d3d9 first: the default is the path the game has
+    // always run on, and nothing in this build changes what that path does. "vulkan" asks for the
+    // native path - the layers that answer it (VulkanResources, VulkanAssetLoader) only get to own an
+    // upload once a device was attached, so a build or a run with no Vulkan device in reach still
+    // draws on D3D9 and says so rather than showing nothing.
+    void RegisterRendererBackendCvar()
+    {
+      g_RBackend = Game::Dvar_RegisterEnum("r_backend", g_RBackendNames, IW4x32::RENDERER_BACKEND_D3D9,
+                                           Game::DVAR_NONE, "Renderer backend: d3d9 (default) or vulkan (native renderer)");
+    }
+
+    // IW4x-32: iw4x32_vkas - the asset router as numbers (see VulkanAssetLoader.cpp). The two halves
+    // together are the proof: requests is what the engine asked the renderer for, made/uploaded is what
+    // reached a VkImage or VkBuffer. A run that selected vulkan and routed 0 of 300 requests has a
+    // router that is not wired, and these two numbers are how that is seen instead of argued about.
+    void AddVulkanAssetCommand()
+    {
+      Command::Add("iw4x32_vkas", []()
+      {
+        Logger::Print("IW4X32_VKAS;{};{};{};{};{};{};{};{};{}\n",
+                      IW4x32::RendererBackendName(),
+                      VulkanAssetLoader::Routing() ? 1 : 0,
+                      VulkanAssetLoader::RequestsTotal(),
+                      VulkanAssetLoader::TexturesMade(),
+                      VulkanAssetLoader::PixelUploads(),
+                      VulkanAssetLoader::GeometryBuffersMade(),
+                      VulkanAssetLoader::Refusals(),
+                      VulkanAssetLoader::ResourceBytes(),
+                      VulkanAssetLoader::LiveResources());
+        if (const auto* why = VulkanAssetLoader::LastRefusal(); why && *why)
+          Logger::Print("IW4X32_VKAS_REFUSAL;{}\n", why);
+      });
+
+      // IW4x-32: iw4x32_vkas_test - the router's own proof that it can see a bad case, asked from the
+      // console: with r_backend d3d9 (the default) it fails unless nothing is installed, and with
+      // r_backend vulkan it fails unless an image the game's own creation path made was counted. A run
+      // that only ever read "0 requests" from iw4x32_vkas could not tell an unwired router from a level
+      // with no textures; this line says which it is.
+      Command::Add("iw4x32_vkas_test", []()
+      {
+        // The probe asks the engine for an image, so it runs where the engine makes images - the
+        // renderer pipeline - and the answer is printed from there.
+        Logger::Print("IW4X32_VKAS_TEST;asked;the probe runs on the renderer pipeline\n");
+        Scheduler::Once([]()
+        {
+          const char* why = nullptr;
+          const bool ok = VulkanAssetLoader::SelfTest(&why);
+          Logger::Print("IW4X32_VKAS_TEST;{};{}\n", ok ? "pass" : "fail", why != nullptr ? why : "no reason given");
+        }, Scheduler::Pipeline::RENDERER);
       });
     }
 
@@ -2807,6 +2869,8 @@ namespace Components
     PatchEngine();
     Events::OnSVInit(AddStatsCommands); // IW4x-32: the pool / frame-time ladder (see AddStatsCommands)
     Events::OnClientInit(AddVulkanResourceCommand); // IW4x-32: the native renderer's resource layer (see above)
+    Events::OnDvarInit(RegisterRendererBackendCvar); // IW4x-32: r_backend - the backend this process draws with
+    Events::OnClientInit(AddVulkanAssetCommand); // IW4x-32: the numbers of the asset router (see above)
   }
 
   void IW4x32::RecordFrame(const int msec)
@@ -3090,6 +3154,21 @@ namespace Components
     g_VulkanResources = true;
     Logger::Print("IW4X32: the Vulkan resource layer is live - {} buffer(s), {} image(s), {} byte(s) tracked\n",
                   VulkanResources::LiveBuffers(), VulkanResources::LiveImages(), VulkanResources::AllocatedBytes());
+
+    // IW4x-32: the asset router goes up with the resource layer, because a device is exactly what it
+    // was missing. Installing it is what makes r_backend vulkan mean something: from here on the
+    // engine's CreateTexture / CreateVertexBuffer / CreateIndexBuffer / UpdateTexture requests are seen
+    // by VulkanAssetLoader as well as by D3D9. A failure here is reported, not fatal: the device works
+    // and the game draws on D3D9, with the router off and the reason in the log. The reason goes to a
+    // reason of its own, not to the caller's error: the device works, so the attach as a whole did not
+    // fail and a caller that reads a set error after a true return would be told the wrong thing.
+    const char* routerError = nullptr;
+    if (!VulkanAssetLoader::Attach(device, &routerError))
+      Logger::Print("IW4X32: the Vulkan asset router is NOT installed ({}) - assets stay on the D3D9 path\n",
+                    routerError != nullptr ? routerError : "no reason given");
+    else
+      Logger::Print("IW4X32: the Vulkan asset router is installed - r_backend is {}\n", RendererBackendName());
+
     return true;
   }
 
@@ -3097,8 +3176,71 @@ namespace Components
   // failed init, shutdown). The layer reports what it destroyed, so a leak is a number in that line.
   void IW4x32::DetachVulkanDevice()
   {
+    VulkanAssetLoader::Detach(); // first: it frees resources through the device, and puts the vtable back
     VulkanResources::Shutdown();
     g_VulkanResources = false;
   }
 
+  // IW4x-32: the r_backend answer. Before the cvar exists (a dedicated server never gets to OnDvarInit,
+  // or a query this early) the answer is the default: the path the game has always drawn on.
+  int IW4x32::RendererBackend()
+  {
+    return g_RBackend ? g_RBackend->current.integer : RENDERER_BACKEND_D3D9;
+  }
+
+  const char* IW4x32::RendererBackendName()
+  {
+    const int backend = RendererBackend();
+    return backend >= 0 && backend < 2 ? g_RBackendNames[backend] : "unknown";
+  }
+
 } // namespace Components
+
+// IW4x32: the door the device comes in through.
+//
+// IW4x32::AttachVulkanDevice is a C++ static taking a C++ struct, which is nothing a C loader can
+// call, and with no caller at all the chain behind it is not merely idle - /GL + /LTCG drops it out of
+// the image. Measured on this tree's Release build: the strings of the router's vkCreateImage /
+// vkCreateBuffer path are absent from iw4x.dll, while r_backend, its two value names, the two console
+// commands and the self-test are in it. The same is true of the already-merged VulkanResources,
+// VulkanDevice and VulkanShaderCompiler layers, as the note above AttachVulkanDevice says.
+//
+// So the renderer epic needs one named seam, and this is it: Vulkan handles in (as void*, because a
+// handle is a pointer-sized value and no C++ type crosses the boundary), the layer's own answer back
+// out in three plain numbers. It changes nothing about the game - it is an unanswered door: nothing in
+// this checkout calls it, and the caller is the loader half of the epic, the native runtime that
+// already makes a Vulkan device of its own. Once that call exists, the router is in front of the
+// engine's uploads, r_backend decides whether it routes, and iw4x32_vkas_test is the check that it
+// really sees the game's textures.
+//
+// `stats` (optional) answers: [0] = is the asset router installed on the engine's device object,
+// [1] = buffers and [2] = images the resource layer holds after the attach. Returns 1 when the device
+// was taken, 0 when it was refused (the reason in the log).
+extern "C" __declspec(dllexport) int IW4x32_AttachVulkan(void* getInstanceProcAddr, void* instance,
+                                                        void* physicalDevice, void* device, void* queue,
+                                                        unsigned int queueFamily, unsigned int stats[3])
+{
+  VulkanDevice::Device attached;
+  attached.getInstanceProcAddr = reinterpret_cast<VulkanDevice::GetInstanceProcAddr>(getInstanceProcAddr);
+  attached.instance = reinterpret_cast<VkInstance>(instance);
+  attached.physicalDevice = reinterpret_cast<VkPhysicalDevice>(physicalDevice);
+  attached.device = reinterpret_cast<VkDevice>(device);
+  attached.queue = reinterpret_cast<VkQueue>(queue);
+  attached.queueFamily = queueFamily;
+
+  const char* error = nullptr;
+  const bool taken = Components::IW4x32::AttachVulkanDevice(attached, &error);
+
+  if (!taken)
+    Components::Logger::Print("IW4X32: the loader's Vulkan device was refused ({})\n",
+                              error != nullptr ? error : "no reason given");
+
+  if (stats != nullptr)
+  {
+    stats[0] = VulkanAssetLoader::Installed() ? 1U : 0U;
+    stats[1] = VulkanResources::LiveBuffers();
+    stats[2] = VulkanResources::LiveImages();
+  }
+
+  return taken ? 1 : 0;
+}
