@@ -1,3 +1,5 @@
+v2.21-r5318: IW4x r5318 (kit / launcher update) - this kit is built for official IW4x r5318 and passed the live 64-player test.
+
 v2.19-r5318: IW4x r5318 (kit / launcher update) - this kit is built for official IW4x r5318 and passed the live 64-player test.
 v2.20-r5318: IW4x r5318 (kit / launcher update) - this kit is built for official IW4x r5318 and passed the live 64-player test.
 
