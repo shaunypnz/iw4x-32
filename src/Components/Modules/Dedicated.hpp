@@ -27,6 +27,7 @@ namespace Components
 
     static void Com_ClampMsec(int msec);
     static void Com_ClampMsec_Stub();
+    static void AddFrameStatsCommand(); // IW4x-32: rcon iw4x32_framestats - frame time of the dedicated server
 
     static void TransmitGuids();
 

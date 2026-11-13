@@ -4,7 +4,7 @@
 # nothing installed anywhere outside the test tree. Both launchers go through the same cases:
 #   setup from an extracted zip: finds MW2 in Steam, copies the kit to <game>/IW4x-32, the official launcher installs
 #   IW4x, the official dll is backed up, ours goes in; a second start changes nothing; the IW4x launcher putting the
-#   official dll back is repaired; server (port, the kit's PLAYERS slots - 64 for this build, userraw cfg); vanilla puts the official dll back; a new
+#   official dll back is repaired; server (port, the kit's PLAYERS slots - 96 for this build, userraw cfg); vanilla puts the official dll back; a new
 #   release updates the kit (legacy shims skipped), a second run downloads nothing; a download with a wrong SHA-256
 #   changes nothing and the game still starts; an older copy of the kit hands over to the newer one in the game
 #   folder; versions (built-for x from our dll, your IW4x y from the official one): a newer y stays, an older y is
@@ -142,7 +142,7 @@ for IMPL in "${IMPLS[@]}"; do
     P=$(sed -n 's/^PLAYERS = \([0-9]*\).*/\1/p' "$KIT0/files/iw4x32.py")
     Q=$(sed -n 's/^\$Players = \([0-9]*\).*/\1/p' "$KIT0/files/iw4x32.ps1")
     [ -n "$P" ] && [ "$P" = "$Q" ] && ok "host: both launchers host $P players" || bad "host: iw4x32.py PLAYERS=$P but iw4x32.ps1 Players=$Q"
-    [ "$P" = 64 ] && ok "host: the kit's host choice is the 64-player server" || bad "host: the kit hosts $P, this build hosts 64"
+    [ "$P" = 96 ] && ok "host: the kit's host choice is the 96-player server" || bad "host: the kit hosts $P, this build hosts 96"
     # IW4x-32: the slot ladder (32 -> 48 -> 64). The kit hosts the newest rung, so everything the host scenario
     # needs at the 48-slot step must hold at any rung >= 48: one slot count in both launchers, and that count
     # reaching sv_maxclients, party_maxplayers, the label and the menu.

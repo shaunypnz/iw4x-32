@@ -3,12 +3,12 @@
 this file. IW4x-32.sh runs it. Windows: iw4x32.ps1 next to it does the same steps.
 
   ./IW4x-32.sh                          first time: sets everything up; then the start menu
-  ./IW4x-32.sh --play                   IW4x-32 (IW4x-32 servers up to 64 players, and normal ones)
+  ./IW4x-32.sh --play                   IW4x-32 (IW4x-32 servers up to 96 players, and normal ones)
   ./IW4x-32.sh --native                 IW4x-32 in a native Linux process (Vulkan, no Wine / Proton) - same servers
   ./IW4x-32.sh --wine                   IW4x-32 the classic way: Steam's Proton, or Wine outside Steam
-  ./IW4x-32.sh --native-server [port]   64-player dedicated server, native (no Wine)
+  ./IW4x-32.sh --native-server [port]   96-player dedicated server, native (no Wine)
   ./IW4x-32.sh --vanilla                vanilla IW4x (the official IW4x launcher updates and starts it)
-  ./IW4x-32.sh --server [port]          64-player dedicated server (port 28960; Wine, or native with --native)
+  ./IW4x-32.sh --server [port]          96-player dedicated server (port 28960; Wine, or native with --native)
   ./IW4x-32.sh --vanilla-server [port]  normal 18-player IW4x server
   ./IW4x-32.sh --setup [game folder]    do the setup again, e.g. for another game folder
   ./IW4x-32.sh --uninstall              put the official IW4x files back, remove the menu entries
@@ -54,7 +54,7 @@ import urllib.parse, urllib.request
 REPO = "shaunypnz/iw4x-32"
 OFFICIAL_VER = "r5318"
 # IW4x-32: the player count files/iw4x.dll is built for (Game::MAX_CLIENTS) - what "host" runs
-PLAYERS = 64
+PLAYERS = 96
 # IW4x-32: the native Linux (Vulkan) loader. Promoting it is ONE switch in the release file set: a release that
 # lists files/iw4x-native ships the loader (the update check brings it into every kit), and that is what makes the
 # menu offer the native run - the public kit does not list it, so the option stays hidden there. NATIVE_DEFAULT

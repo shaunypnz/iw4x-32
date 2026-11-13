@@ -21,9 +21,35 @@ namespace Components
   // empty report. So we show the original message when that happens. Note
   // that neither is a format string: either may well contain a '%'.
   //
+  // IW4x-32: can this be read at all? The engine's call at 0x4B2317 pushes ONE string (com_errorMessage) and
+  // pops two, so the second parameter our hook sees is whatever the previous call left on the stack - a 96-slot
+  // live run had 0x25 sitting there, and handing that to "%s" faults inside the CRT's own length check: the
+  // disconnect that was already happening turns into a crash that names nothing (the client console's last
+  // line was an error about skeleton memory and nothing said the game was leaving the server).
+  // Structured exception handling answers in one instruction: an unreadable address raises, the handler says no.
+  static bool ReadableText (const char* text)
+  {
+    if (text == nullptr)
+      return false;
+
+    __try
+    {
+      return *text != '\0';
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+      return false;
+    }
+  }
+
   void Exception::Sys_Error_Recursive_Hk (const char* format, const char* message)
   {
-    Game::Sys_Error ("%s", *format != '\0' ? format : message);
+    if (ReadableText (format))
+      Game::Sys_Error ("%s", format);
+    else if (ReadableText (message))
+      Game::Sys_Error ("%s", message);
+    else
+      Game::Sys_Error ("%s", "(recursive error: the game left no message)");
   }
 
   LONG WINAPI Exception::ExceptionFilter(LPEXCEPTION_POINTERS ExceptionInfo)

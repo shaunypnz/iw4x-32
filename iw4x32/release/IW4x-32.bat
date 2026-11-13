@@ -1,5 +1,5 @@
 @echo off
-REM IW4x-32 - Modern Warfare 2 with up to 64 players. DOUBLE-CLICK THIS FILE - that is all.
+REM IW4x-32 - Modern Warfare 2 with up to 96 players. DOUBLE-CLICK THIS FILE - that is all.
 REM  First time: finds your game, installs official IW4x (with the official IW4x launcher) and IW4x-32, and puts
 REM  an "IW4x-32" shortcut on your desktop. After that it is the start menu: play, vanilla IW4x, host a server,
 REM  uninstall. It keeps itself and IW4x up to date.
