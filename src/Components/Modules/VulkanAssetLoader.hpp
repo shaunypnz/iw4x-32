@@ -67,13 +67,16 @@ namespace VulkanAssetLoader
     bool uploaded = false; // pixels actually reached `image` (an UpdateTexture that found the record)
   };
 
-  // Attach to the device the native path made (see Components::IW4x32::AttachVulkanDevice). Attach
-  // installs the vtable boundary on the engine's device object and refuses, with a reason, when that
-  // object does not look like an IDirect3DDevice9 at all. Detach puts the object's original vtable
+  // Attach to the device the native path made (see Components::IW4x32::AttachVulkanDevice). What comes
+  // in is the resource layer's borrowed handles (VulkanResources::Handles), not a VulkanDevice::Device:
+  // this is the seam's boundary, and a struct that owns a std::vector cannot cross it (2026-11-14: the
+  // copy of the caller's struct threw inside the attach and the client died on the exception).
+  // Attach installs the vtable boundary on the engine's device object and refuses, with a reason, when
+  // that object does not look like an IDirect3DDevice9 at all. Detach puts the object's original vtable
   // pointer back and frees what the layer made. Bound() is "a device is attached"; Installed() is
   // "the boundary is on the engine's object right now" - r_backend decides which of the two means
   // anything, Routing() answers that.
-  bool Attach(const VulkanDevice::Device& device, const char** error);
+  bool Attach(const VulkanResources::Handles& handles, const char** error);
   void Detach();
   bool Bound();
   bool Installed();

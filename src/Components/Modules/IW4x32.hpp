@@ -38,10 +38,16 @@ namespace Components
     // IW4x-32: the Vulkan resource layer of the native renderer (VulkanResources.cpp) attached to the
     // device the native path made, or let go of before that device is destroyed. Attaching is what
     // initializes the layer - there is no device before VulkanDevice::CreateVulkanDevice made one, and
-    // the Device handed in is the proof that there is one now. Attaching also turns the asset router
-    // (VulkanAssetLoader.cpp) on, which is what makes r_backend vulkan mean anything.
-    static bool AttachVulkanDevice(const VulkanDevice::Device& device, const char** error);
+    // the handles handed in are the proof that there is one now. What comes in is the resource layer's
+    // own Handles, not a VulkanDevice::Device: that struct owns a std::vector, and copying one across
+    // the loader's seam threw inside the attach and took the client down with it (2026-11-14).
+    // Attaching also turns the asset router (VulkanAssetLoader.cpp) on, which is what makes r_backend
+    // vulkan mean anything.
+    static bool AttachVulkanDevice(const VulkanResources::Handles& handles, const char** error);
     static void DetachVulkanDevice();
+    // IW4x-32: one flushed line saying whether the thread that asks can allocate at all - from the CRT's
+    // own operator new and from the process heap the loader hands out. See IW4x32.cpp.
+    static void AllocProbe(const char* where);
 
     // IW4x-32: the renderer backend this process was told to use - the r_backend cvar, "d3d9" (the
     // default, the path the game has always run on) or "vulkan" (the native renderer's path). The cvar

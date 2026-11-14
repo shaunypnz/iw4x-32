@@ -68,6 +68,24 @@ namespace VulkanResources
     std::uint32_t memoryType = 0U;
   };
 
+  // IW4x-32: the six values a caller borrows for this layer - what a VulkanDevice::Device carries, minus
+  // the std::vector<VkImage> it owns. The seam (IW4x32_AttachVulkan) is a C door: the loader hands over
+  // plain handle values, and a struct with a heap member has no business crossing it. Measured on
+  // 2026-11-14: the attach copied the caller's Device and the vector copy threw
+  // std::length_error("vector too long"); the loader's SEH logged it as a PE exception (e06d7363) and the
+  // client died on it. This struct is a handful of machine words: copying it allocates nothing, cannot
+  // throw, and cannot leave a half-built record behind. Swapchain images stay with the device that made
+  // them, which is the only place a vector of handles belongs.
+  struct Handles
+  {
+    VulkanDevice::GetInstanceProcAddr getInstanceProcAddr = nullptr; // borrowed from the caller's loader
+    VkInstance instance = VK_NULL_HANDLE;                            // every lookup goes through it
+    VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;                // the memory types come from it
+    VkDevice device = VK_NULL_HANDLE;
+    VkQueue queue = VK_NULL_HANDLE;
+    std::uint32_t queueFamily = 0U;
+  };
+
   // The layer's own state, for the component that owns it (see IW4x32.cpp): Init proves the loader the
   // device came from exports the resource commands, and reports whether this device has any
   // device-local memory at all - a renderer that then asks for device-local textures on an iGPU has
@@ -75,14 +93,21 @@ namespace VulkanResources
   // notice that a different device (a vid_restart) appeared; ForgetAll drops every record when the
   // device dies underneath it, since the driver already took the handles with it.
   //
-  // The device is borrowed, exactly as everywhere else in this epic: the caller owns it, and must call
-  // Shutdown() - or ForgetAll() when the device is already destroyed - before that Device object goes
-  // away, because the layer keeps a pointer to it and frees its records through it.
-  bool Init(const VulkanDevice::Device& device, const char** error);
-  bool Init(const VulkanDevice::Device& device);
+  // The handles are borrowed, exactly as everywhere else in this epic: the caller owns the device, and
+  // must call Shutdown() - or ForgetAll() when the device is already destroyed - before it goes away,
+  // because the layer frees its records through these handles.
+  bool Init(const Handles& device, const char** error);
+  bool Init(const Handles& device);
   void Shutdown();
   bool Bound();
-  void Bind(const VulkanDevice::Device& device);
+  void Bind(const Handles& device);
+
+  // IW4x-32: the handles this layer copied when Init came up - the set every layer built on top of this
+  // one works through (VulkanAssetLoader.cpp takes its device from here). Null until Init succeeds, null
+  // again after Shutdown or ForgetAll. A second copy of the CALLER's struct is what killed the attach of
+  // 2026-11-14; there is exactly one copy here, and every consumer points at it.
+  const Handles* HandlesOf();
+
   void ForgetAll();
 
   // True when this device can give out VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT memory at all.
@@ -99,7 +124,7 @@ namespace VulkanResources
   // first memory type whose index is in those bits and whose properties contain every bit of
   // `properties` wins. There is no such index as "device local" on a device that has no such heap, so
   // a failure here comes back with a reason naming what was asked for, and `outType` untouched.
-  bool FindMemoryType(const VulkanDevice::Device& device, std::uint32_t allowedTypeBits,
+  bool FindMemoryType(const Handles& device, std::uint32_t allowedTypeBits,
                       VkMemoryPropertyFlags properties, std::uint32_t& outType, const char** error);
 
   // vkCreateImage, then vkAllocateMemory for exactly what that image needs
@@ -110,7 +135,7 @@ namespace VulkanResources
   // On success returns true and fills `out`, and the image is tracked for Shutdown. On failure
   // returns false, has destroyed anything it made, leaves `out` empty, and puts a one-line reason in
   // `error` (owned by this file, good until the next call here).
-  bool CreateImage(const VulkanDevice::Device& device, const VkImageCreateInfo& info,
+  bool CreateImage(const Handles& device, const VkImageCreateInfo& info,
                    VkMemoryPropertyFlags memoryProperties, Image& out, const char** error);
 
   // Convenience for the one shape the renderer makes most: a 2D image of that size and format,
@@ -118,14 +143,14 @@ namespace VulkanResources
   // memory asked for DEVICE_LOCAL, and `mipLevels` of 0 meaning one. Nothing about `usage` is widened -
   // an image that cannot be a copy destination stays that way, and UploadBufferToImage refuses it.
   // `aspect` of 0 takes what the format implies (colour, depth, stencil, or depth+stencil).
-  bool CreateImage2D(const VulkanDevice::Device& device, std::uint32_t width, std::uint32_t height, VkFormat format,
+  bool CreateImage2D(const Handles& device, std::uint32_t width, std::uint32_t height, VkFormat format,
                      VkImageUsageFlags usage, VkImageAspectFlags aspect, std::uint32_t mipLevels, Image& out,
                      const char** error);
 
   // vkCreateBuffer, vkAllocateMemory (vkGetBufferMemoryRequirements), vkBindBufferMemory. `usage` is
   // used exactly as given; a size of 0 is refused before it reaches the driver, which would answer
   // VK_ERROR_VALIDATION_FAILED_EXT at best and an oversized allocation at worst.
-  bool CreateBuffer(const VulkanDevice::Device& device, VkDeviceSize size, VkBufferUsageFlags usage,
+  bool CreateBuffer(const Handles& device, VkDeviceSize size, VkBufferUsageFlags usage,
                     VkMemoryPropertyFlags memoryProperties, Buffer& out, const char** error);
 
   // A buffer in memory the CPU may write: VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, plus HOST_COHERENT when
@@ -140,7 +165,7 @@ namespace VulkanResources
     void* data = nullptr; // the mapping, valid until DestroyStagingBuffer
   };
 
-  bool CreateStagingBuffer(const VulkanDevice::Device& device, VkDeviceSize size, StagingBuffer& out,
+  bool CreateStagingBuffer(const Handles& device, VkDeviceSize size, StagingBuffer& out,
                            const char** error);
 
   // The upload, end to end: a host-visible staging buffer holding `size` bytes of `data`,
@@ -154,7 +179,7 @@ namespace VulkanResources
   // `destination` must already exist; it is left exactly as it was found except for its contents. A
   // null `data` or a size of 0 is a failure, not a no-op: a zero-size vkCmdCopyBuffer is a validation
   // error, and an asset that converted to zero bytes is a bug the caller must see.
-  bool UploadStagingBuffer(const VulkanDevice::Device& device, const void* data, VkDeviceSize size, Buffer& destination,
+  bool UploadStagingBuffer(const Handles& device, const void* data, VkDeviceSize size, Buffer& destination,
                            const char** error);
 
   // The same staging cycle into an image: the bytes go into a staging buffer, then
@@ -176,7 +201,7 @@ namespace VulkanResources
   // this renderer converts to today); a format that table does not name - a block-compressed one, a
   // packed 10-bit one - uploads the bytes given as mip 0 and refuses to guess a mip chain, which is
   // what a BC/DXT conversion in a later task has to answer for itself.
-  bool UploadBufferToImage(const VulkanDevice::Device& device, const void* data, VkDeviceSize size, Image& image,
+  bool UploadBufferToImage(const Handles& device, const void* data, VkDeviceSize size, Image& image,
                            VkImageLayout finalLayout, const char** error);
 
   // vkCmdCopyImage between two images, each transitioned into the layout the copy requires with
@@ -186,7 +211,7 @@ namespace VulkanResources
   // extents - a resample is a vkCmdBlitImage job for the formats that allow filtering, not something
   // this fakes. The images come in by const reference, so what this call left them in is printed and
   // NOT recorded on the structs: transition them (TransitionImageLayout) before the next pass uses one.
-  bool CopyImage(const VulkanDevice::Device& device, const Image& source, const Image& destination,
+  bool CopyImage(const Handles& device, const Image& source, const Image& destination,
                  VkImageAspectFlags aspect, const char** error);
 
   // vkCmdPipelineBarrier for one image: undefined/optimal -> what a step needs, optimal -> present,
@@ -194,14 +219,14 @@ namespace VulkanResources
   // result is stored in `image.layout`. A barrier is not optional around a swapchain image a check
   // reads back, and it is not free, so it stays a call of its own rather than something CreateImage
   // sneaks in.
-  bool TransitionImageLayout(const VulkanDevice::Device& device, Image& image, VkImageLayout sourceLayout,
+  bool TransitionImageLayout(const Handles& device, Image& image, VkImageLayout sourceLayout,
                              VkImageLayout destinationLayout, const char** error);
 
   // Teardown for one resource: vkDestroyBuffer / vkDestroyImage, then vkFreeMemory (and vkUnmapMemory
   // first for a staging buffer). Safe on a half-built struct (a refusal inside CreateImage / CreateBuffer
   // runs this path), safe on an empty one, safe to call twice; the struct comes back empty either way,
   // and the layer stops counting it.
-  void DestroyBuffer(const VulkanDevice::Device& device, Buffer& buffer);
-  void DestroyStagingBuffer(const VulkanDevice::Device& device, StagingBuffer& staging);
-  void DestroyImage(const VulkanDevice::Device& device, Image& image);
+  void DestroyBuffer(const Handles& device, Buffer& buffer);
+  void DestroyStagingBuffer(const Handles& device, StagingBuffer& staging);
+  void DestroyImage(const Handles& device, Image& image);
 }

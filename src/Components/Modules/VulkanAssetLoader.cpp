@@ -4,7 +4,6 @@
 
 #include "VulkanAssetLoader.hpp"
 #include "IW4x32.hpp" // r_backend, and the component that owns the device this is attached to
-#include "Scheduler.hpp" // the renderer-frame check that re-installs after a vid_restart
 #include "Logger.hpp" // a refusal has to be readable in a run's log, not only counted
 
 #include <Utils/String.hpp> // the refusal lines: they name the numbers this layer saw
@@ -91,7 +90,16 @@ namespace VulkanAssetLoader
     void* g_Table[DEVICE_VTABLE_SLOTS] = {};  // our copy: what the object is pointed at
     void* g_Original[DEVICE_VTABLE_SLOTS] = {}; // the driver's entries, kept to call through
 
-    const VulkanDevice::Device* g_Device = nullptr;
+    // IW4x-32: the device this layer works through, borrowed from the resource layer's own copy
+    // (VulkanResources::HandlesOf). g_Device never points at the caller's struct: the seam's caller
+    // builds its argument on its own stack, and g_Device is read long after that frame is gone -
+    // Refresh() runs it once per renderer frame. What this layer must NOT do is hold a copy of a struct
+    // with a heap member: the run of 2026-11-14 threw std::length_error("vector too long") exactly
+    // there, because VulkanDevice::Device owns a std::vector<VkImage> and by the moment the router asked
+    // for its second copy the pair of pointers bounding that vector no longer described a range (the
+    // bytes, the throw and the numbers are written up in VulkanResources.cpp's watch_handles).
+    // VulkanResources::Handles is the answer: the same six words, nothing on the heap, one copy.
+    const VulkanResources::Handles* g_Device = nullptr;
     void** g_Object = nullptr;      // the engine's device slot (Game::dx_ptr): the word holding the vtable ptr
     void* g_OriginalTable = nullptr; // what that word held before us (null while uninstalled)
     std::vector<Resource> g_Resources;
@@ -104,7 +112,7 @@ namespace VulkanAssetLoader
     unsigned int g_Refusals = 0U;
     std::uint64_t g_Bytes = 0ULL;
     char g_Refusal[256] = "";
-    bool g_Refreshing = false; // the renderer-frame check is asked for once, not once per attach
+    bool g_Probed = false; // the "can this thread allocate" probe runs on the renderer thread once
 
     // A reason the caller keeps: VulkanResources' reasons belong to that file and die at its next
     // call, so every reason handed out here is copied into a buffer of ours first.
@@ -194,6 +202,15 @@ namespace VulkanAssetLoader
         return true;
 
       auto* object = DeviceObject();
+      // IW4x-32: the numbers of the install, flushed before they are used. The seam's fault of
+      // 2026-11-13 was caught at a fixed address inside a C++ throw whose type no line named, and this
+      // install is the next step in that chain: which slot was read, what it pointed at and how far that
+      // table reaches is the difference between "the exe's device slot is not where the boundary file
+      // says it is" and "the install itself died".
+      printf("iw4x32 vulkan asset router: install - device slot %p holds %p\n",
+             static_cast<void*>(Game::dx_ptr), static_cast<void*>(object));
+      std::fflush(stdout);
+
       if (object == nullptr)
       {
         std::snprintf(reason, reasonSize,
@@ -204,6 +221,9 @@ namespace VulkanAssetLoader
 
       auto* table = *object;
       const auto entries = TableEntries(table);
+      printf("iw4x32 vulkan asset router: install - vtable %p, %u readable entry/entries\n", table, entries);
+      std::fflush(stdout);
+
       if (entries <= SLOT_UPDATE_TEXTURE)
       {
         std::snprintf(reason, reasonSize, "the device vtable %p ends at entry %u, before slot %u",
@@ -237,6 +257,9 @@ namespace VulkanAssetLoader
       VirtualProtect(object, sizeof(void*), old, &old);
 
       g_Object = object;
+      printf("iw4x32 vulkan asset router: install - our table %p is in front of the engine's calls\n",
+             static_cast<void*>(g_Table));
+      std::fflush(stdout);
       return true;
     }
 
@@ -674,7 +697,7 @@ namespace VulkanAssetLoader
 
   // ------------------------------------------------------------------------ the layer
 
-  bool Attach(const VulkanDevice::Device& device, const char** error)
+  bool Attach(const VulkanResources::Handles& handles, const char** error)
   {
     const auto say = [error](const char* reason)
     {
@@ -689,18 +712,49 @@ namespace VulkanAssetLoader
       return false;
     }
 
-    g_Device = &device;
+    // IW4x32: the handles this layer works through are the resource layer's copy (see g_Device above).
+    // This layer keeps no copy of the caller's struct at all, and with the seam's type changed it could
+    // not: what comes in is VulkanResources::Handles, six machine words with nothing on the heap.
+    g_Device = VulkanResources::HandlesOf();
+    if (g_Device == nullptr)
+    {
+      refuse("the resource layer answered Bound() but keeps no handles of its own - the router has "
+             "nothing to make Vulkan resources through");
+      say(g_Refusal);
+      return false;
+    }
+
+    // IW4x32: the caller's handles one more time, at this layer's door: the resource layer's watch lines
+    // stop inside Init, and this one says what the router was handed and which copy it reads through.
+    printf("iw4x32 vulkan asset router: attach - the caller's handles gipa %p instance %p physical %p "
+           "device %p queue %p; the layer's copy at %p\n",
+           static_cast<const void*>(handles.getInstanceProcAddr), static_cast<const void*>(handles.instance),
+           static_cast<const void*>(handles.physicalDevice), static_cast<const void*>(handles.device),
+           static_cast<const void*>(handles.queue), static_cast<const void*>(g_Device));
+    std::fflush(stdout);
 
     // The engine makes a new device on a vid_restart and on a device recovery, and a new device comes
-    // with its own vtable pointer - which takes the calls out of our hands without telling us. The
-    // renderer pipeline is where those restarts end and where the engine's own resource calls run, so
-    // the check runs there: one read of one word per frame, and an install only when that word stopped
-    // being ours.
-    if (!g_Refreshing)
-    {
-      g_Refreshing = true;
-      Components::Scheduler::Loop(Refresh, Components::Scheduler::Pipeline::RENDERER);
-    }
+    // with its own vtable pointer - which takes the calls out of our hands without telling us. The check
+    // that notices is the renderer-frame one (Refresh), and it is asked for once, at component init, by
+    // IW4x32's own constructor: not here. Asking for it here put an allocating call (Scheduler::Loop:
+    // two std::function objects and a vector slot) on the native loader's thread, and the install below
+    // needs no heap at all.
+    //
+    // IW4x32: and one correction the measurement forced. Three rounds called the death of this chain
+    // "bad_alloc on the loader's thread": the address every run reported (0x28770D in this build) is
+    // the RaiseException call inside the CRT's own __CxxThrowException, which says nothing about the
+    // thrower. Read out of the image with dumpbin /DISASM instead - the throwing frame is
+    // std::_Xlength for std::vector<unsigned long long>, so what was thrown is
+    // std::length_error("vector too long"), from the copy this file used to make of the caller's Device.
+    // Nothing here is short of memory: the seam's own probe allocates on that thread (CRT and process
+    // heap both answer), and the box has 40 GB free. The fix is the type, not a try/except: the seam
+    // carries VulkanResources::Handles now, so an attach that allocates nothing cannot throw at all -
+    // and it has to be NO throw, not a caught one: the loader's SEH writes a DISPATCH line for every
+    // exception it sees, including one this DLL's own guard handled, and that line is what made
+    // vk_no_crash and seam_return red for a client that carried on running.
+    const int backend = Components::IW4x32::RendererBackend();
+    printf("iw4x32 vulkan asset router: attach - r_backend answers %d\n", backend);
+    std::fflush(stdout);
 
     // Nothing to install while r_backend says d3d9 - and nothing is installed, which is the point of
     // the default: the game's device object keeps its own vtable and no Vulkan call of ours is in
@@ -709,6 +763,8 @@ namespace VulkanAssetLoader
       return true;
 
     char reason[256] = "";
+    printf("iw4x32 vulkan asset router: attach - installing\n");
+    std::fflush(stdout);
     if (!Install(reason, sizeof(reason)))
     {
       refuse(reason);
@@ -743,6 +799,16 @@ namespace VulkanAssetLoader
   // off. Called once per attached device at install, and by the renderer's own restart signals.
   void Refresh()
   {
+    // IW4x-32: once, on the thread the game itself draws on: the same allocation probe the seam runs on
+    // the loader's thread. Two lines, one comparison - if the game thread can allocate where the seam
+    // thread could not, the attach is being called from the wrong thread and no amount of fixing the
+    // layers' order will help.
+    if (!g_Probed)
+    {
+      g_Probed = true;
+      Components::IW4x32::AllocProbe("the renderer thread");
+    }
+
     const auto wanted = g_Device != nullptr &&
                         Components::IW4x32::RendererBackend() == Components::IW4x32::RENDERER_BACKEND_VULKAN;
 

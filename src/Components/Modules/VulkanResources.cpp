@@ -88,6 +88,28 @@ namespace VulkanResources
       }
     }
 
+    // IW4x-32: the handles the caller came in with, watched. The run of 2026-11-14 died one layer behind
+    // this one copying the struct the seam handed over: std::length_error("vector too long") out of
+    // std::_Xlength for std::vector<unsigned long long> (a std::vector<VkImage>, at iw4x.dll+0x313E1)
+    // called from Device::operator= (+0xD1ACE), reached from VulkanAssetLoader::Attach (+0xD19C9), one
+    // instruction after its g_Owned = device. That copy asks for (last - first) >> 3 entries and the STL
+    // shifts the difference ARITHMETICALLY, so the vector's two pointers only have to disagree in ORDER
+    // for the count to come out past max_size - while every handle in the same struct answered correctly
+    // on the line below. Two answers, then: the handles never went bad, the heap member did, and a heap
+    // member has no business crossing a C door at all. So the struct is VulkanResources::Handles now and
+    // this line is what proves it: the same six words, at the four points the bring-up passes through
+    // them, flushed. A line that moves between two of these names the call that moved it.
+    void watch_handles(const Handles& device, const char* when)
+    {
+      printf("iw4x32 vulkan resources: the caller's handles %s: at %p - gipa %p instance %p physical %p "
+             "device %p queue %p family %u\n",
+             when, static_cast<const void*>(&device), static_cast<const void*>(device.getInstanceProcAddr),
+             static_cast<const void*>(device.instance), static_cast<const void*>(device.physicalDevice),
+             static_cast<const void*>(device.device), static_cast<const void*>(device.queue),
+             device.queueFamily);
+      std::fflush(stdout); // a run that dies next call must still have this line
+    }
+
     // The reason a caller gets back: text this file owns, so it outlives the call.
     const char* fixed_reason(const char* reason)
     {
@@ -130,13 +152,198 @@ namespace VulkanResources
 
     // Entry points come from the loader that made the device's instance; a device-level command needs
     // that instance for the lookup too, which is why VulkanDevice::Device carries it.
+    //
+    // IW4x-32: ...and an answer is asked for ONCE and LOOKED AT before it is ever called. Every call
+    // site used to resolve its command by name and call the answer, and the seam of 2026-11-13 showed
+    // what that costs when an answer is not a function: the client died with its pc on the .rdata bytes
+    // of the string "vkGetPhysicalDeviceMemoryProperties" - the name this file asks for - an EXECUTE
+    // fault (ExceptionInformation[0] = 8) at that same address in five client runs, while the same
+    // entry point asked for in the init pass answered with an address inside libvulkan. So the layer
+    // keeps its own table of this device's entry points, resolved by the init pass that already asked
+    // for all of them, and calls nothing it has not examined: a Vulkan entry point belongs to the
+    // loader that made the device, so an answer that is null or that lies inside iw4x.dll's own image
+    // is refused by name with the value it had. A refused attach is a red gate; a dead client is a
+    // red gate AND a lost run, and the two must never be the same line in a log.
     template <typename T>
-    T entry_point(const VulkanDevice::Device& device, const char* name)
+    T lookup(const Handles& device, const char* name)
     {
       if (device.getInstanceProcAddr == nullptr)
         return nullptr;
 
       return reinterpret_cast<T>(device.getInstanceProcAddr(device.instance, name));
+    }
+
+    struct Command
+    {
+      const char* name;
+      void* fn; // what this device's loader answered; null until the lookup ran
+    };
+
+    // The commands this layer calls, in one place. The init pass checks them - a loader without one is
+    // reported when the device arrives, not at the first texture upload - and every call site takes its
+    // answer from here instead of asking for it again (the table is the only place a name is resolved).
+    // vkFlushMappedMemoryRanges joins the list with this change: the layer called it since phase 3 and
+    // its init pass never checked it, so a loader without it failed an upload rather than the attach.
+    Command g_Commands[] = {
+        {"vkCreateImage", nullptr},              {"vkDestroyImage", nullptr},
+        {"vkCreateBuffer", nullptr},             {"vkDestroyBuffer", nullptr},
+        {"vkAllocateMemory", nullptr},           {"vkFreeMemory", nullptr},
+        {"vkBindImageMemory", nullptr},          {"vkBindBufferMemory", nullptr},
+        {"vkGetImageMemoryRequirements", nullptr}, {"vkGetBufferMemoryRequirements", nullptr},
+        {"vkGetPhysicalDeviceMemoryProperties", nullptr}, {"vkMapMemory", nullptr},
+        {"vkUnmapMemory", nullptr},              {"vkCmdCopyBuffer", nullptr},
+        {"vkCmdCopyBufferToImage", nullptr},     {"vkCmdCopyImage", nullptr},
+        {"vkCmdPipelineBarrier", nullptr},       {"vkCreateCommandPool", nullptr},
+        {"vkDestroyCommandPool", nullptr},       {"vkAllocateCommandBuffers", nullptr},
+        {"vkFreeCommandBuffers", nullptr},       {"vkBeginCommandBuffer", nullptr},
+        {"vkEndCommandBuffer", nullptr},         {"vkQueueSubmit", nullptr},
+        {"vkCreateFence", nullptr},              {"vkDestroyFence", nullptr},
+        {"vkWaitForFences", nullptr},            {"vkFlushMappedMemoryRanges", nullptr},
+    };
+
+    const unsigned int g_CommandCount = static_cast<unsigned int>(sizeof(g_Commands) / sizeof(g_Commands[0]));
+    VkDevice g_CommandsOn = VK_NULL_HANDLE; // which device the answers in the table belong to
+
+    // This module's own range: a Vulkan entry point is never code of ours. The loader's module list is
+    // empty in a native run (its crash report printed "0 module(s) listed"), so the image is found from
+    // an address this function is at: a PE's sections are one mapping, and its first region starts at
+    // the image base. VirtualQuery answers in Wine too (the crash report's own module lookup uses it,
+    // and that self-test runs under Wine).
+    void* g_ImageBase = nullptr;
+    unsigned long g_ImageSize = 0U;
+
+    // IW4x-32: how many times this layer called into a mapping the loader's memory table does not
+    // describe. Every call site re-checks its entry point, so the line below is printed for the first
+    // few only - a Vulkan frame is thousands of calls and the log has to stay readable.
+    unsigned int g_HostMappingChecks = 0U;
+
+    void OwnImage()
+    {
+      if (g_ImageBase != nullptr)
+        return;
+
+      MEMORY_BASIC_INFORMATION info{};
+      if (VirtualQuery(&OwnImage, &info, sizeof(info)) != sizeof(info) || info.AllocationBase == nullptr)
+        return;
+
+      g_ImageBase = info.AllocationBase;
+      info = MEMORY_BASIC_INFORMATION{};
+      while (VirtualQuery(static_cast<const unsigned char*>(g_ImageBase) + g_ImageSize, &info,
+                          sizeof(info)) == sizeof(info) &&
+             info.AllocationBase == g_ImageBase)
+        g_ImageSize += info.RegionSize;
+    }
+
+    // Can this address be called? The reason is for the log, so a refusal names what it saw.
+    bool callable(const void* at, const char** reason)
+    {
+      MEMORY_BASIC_INFORMATION info{};
+
+      *reason = nullptr;
+      OwnImage();
+
+      if (at == nullptr)
+      {
+        *reason = "null";
+        return false;
+      }
+
+      if (g_ImageBase != nullptr && at >= g_ImageBase &&
+          static_cast<const unsigned char*>(at) < static_cast<const unsigned char*>(g_ImageBase) + g_ImageSize)
+      {
+        *reason = "inside iw4x.dll itself - a Vulkan entry point belongs to the loader that made the device";
+        return false;
+      }
+
+      // IW4x-32: an address the loader's memory table does not describe at all is the loader's own
+      // host library, and it must be callable. The native loader answers VirtualQuery from a table of
+      // the ranges it handed out plus the PE images it mapped (iw4x32/native/src/vmmem.c), so the host
+      // dlopen that answers Vulkan sits outside it and the answer for a real entry point is
+      // MEM_FREE / Protect 0. Requiring MEM_COMMIT there refused 28 of 28 entry points and the attach
+      // with them (2026-11-13: "vkAllocateMemory answered EBB5B3E0 - not committed executable memory",
+      // "28 of 28 resource entry points missing from this loader", attach ok 0), which is five red
+      // gates that said "the DLL refused the device" about a device the DLL never saw. What the fault
+      // of 2026-11-13 actually looked like - the pc on this image's own .rdata - is caught by the
+      // range above, and a page of ours that is mapped but not executable by the check below.
+      if (VirtualQuery(at, &info, sizeof(info)) != sizeof(info) || info.State == MEM_FREE)
+      {
+        if (g_HostMappingChecks++ < 4U)
+          printf("iw4x32 vulkan resources: %p is outside the loader's memory table - a host mapping, "
+                 "calling it (%u check(s) so far)\n",
+                 at, g_HostMappingChecks);
+        return true;
+      }
+
+      if (info.State != MEM_COMMIT)
+      {
+        *reason = "in a range the loader reserved but never committed";
+        return false;
+      }
+
+      if ((info.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE |
+                           PAGE_EXECUTE_WRITECOPY)) == 0U)
+      {
+        *reason = "committed, but not executable";
+        return false;
+      }
+
+      return true;
+    }
+
+    // The table's answer for one command: the lookup runs the first time this device asks for it, and
+    // every call after that re-uses it (and re-checks it, which costs a VirtualQuery, never a lookup).
+    void* resolved(const Handles& device, const char* name, const char** why)
+    {
+      if (g_CommandsOn != device.device)
+      {
+        // A different device underneath the same table: its loader may answer differently, so nothing
+        // resolved for the old one is kept.
+        for (unsigned int clear = 0U; clear < g_CommandCount; ++clear)
+          g_Commands[clear].fn = nullptr;
+        g_CommandsOn = device.device;
+      }
+
+      for (unsigned int index = 0U; index < g_CommandCount; ++index)
+      {
+        if (std::strcmp(g_Commands[index].name, name) != 0)
+          continue;
+
+        if (g_Commands[index].fn == nullptr)
+          g_Commands[index].fn = lookup<PFN_vkVoidFunction>(device, name);
+
+        const void* at = g_Commands[index].fn;
+        if (callable(at, why))
+          return g_Commands[index].fn;
+
+        printf("iw4x32 vulkan resources: refusing to call %s - the loader answered %p, which is %s\n", name, at,
+               *why != nullptr ? *why : "not callable");
+        std::fflush(stdout); // a later crash must not take this line with it
+        return nullptr;
+      }
+
+      *why = "not one of the commands this layer checked";
+      printf("iw4x32 vulkan resources: %s is not in the layer's command table - refusing to call it\n", name);
+      std::fflush(stdout);
+      return nullptr;
+    }
+
+    // The table's answer for a name, without a lookup - for reporting (Init prints the address the
+    // very next call will run through).
+    void* table_fn(const char* name)
+    {
+      for (unsigned int index = 0U; index < g_CommandCount; ++index)
+        if (std::strcmp(g_Commands[index].name, name) == 0)
+          return g_Commands[index].fn;
+      return nullptr;
+    }
+
+    // What a call site asks for: the device's entry point, already resolved and already looked at. A
+    // null here is a refusal with a printed reason, and every call site keeps refusing on null.
+    template <typename T>
+    T entry_point(const Handles& device, const char* name)
+    {
+      const char* why = nullptr;
+      return reinterpret_cast<T>(resolved(device, name, &why));
     }
 
     // The layer's state. Nothing here owns the device: VulkanDevice.cpp does, and a vid_restart can
@@ -149,7 +356,15 @@ namespace VulkanResources
 
     struct Layer
     {
-      const VulkanDevice::Device* device = nullptr;
+      const Handles* device = nullptr;
+      // IW4x-32: the handles of the device this layer is bound to, copied the moment they were proven.
+      // The caller's struct does not always outlive the call: the loader's seam (IW4x32_AttachVulkan)
+      // handed over a struct it built on its own stack, so storing &device left the layer holding a dead
+      // frame - every entry point looked up afterwards came out of recycled stack, and the client died
+      // executing one (2026-11-13: c0000005 at a .rdata address in the attach run). Copying that struct
+      // was the next failure: it owned a std::vector, and the copy threw in the attach (2026-11-14, see
+      // watch_handles). Handles only: nothing here owns or frees anything, and nothing here allocates.
+      Handles handles;
       VkDevice deviceHandle = VK_NULL_HANDLE; // which device the records below were made on
       bool initialized = false;
       bool deviceLocal = false;               // this device has a heap with DEVICE_LOCAL at all
@@ -162,13 +377,13 @@ namespace VulkanResources
 
     // A resource is tracked only when it belongs to the device the layer is bound to: records kept
     // across a vid_restart would be freed on a device that no longer exists.
-    void track(const VulkanDevice::Device& device, const Buffer& buffer, void* mapped)
+    void track(const Handles& device, const Buffer& buffer, void* mapped)
     {
       if (device.device == g_Layer.deviceHandle)
         g_Layer.buffers.push_back({buffer, mapped});
     }
 
-    void track(const VulkanDevice::Device& device, const Image& image)
+    void track(const Handles& device, const Image& image)
     {
       if (device.device == g_Layer.deviceHandle)
         g_Layer.images.push_back(image);
@@ -207,7 +422,7 @@ namespace VulkanResources
 
     // vkGetPhysicalDeviceMemoryProperties for this device - the type/heap list every memory decision
     // below reads. A null `error` is allowed: this is a question, not a call that owns a result.
-    bool memory_properties(const VulkanDevice::Device& device, VkPhysicalDeviceMemoryProperties& out,
+    bool memory_properties(const Handles& device, VkPhysicalDeviceMemoryProperties& out,
                            const char** error)
     {
       const auto get = entry_point<PFN_vkGetPhysicalDeviceMemoryProperties>(device, "vkGetPhysicalDeviceMemoryProperties");
@@ -302,9 +517,9 @@ namespace VulkanResources
       VkFence fence = VK_NULL_HANDLE;
     };
 
-    void transient_end(const VulkanDevice::Device& device, Transient& recorded);
+    void transient_end(const Handles& device, Transient& recorded);
 
-    bool transient_begin(const VulkanDevice::Device& device, Transient& out, const char** error)
+    bool transient_begin(const Handles& device, Transient& out, const char** error)
     {
       const auto createPool = entry_point<PFN_vkCreateCommandPool>(device, "vkCreateCommandPool");
       const auto allocate = entry_point<PFN_vkAllocateCommandBuffers>(device, "vkAllocateCommandBuffers");
@@ -380,7 +595,7 @@ namespace VulkanResources
 
     // The submission and the wait: the copy is finished when this returns true, which is what lets the
     // caller destroy the staging buffer straight afterwards without racing the queue.
-    bool transient_submit(const VulkanDevice::Device& device, Transient& recorded, const char** error)
+    bool transient_submit(const Handles& device, Transient& recorded, const char** error)
     {
       const auto end = entry_point<PFN_vkEndCommandBuffer>(device, "vkEndCommandBuffer");
       const auto submit = entry_point<PFN_vkQueueSubmit>(device, "vkQueueSubmit");
@@ -433,7 +648,7 @@ namespace VulkanResources
       return true;
     }
 
-    void transient_end(const VulkanDevice::Device& device, Transient& recorded)
+    void transient_end(const Handles& device, Transient& recorded)
     {
       // Newest first, and everything skipped rather than guessed at when the loader does not export
       // it: a half-built transient tears down as far as it was built.
@@ -460,7 +675,7 @@ namespace VulkanResources
     // The barrier that puts one image where a copy or a draw can reach it, recorded into `commands`.
     // This records only - it does not submit - so an upload's barriers and its copy land in one
     // command buffer and stay in one order.
-    bool record_barrier(const VulkanDevice::Device& device, const VkCommandBuffer commands, const VkImage image,
+    bool record_barrier(const Handles& device, const VkCommandBuffer commands, const VkImage image,
                         const VkImageAspectFlags aspect, const VkImageLayout from, const VkImageLayout to,
                         const char** error)
     {
@@ -511,7 +726,7 @@ namespace VulkanResources
     // A staging buffer with the bytes already in it, filled in place through the mapping the layer
     // keeps. HOST_VISIBLE|HOST_COHERENT first; a device whose visible heap is not coherent still
     // uploads, with a vkFlushMappedMemoryRanges, rather than failing over one bit.
-    bool staging_filled(const VulkanDevice::Device& device, const void* data, const VkDeviceSize size,
+    bool staging_filled(const Handles& device, const void* data, const VkDeviceSize size,
                         StagingBuffer& out, const char** error)
     {
       char asked[128];
@@ -555,10 +770,33 @@ namespace VulkanResources
     }
   } // namespace
 
-  bool Init(const VulkanDevice::Device& device, const char** error)
+  bool Init(const Handles& device, const char** error)
   {
     const char* reason = nullptr;
     const char** fail = error != nullptr ? error : &reason;
+
+    // IW4x-32: the handles are checked FIRST, before the "already initialized" answer below and before
+    // anything is called through them. The seam's probe asks the door about one broken argument at a
+    // time (the loader's --seam-probe gipa|device|physical|queue|instance|family), and with the layer
+    // already up on this device that shortcut answered "taken" to a struct carrying a null
+    // vkGetInstanceProcAddr - the door's own gate read an accepted device where it should have read a
+    // refusal (2026-11-13, the run that also showed every resource entry point resolving and the layer
+    // initializing). Every handle here is one this layer calls with, so a null one is refused whoever
+    // asks, and the answer names the field.
+    if (device.getInstanceProcAddr == nullptr || device.instance == VK_NULL_HANDLE ||
+        device.physicalDevice == VK_NULL_HANDLE || device.device == VK_NULL_HANDLE ||
+        device.queue == VK_NULL_HANDLE)
+    {
+      printf("iw4x32 vulkan resources: a handle the layer needs came in null - gipa %p instance %p physical %p "
+             "device %p queue %p - refusing\n",
+             static_cast<const void*>(device.getInstanceProcAddr), static_cast<const void*>(device.instance),
+             static_cast<const void*>(device.physicalDevice), static_cast<const void*>(device.device),
+             static_cast<const void*>(device.queue));
+      std::fflush(stdout);
+      *fail = fixed_reason("the loader handed over a struct with a null handle - its lookup, instance, physical "
+                           "device, device or queue");
+      return false;
+    }
 
     if (g_Layer.initialized)
     {
@@ -571,42 +809,54 @@ namespace VulkanResources
       ForgetAll();
     }
 
+    watch_handles(device, "as the layer comes up"); // IW4x32: the first of the four watch lines
+
     g_Layer.initialized = false;
-    g_Layer.device = &device;
+    g_Layer.handles = device; // the copy the layer keeps, see the Layer note
+    g_Layer.device = &g_Layer.handles;
+    watch_handles(device, "after the layer's copy"); // IW4x32: the copy above is the one this layer uses
     g_Layer.deviceHandle = device.device;
     g_Layer.deviceLocal = false;
 
-    if (device.device == VK_NULL_HANDLE || device.physicalDevice == VK_NULL_HANDLE)
-    {
-      log_value("no device to make resources on");
-      *fail = fixed_reason("no Vulkan device yet: the resource layer has nothing to allocate on");
-      return false;
-    }
+    // The commands this layer calls live in one table (g_Commands, next to the lookup above): the pass
+    // below fills it, so a loader without one of them is reported HERE and not at the first texture
+    // upload, and no call site ever resolves a name again.
+    //
+    // IW4x-32: bracket every step a bring-up can die on, and flush it. The seam's crash of 2026-11-13
+    // (c0000005 EXECUTING a .rdata address inside the attach - the bytes of the string
+    // "vkGetPhysicalDeviceMemoryProperties") left nothing in the run's log between the loader's
+    // vkwindow line and the fault, which made the next round start from a guess. The two lines below
+    // name what the loader answered for the command the next call runs through, and the range of this
+    // image, so "the lookup itself went wrong", "the answer is not callable" and "the fault is inside
+    // the function we called" are three different logs.
+    printf("iw4x32 vulkan resources: init - gipa %p instance %p physical %p device %p, %u command(s) to resolve\n",
+           static_cast<void*>(device.getInstanceProcAddr), static_cast<void*>(device.instance),
+           static_cast<void*>(device.physicalDevice), static_cast<void*>(device.device), g_CommandCount);
+    OwnImage();
+    if (g_ImageBase != nullptr)
+      printf("iw4x32 vulkan resources: this image is %p + 0x%lX - an entry point inside it is refused\n",
+             g_ImageBase, g_ImageSize);
+    std::fflush(stdout);
 
-    // The commands this layer needs, asked for once at init so that a loader without them is reported
-    // here and not at the first texture upload: a device that boots, makes a swapchain and presents,
-    // and then cannot vkCreateImage, would otherwise look healthy for a whole match.
-    static const char* const required[] = {
-        "vkCreateImage",            "vkDestroyImage",     "vkCreateBuffer",   "vkDestroyBuffer",
-        "vkAllocateMemory",         "vkFreeMemory",       "vkBindImageMemory", "vkBindBufferMemory",
-        "vkGetImageMemoryRequirements", "vkGetBufferMemoryRequirements", "vkGetPhysicalDeviceMemoryProperties",
-        "vkMapMemory",              "vkUnmapMemory",      "vkCmdCopyBuffer",  "vkCmdCopyBufferToImage",
-        "vkCmdCopyImage",           "vkCmdPipelineBarrier", "vkCreateCommandPool", "vkDestroyCommandPool",
-        "vkAllocateCommandBuffers", "vkFreeCommandBuffers", "vkBeginCommandBuffer", "vkEndCommandBuffer",
-        "vkQueueSubmit",            "vkCreateFence",      "vkDestroyFence",   "vkWaitForFences",
-    };
+    for (unsigned int index = 0U; index < g_CommandCount; ++index)
+      g_Commands[index].fn = lookup<PFN_vkVoidFunction>(device, g_Commands[index].name);
+    g_CommandsOn = device.device;
 
     std::uint32_t missing = 0U;
-    for (const char* name : required)
+    for (unsigned int index = 0U; index < g_CommandCount; ++index)
     {
-      if (entry_point<PFN_vkVoidFunction>(device, name) != nullptr)
+      const char* why = nullptr;
+      if (callable(g_Commands[index].fn, &why))
         continue;
-      if (missing < 4U)
-        printf("iw4x32 vulkan resources: the loader exports no %s\n", name);
+      printf("iw4x32 vulkan resources: %s answered %p - %s\n", g_Commands[index].name, g_Commands[index].fn,
+             why != nullptr ? why : "not callable");
+      g_Commands[index].fn = nullptr;
       ++missing;
     }
 
-    const auto total = static_cast<std::uint32_t>(sizeof(required) / sizeof(required[0]));
+    watch_handles(device, "after the entry-point lookups"); // IW4x32: host calls ran between the two lines
+
+    const auto total = g_CommandCount;
     if (missing != 0U)
     {
       printf("iw4x32 vulkan resources: %u of %u resource entry points missing from this loader\n", missing, total);
@@ -614,9 +864,21 @@ namespace VulkanResources
       return false;
     }
 
+    // IW4x32: the address the very next call runs through, printed before that call, and the address of
+    // the memory-properties NAME string for comparison: the fault of 2026-11-13 executed that string,
+    // so a log that names both says in one line whether the call was aimed at the name.
+    printf("iw4x32 vulkan resources: entry points resolved %u/%u - vkGetPhysicalDeviceMemoryProperties answered %p"
+           " (its name is %p)\n",
+           total - missing, total,
+           table_fn("vkGetPhysicalDeviceMemoryProperties"),
+           static_cast<const void*>("vkGetPhysicalDeviceMemoryProperties"));
+    std::fflush(stdout);
+
     VkPhysicalDeviceMemoryProperties properties{};
     if (!memory_properties(device, properties, fail))
       return false;
+
+    watch_handles(device, "after the memory types"); // IW4x32: the last watch before the router is asked
 
     for (std::uint32_t index = 0U; index < properties.memoryTypeCount; ++index)
     {
@@ -631,12 +893,13 @@ namespace VulkanResources
            "%u/%u resource entry points\n",
            properties.memoryTypeCount, g_Layer.deviceLocal ? "present" : "ABSENT (device-local requests will be refused)",
            total - missing, total);
+    std::fflush(stdout); // IW4x-32: a later crash must not take this line with it
 
     g_Layer.initialized = true;
     return true;
   }
 
-  bool Init(const VulkanDevice::Device& device)
+  bool Init(const Handles& device)
   {
     return Init(device, nullptr);
   }
@@ -646,11 +909,19 @@ namespace VulkanResources
     return g_Layer.initialized;
   }
 
-  void Bind(const VulkanDevice::Device& device)
+  // IW4x32: the layer's own copy, not the caller's struct - and the copy is a handful of machine words,
+  // so taking it allocates nothing and cannot throw (see the Handles note in the header).
+  const Handles* HandlesOf()
+  {
+    return g_Layer.initialized ? &g_Layer.handles : nullptr;
+  }
+
+  void Bind(const Handles& device)
   {
     if (g_Layer.deviceHandle != device.device)
       ForgetAll();
-    g_Layer.device = &device;
+    g_Layer.handles = device; // IW4x-32: the layer never keeps handles it did not copy
+    g_Layer.device = &g_Layer.handles;
     g_Layer.deviceHandle = device.device;
   }
 
@@ -690,7 +961,7 @@ namespace VulkanResources
     return g_Layer.bytes;
   }
 
-  bool FindMemoryType(const VulkanDevice::Device& device, const std::uint32_t allowedTypeBits,
+  bool FindMemoryType(const Handles& device, const std::uint32_t allowedTypeBits,
                       const VkMemoryPropertyFlags properties, std::uint32_t& outType, const char** error)
   {
     const char* reason = nullptr;
@@ -724,7 +995,7 @@ namespace VulkanResources
     return false;
   }
 
-  bool CreateImage(const VulkanDevice::Device& device, const VkImageCreateInfo& info,
+  bool CreateImage(const Handles& device, const VkImageCreateInfo& info,
                    const VkMemoryPropertyFlags memoryProperties, Image& out, const char** error)
   {
     const char* reason = nullptr;
@@ -850,7 +1121,7 @@ namespace VulkanResources
     return true;
   }
 
-  bool CreateImage2D(const VulkanDevice::Device& device, const std::uint32_t width, const std::uint32_t height,
+  bool CreateImage2D(const Handles& device, const std::uint32_t width, const std::uint32_t height,
                      const VkFormat format, const VkImageUsageFlags usage, VkImageAspectFlags aspect,
                      const std::uint32_t mipLevels, Image& out, const char** error)
   {
@@ -884,7 +1155,7 @@ namespace VulkanResources
     return true;
   }
 
-  bool CreateBuffer(const VulkanDevice::Device& device, const VkDeviceSize size, const VkBufferUsageFlags usage,
+  bool CreateBuffer(const Handles& device, const VkDeviceSize size, const VkBufferUsageFlags usage,
                     const VkMemoryPropertyFlags memoryProperties, Buffer& out, const char** error)
   {
     const char* reason = nullptr;
@@ -1003,7 +1274,7 @@ namespace VulkanResources
     return true;
   }
 
-  bool CreateStagingBuffer(const VulkanDevice::Device& device, const VkDeviceSize size, StagingBuffer& out,
+  bool CreateStagingBuffer(const Handles& device, const VkDeviceSize size, StagingBuffer& out,
                            const char** error)
   {
     const char* reason = nullptr;
@@ -1053,7 +1324,7 @@ namespace VulkanResources
     return true;
   }
 
-  bool UploadStagingBuffer(const VulkanDevice::Device& device, const void* data, const VkDeviceSize size,
+  bool UploadStagingBuffer(const Handles& device, const void* data, const VkDeviceSize size,
                            Buffer& destination, const char** error)
   {
     const char* reason = nullptr;
@@ -1132,7 +1403,7 @@ namespace VulkanResources
     return true;
   }
 
-  bool UploadBufferToImage(const VulkanDevice::Device& device, const void* data, const VkDeviceSize size, Image& image,
+  bool UploadBufferToImage(const Handles& device, const void* data, const VkDeviceSize size, Image& image,
                            const VkImageLayout finalLayout, const char** error)
   {
     const char* reason = nullptr;
@@ -1284,7 +1555,7 @@ namespace VulkanResources
     return true;
   }
 
-  bool CopyImage(const VulkanDevice::Device& device, const Image& source, const Image& destination,
+  bool CopyImage(const Handles& device, const Image& source, const Image& destination,
                  const VkImageAspectFlags aspect, const char** error)
   {
     const char* reason = nullptr;
@@ -1372,7 +1643,7 @@ namespace VulkanResources
     return true;
   }
 
-  bool TransitionImageLayout(const VulkanDevice::Device& device, Image& image, const VkImageLayout sourceLayout,
+  bool TransitionImageLayout(const Handles& device, Image& image, const VkImageLayout sourceLayout,
                              const VkImageLayout destinationLayout, const char** error)
   {
     const char* reason = nullptr;
@@ -1407,7 +1678,7 @@ namespace VulkanResources
     return true;
   }
 
-  void DestroyBuffer(const VulkanDevice::Device& device, Buffer& buffer)
+  void DestroyBuffer(const Handles& device, Buffer& buffer)
   {
     if (buffer.handle == VK_NULL_HANDLE && buffer.memory == VK_NULL_HANDLE)
       return; // already empty: destroying twice is allowed, and it is not a second vkFreeMemory
@@ -1434,7 +1705,7 @@ namespace VulkanResources
     buffer = Buffer{};
   }
 
-  void DestroyStagingBuffer(const VulkanDevice::Device& device, StagingBuffer& staging)
+  void DestroyStagingBuffer(const Handles& device, StagingBuffer& staging)
   {
     // The unmap goes first: a mapping that outlives its memory is a page the driver cannot take back.
     if (staging.data != nullptr && staging.buffer.memory != VK_NULL_HANDLE && device.device != VK_NULL_HANDLE)
@@ -1450,7 +1721,7 @@ namespace VulkanResources
     DestroyBuffer(device, staging.buffer);
   }
 
-  void DestroyImage(const VulkanDevice::Device& device, Image& image)
+  void DestroyImage(const Handles& device, Image& image)
   {
     if (image.handle == VK_NULL_HANDLE && image.memory == VK_NULL_HANDLE)
       return;
@@ -1490,7 +1761,7 @@ namespace VulkanResources
       return;
     }
 
-    const VulkanDevice::Device& device = *g_Layer.device;
+    const Handles& device = *g_Layer.device;
     const std::uint64_t before = g_Layer.bytes;
 
     // The records are moved out before anything is destroyed: DestroyBuffer / DestroyImage untrack as

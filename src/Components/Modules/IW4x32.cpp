@@ -17,6 +17,8 @@
 #include "VulkanResources.hpp" // IW4x-32: the resource layer the native Vulkan renderer allocates through
 #include "VulkanAssetLoader.hpp" // IW4x-32: the asset upload router that answers r_backend vulkan
 #include <cstring> // IW4x-32: memcpy / strcmp in the engine patch tables
+#include <cstdio> // IW4x-32: fflush after the Vulkan seam answers, so its lines survive a later crash
+#include <new> // IW4x-32: operator new(std::nothrow) in the seam's allocation probe
 #include <cstdlib> // IW4x-32: atoi on the client's slot-count marker
 #include <intrin.h> // IW4x-32: __readfsdword - the loader list read in CrashModules
 
@@ -2875,6 +2877,14 @@ namespace Components
     Events::OnClientInit(AddVulkanResourceCommand); // IW4x-32: the native renderer's resource layer (see above)
     Events::OnDvarInit(RegisterRendererBackendCvar); // IW4x-32: r_backend - the backend this process draws with
     Events::OnClientInit(AddVulkanAssetCommand); // IW4x-32: the numbers of the asset router (see above)
+
+    // IW4x-32: the asset router's renderer-frame check, asked for once, here, on a thread the game made.
+    // It used to be asked for inside VulkanAssetLoader::Attach - which is called by the native loader, on
+    // the loader's own thread, and the one thing Scheduler::Loop does is allocate (two std::function
+    // objects and a vector slot). That call is what threw bad_alloc in the runs of 2026-11-13; the install
+    // it was there to protect needs no heap at all. Refresh does nothing until a device is attached, so a
+    // run that never opens the seam pays one extra vector slot.
+    Scheduler::Loop(VulkanAssetLoader::Refresh, Scheduler::Pipeline::RENDERER);
   }
 
   void IW4x32::RecordFrame(const int msec)
@@ -3139,6 +3149,36 @@ namespace Components
     return g_PoolChild0Base;
   }
 
+  // IW4x-32: can THIS thread allocate? The fault of 2026-11-13 sits one call after the resource layer's
+  // own success line, and the only image address the loader found under the throw wrapper is the failure
+  // path of this image's operator new (gdec @10284f40: malloc answered nothing, no new handler installed,
+  // so bad_alloc). Nothing in the attach asks for more than a few dozen bytes, and the test box had 40 GB
+  // free, so "the heap is full" is not the story. The other reading is that the CRT has no heap for the
+  // thread that called the seam: the loader hands its device over from a thread of its own, and a thread
+  // the loader made gets the CRT's per-thread attach while a host thread does not.
+  //
+  // Two allocations, two heaps, one flushed line - the image's own operator new, and the process heap the
+  // loader hands out (which the CRT's malloc reaches by the same door, so a line that shows one working
+  // and the other not names the CRT's per-thread state, not the machine). The same probe runs once on the
+  // game's renderer thread (VulkanAssetLoader's Refresh): an answer that differs by thread means the
+  // attach is being called from the wrong one.
+  void IW4x32::AllocProbe(const char* where)
+  {
+    void* fromCrt = operator new(64U, std::nothrow);
+    HANDLE heap = GetProcessHeap();
+    void* fromHeap = heap != nullptr ? HeapAlloc(heap, 0U, 64U) : nullptr;
+    const DWORD heapError = GetLastError();
+
+    printf("IW4X32: %s (thread %u) allocates - CRT %p, process heap %p (heap %p error %u)\n", where,
+           GetCurrentThreadId(), fromCrt, fromHeap, heap, heapError);
+    std::fflush(stdout);
+
+    if (fromCrt != nullptr)
+      operator delete(fromCrt);
+    if (fromHeap != nullptr)
+      HeapFree(heap, 0U, fromHeap);
+  }
+
   // IW4x-32: the Vulkan resource layer of the native renderer (VulkanResources.cpp) attached to the
   // device the native path made. It initializes here and not at component init because the layer is
   // nothing without a device: VulkanDevice.cpp's CreateVulkanDevice is what proves the device layer is
@@ -3150,10 +3190,21 @@ namespace Components
   // iw4x32_vkres command above calls them) but not its vkCreateImage / vkAllocateMemory path - the same
   // is true of the merged VulkanDevice.cpp, whose log strings are absent from the image for the same
   // reason. The line that makes it live is a caller: the native loader attaching the device it made.
-  bool IW4x32::AttachVulkanDevice(const VulkanDevice::Device& device, const char** error)
+  bool IW4x32::AttachVulkanDevice(const VulkanResources::Handles& handles, const char** error)
   {
-    if (!VulkanResources::Init(device, error))
+    // IW4x-32: first question of the attach, before any layer runs: is there a heap here at all?
+    AllocProbe("the seam's thread");
+
+    if (!VulkanResources::Init(handles, error))
       return false;
+
+    // IW4x-32: brackets around every step of this chain, flushed. The fault of 2026-11-13 landed
+    // somewhere between the resource layer's own success line and the router's install, and the run
+    // said only "faulted" - which made the next round guess. printf, not Logger::Print: the game's
+    // console buffers its own lines and a fault takes the unflushed ones with it.
+    printf("IW4X32: the seam: resource layer up (%u buffer(s), %u image(s)) - the asset router now\n",
+           VulkanResources::LiveBuffers(), VulkanResources::LiveImages());
+    std::fflush(stdout);
 
     g_VulkanResources = true;
     Logger::Print("IW4X32: the Vulkan resource layer is live - {} buffer(s), {} image(s), {} byte(s) tracked\n",
@@ -3167,7 +3218,11 @@ namespace Components
     // reason of its own, not to the caller's error: the device works, so the attach as a whole did not
     // fail and a caller that reads a set error after a true return would be told the wrong thing.
     const char* routerError = nullptr;
-    if (!VulkanAssetLoader::Attach(device, &routerError))
+    const bool routed = VulkanAssetLoader::Attach(handles, &routerError);
+    printf("IW4X32: the seam: the asset router answered %d\n", routed ? 1 : 0);
+    std::fflush(stdout);
+
+    if (!routed)
       Logger::Print("IW4X32: the Vulkan asset router is NOT installed ({}) - assets stay on the D3D9 path\n",
                     routerError != nullptr ? routerError : "no reason given");
     else
@@ -3200,6 +3255,135 @@ namespace Components
 
 } // namespace Components
 
+// IW4x32: the seam's guard. The layers behind this door reach across a boundary the game itself never
+// crosses: they call Vulkan entry points the native loader owns, through handles the loader handed
+// over. A fault anywhere in that chain must not take the client down with it - the game goes on drawing
+// on the device it made, the run says what faulted, and the numbers a test reads (presents, frames, the
+// window, the menu's own sentences) come from a live client instead of from a corpse. The fault is one
+// line in the log with its code and address, and the attach answers "refused".
+namespace
+{
+  unsigned int g_Seam_code = 0U;  // the exception code the guard caught
+  void* g_Seam_address = nullptr; // the address it was raised at
+  // IW4x-32: for a C++ throw (0xE06D7363) the record carries more than an address. Read off this build's
+  // own throw wrapper (gdec on iw4x.dll+0x2873c0): _CxxThrowException pushes n = 3 and a three-word
+  // array - the EH magic (0x19930520), the EXCEPTION OBJECT, then the THROW INFO. Two earlier readings
+  // were wrong in both directions: the loader's passed args[2] where a ThrowInfo belongs and this one
+  // wanted a fourth parameter that MSVC never passes, which is why "E06D7363 at a fixed 0x1028742D,
+  // five runs" never named its type.
+  void* g_Seam_throw = nullptr;   // the ThrowInfo, null for a C throw / a hardware fault
+  void* g_Seam_object = nullptr;  // the exception object
+
+  // Readable enough to print: the loader's own VMA table answers for the game's images and for what
+  // VirtualAlloc gave it, which is every range a C++ exception can point at.
+  bool seam_readable(const void* at, const std::size_t len)
+  {
+    MEMORY_BASIC_INFORMATION info{};
+
+    return at != nullptr && VirtualQuery(at, &info, sizeof(info)) == sizeof(info) && info.State == MEM_COMMIT &&
+           (info.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
+                            PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0U &&
+           info.RegionSize >= len &&
+           static_cast<std::size_t>(static_cast<const unsigned char*>(at) -
+                                    static_cast<const unsigned char*>(info.BaseAddress)) <= info.RegionSize - len;
+  }
+
+  LONG seam_guard_filter(EXCEPTION_POINTERS* info)
+  {
+    if (info != nullptr && info->ExceptionRecord != nullptr)
+    {
+      g_Seam_code = static_cast<unsigned int>(info->ExceptionRecord->ExceptionCode);
+      g_Seam_address = info->ExceptionRecord->ExceptionAddress;
+      g_Seam_throw = nullptr;
+      g_Seam_object = nullptr;
+
+      if (g_Seam_code == 0xE06D7363U && info->ExceptionRecord->NumberParameters >= 3U)
+      {
+        g_Seam_object = reinterpret_cast<void*>(info->ExceptionRecord->ExceptionInformation[1]);
+        g_Seam_throw = reinterpret_cast<void*>(info->ExceptionRecord->ExceptionInformation[2]);
+      }
+    }
+    return EXCEPTION_EXECUTE_HANDLER;
+  }
+
+  // A decorated C++ type name starts ".?A" (".?AV" for a class); nothing else is believed.
+  bool decorated(const char* at)
+  {
+    return at != nullptr && at[0] == '.' && at[1] == '?' && at[2] == 'A';
+  }
+
+  // The type that was thrown. A ThrowInfo's pType member is a TypeDescriptor, and this build emits a
+  // TypeDescriptor as { vtable pointer, spare, the name } - the name is EIGHT bytes inside it, four more
+  // than the offset the CRT headers of an older generation implied (measured in this image: the descriptor
+  // of std::bad_alloc sits at the string ".?AVbad_alloc@std@@" minus 8). Neither hop is believed from a
+  // header: the ThrowInfo's members at 4..12 and the descriptor's fields at 0..12 are tried in order and
+  // the first that answers a ".?A" name wins. One that answers nothing prints "type not readable"
+  // rather than a wrong name.
+  const char* thrown_type(const void* throwInfo)
+  {
+    if (throwInfo == nullptr)
+      return nullptr;
+
+    for (unsigned int offset = 4U; offset <= 12U; offset += 4U)
+    {
+      const auto* slot = static_cast<const unsigned char*>(throwInfo) + offset;
+      if (!seam_readable(slot, sizeof(void*)))
+        continue;
+
+      const auto* descriptor = *reinterpret_cast<void* const*>(slot);
+      if (descriptor == nullptr || !seam_readable(descriptor, 8U))
+        continue;
+
+      const auto* front = reinterpret_cast<const char*>(descriptor);
+
+      for (unsigned int noff = 0U; noff <= 12U; noff += 4U)
+      {
+        if (!seam_readable(front + noff, 4U))
+          break;
+
+        if (decorated(front + noff))
+          return front + noff;
+      }
+    }
+
+    return nullptr;
+  }
+
+  // What the guard caught, in one flushed line: the code, the address, and for a C++ throw the type the
+  // RTTI descriptor names.
+  void seam_report()
+  {
+    printf("IW4X32: the seam's layers faulted - code %08X at %p", g_Seam_code, g_Seam_address);
+
+    if (g_Seam_code == 0xE06D7363U)
+    {
+      const auto* name = thrown_type(g_Seam_throw);
+      if (name == nullptr)
+        name = thrown_type(g_Seam_object);
+
+      printf(" - a C++ throw: ThrowInfo %p object %p, faulting instruction %p%s", g_Seam_throw, g_Seam_object,
+             g_Seam_address, name != nullptr ? name : " - type not readable");
+    }
+
+    printf(" - the attach is off, the game keeps its own device\n");
+    std::fflush(stdout);
+  }
+
+  // 1 = the device was taken, 0 = the layers refused it (their reason is in the log), -1 = a fault was
+  // caught. No object with a destructor lives in this function, which is what lets __try sit in it.
+  int attach_layers(VulkanResources::Handles& handles, const char** error)
+  {
+    __try
+    {
+      return Components::IW4x32::AttachVulkanDevice(handles, error) ? 1 : 0;
+    }
+    __except (seam_guard_filter(GetExceptionInformation()))
+    {
+      return -1;
+    }
+  }
+} // namespace
+
 // IW4x32: the door the device comes in through.
 //
 // IW4x32::AttachVulkanDevice is a C++ static taking a C++ struct, which is nothing a C loader can
@@ -3211,7 +3395,8 @@ namespace Components
 //
 // So the renderer epic needs one named seam, and this is it: Vulkan handles in (as void*, because a
 // handle is a pointer-sized value and no C++ type crosses the boundary), the layer's own answer back
-// out in three plain numbers. It changes nothing about the game - it is an unanswered door: nothing in
+// out in three plain numbers. What the door builds from those void* is VulkanResources::Handles - a POD
+// - for the reason written where that local is declared: nothing behind this door may allocate. It changes nothing about the game - it is an unanswered door: nothing in
 // this checkout calls it, and the caller is the loader half of the epic, the native runtime that
 // already makes a Vulkan device of its own. Once that call exists, the router is in front of the
 // engine's uploads, r_backend decides whether it routes, and iw4x32_vkas_test is the check that it
@@ -3224,7 +3409,14 @@ extern "C" __declspec(dllexport) int IW4x32_AttachVulkan(void* getInstanceProcAd
                                                         void* physicalDevice, void* device, void* queue,
                                                         unsigned int queueFamily, unsigned int stats[3])
 {
-  VulkanDevice::Device attached;
+  // IW4x-32: six machine words, nothing on the heap. This is deliberately NOT a VulkanDevice::Device:
+  // that struct owns a std::vector<VkImage>, and the copy the layers made of it is what killed the
+  // attach of 2026-11-14 (std::length_error("vector too long") out of the vector's assignment, caught by
+  // the guard below but still a PE exception the loader logged and the client died on). A struct of
+  // handles has no copy constructor to run, no allocation to fail and nothing to unwind, which is what
+  // a door called from a C loader on a thread of the loader's own needs. The swapchain images a renderer
+  // also wants stay with the device that made them, on that device's side of the door.
+  VulkanResources::Handles attached;
   attached.getInstanceProcAddr = reinterpret_cast<VulkanDevice::GetInstanceProcAddr>(getInstanceProcAddr);
   attached.instance = reinterpret_cast<VkInstance>(instance);
   attached.physicalDevice = reinterpret_cast<VkPhysicalDevice>(physicalDevice);
@@ -3232,14 +3424,32 @@ extern "C" __declspec(dllexport) int IW4x32_AttachVulkan(void* getInstanceProcAd
   attached.queue = reinterpret_cast<VkQueue>(queue);
   attached.queueFamily = queueFamily;
 
-  const char* error = nullptr;
-  const bool taken = Components::IW4x32::AttachVulkanDevice(attached, &error);
+  // IW4x-32: what arrived, printed before anything is called and flushed. Every layer behind this door
+  // prints its own lines; the seam's own line is the only witness of what the loader handed over, and
+  // a run that dies inside the layers has to say what it was given (2026-11-13: an attach that faulted
+  // at a .rdata address left one crash line and no evidence at all).
+  printf("IW4X32: the seam: gipa %p instance %p physical %p device %p queue %p family %u\n",
+         getInstanceProcAddr, instance, physicalDevice, device, queue, queueFamily);
+  std::fflush(stdout);
 
-  if (!taken)
+  const char* error = nullptr;
+  const int answer = attach_layers(attached, &error);
+  // IW4x-32: everything the layers said goes out before this call returns. Their lines are printf's,
+  // and stdout is a pipe in a test run - a later crash loses the buffered text, which is exactly the
+  // evidence the next round reads (2026-11-13: an attach that died after its own success line).
+  std::fflush(stdout);
+
+  if (answer < 0)
+    seam_report();
+
+  const bool taken = answer > 0;
+  if (answer == 0)
     Components::Logger::Print("IW4X32: the loader's Vulkan device was refused ({})\n",
                               error != nullptr ? error : "no reason given");
 
-  if (stats != nullptr)
+  // IW4x-32: the layer counters answer only when the layers ran to their end. Reading them after a
+  // caught fault would walk state the fault may have left half-built - the same chain that faulted once.
+  if (stats != nullptr && answer >= 0)
   {
     stats[0] = VulkanAssetLoader::Installed() ? 1U : 0U;
     stats[1] = VulkanResources::LiveBuffers();
