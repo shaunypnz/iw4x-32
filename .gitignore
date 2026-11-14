@@ -174,3 +174,8 @@ task-runs/
 
 # Private diagnostic evidence must never enter a source commit.
 /_scratch/
+
+# IW4x-32: the live native CHECK stages a copy of the table set into the native tree so it ships with the
+# tree to the test host (the judge on that box grades the run against its own copy). A copy of a file the
+# repo already tracks - it never belongs in a commit.
+/iw4x32/native/tests/.live_local_tables.json
