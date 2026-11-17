@@ -179,3 +179,9 @@ task-runs/
 # tree to the test host (the judge on that box grades the run against its own copy). A copy of a file the
 # repo already tracks - it never belongs in a commit.
 /iw4x32/native/tests/.live_local_tables.json
+
+# IW4x-32 (2026-11-18, measured): a scratch run folder here holds a HARD-LINKED COPY OF THE WHOLE GAME - fastfiles,
+# movies, the official exes - and one `git add -A` swept 1440 of those files into a commit before it was stopped.
+# iw4x32/native/.gitignore (a `*` for the private native tree) covers it once that file is readable; this line names
+# the scratch tree in the repo's own ignore file too, so a game copy can never become stageable again.
+/iw4x32/native/_scratch_wide/
