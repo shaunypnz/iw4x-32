@@ -1,25 +1,25 @@
 {
- "version": "v2.25-r5318",
+ "version": "v2.26-r5318",
  "iw4x": "r5318",
  "official": {
   "iw4x.dll": "d9f1440a6e17f397b1eb8a7d770d1be8043b9ea276b9c8775a4677cdaa10615d",
   "iw4x.exe": "49ea90e34c9cd64d9d0ae7f4b399e4ecc5ea13976823b2b8667390a4b8767009"
  },
- "base_url": "https://raw.githubusercontent.com/shaunypnz/iw4x-32/v2.25-r5318/iw4x32/release/",
+ "base_url": "https://raw.githubusercontent.com/shaunypnz/iw4x-32/v2.26-r5318/iw4x32/release/",
  "files": {
   "IW4x-32.bat": "4965f5c8428f0962dfafe60cfe603c3a1af8665301eb9260fa9aea18efcb0ed4",
   "IW4x-32.sh": "54c59f841f82a9b0ec6a4f9e7abdefcd49b42c1f90bf1db1fa48c726efc7c77f",
-  "README.txt": "860122c625727cff1bd17f87fdd592c8571ff9257d866756876650d0df2597ce",
+  "README.txt": "d748ce12497c1da114f3e24e8db33fe82f83d7f8506f0f65242e3cd90ed58f17",
   "files/AI_CREDITS.txt": "442018a8201b3e7ca9f2da4a3bbf60bc3f8ac4a3b6e5601e7ce415f545e0bde8",
-  "files/CHANGES.txt": "50a1a446021bdca52adf7f2fc92e04e09bd260db680bb5fc2b4ff3242b08bcd8",
-  "files/iw4x.dll": "c4a2e898c2f1201cc4bd79c945c2c5821744ec8605c95848c1d783d6246ab21f",
+  "files/CHANGES.txt": "365db396de9d9f91f8016df764ecab3d9cb59703791ee5a41d37802bb55b4d2b",
+  "files/iw4x.dll": "75c8992ae9e700a0c38e68d5dd23b1d8a70a9627ff8b76d4f7d0ac9b1e8dc6fc",
   "files/iw4x32.ps1": "f227951213905a2815c6c39cde12f4e5f36f49576eec391d212bea8c8f678cf3",
-  "files/iw4x32.py": "c3b844697734262fd1bd16e3cb2384ca6ad1529780b96247ad65c446f5b002ed",
+  "files/iw4x32.py": "497e4e787a310df42ae055758ce3fb3b2b9668b555240f30824048f38e148032",
   "files/server_iw4x32.cfg": "59b295b217cac35343a09122a210650083491d9d33fe5e0386e205ebd81d8539",
   "files/server_vanilla.cfg": "48a77c44351875d727849515433a9bb7888e1a3b07c3be490f7217548d9d9dc8",
   "iw4x32_update.ps1": "b6310fca3181395d48c11b4bb34fcaf977f28af7c06088dcf2b0164b4a488a0f",
   "iw4x32_update.py": "76ec46eb5354d72128ab8d4f5915d5bad7088152f4a7ba7566a6c92a97bb4211",
-  "files/SHA256SUMS.txt": "a251b81bc7fd13b57d687db77b0851b07db801df7428b6e75321ffb147617cf9"
+  "files/SHA256SUMS.txt": "af5e31c967524d227fa9d27fc693d5b8272c0069e557c4c253827b91b7c9ab94"
  },
  "legacy": [
   "iw4x32_update.ps1",
