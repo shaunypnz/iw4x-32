@@ -2840,8 +2840,12 @@ namespace Components
       mov ecx, 0x4AEF00
       call ecx
       push offset g_RejectLog
-      push 0xF
-      mov ecx, 0x413490
+      // IW4x-32: the rejection is a witness, not a debug trace. Com_DPrintf (0x413490) only speaks on a server
+      // running with `developer` on - and a developer-mode server turns every client away - so a normal wide
+      // server never showed the stock clients it refused, and nobody could tell a refused client from a
+      // silently corrupt session. Same channel the layout line above uses: the line lands in the console.
+      push 0x10
+      mov ecx, 0x402500
       call ecx
       add esp, 0x24
       pop edi

@@ -9,7 +9,8 @@ this file. IW4x-32.sh runs it. Windows: iw4x32.ps1 next to it does the same step
   ./IW4x-32.sh --native-server [port]   96-player dedicated server, native (no Wine)
   ./IW4x-32.sh --vanilla                vanilla IW4x (the official IW4x launcher updates and starts it)
   ./IW4x-32.sh --server [port]          96-player dedicated server (port 28960; Wine, or native with --native)
-  ./IW4x-32.sh --vanilla-server [port]  normal 18-player IW4x server
+  ./IW4x-32.sh --vanilla-server [port]  normal 18-player IW4x server through Wine
+  ./IW4x-32.sh --native-vanilla-server [port]  native 18-slot server compatible with stock IW4x clients
   ./IW4x-32.sh --setup [game folder]    do the setup again, e.g. for another game folder
   ./IW4x-32.sh --uninstall              put the official IW4x files back, remove the menu entries
   ./IW4x-32.sh --fix                    the game crashed / hangs and Steam will not start it: close what is left
@@ -99,7 +100,7 @@ MW2 = "Call of Duty Modern Warfare 2"
 FILES = os.path.dirname(os.path.abspath(__file__))        # <kit>/files: the program, backup/ and mode.txt
 KIT = os.path.dirname(FILES)                              # the IW4x-32 folder
 GAME = None
-MODES = ["iw4x32", "iw4x32", "vanilla", "server", "vanilla-server", "uninstall", "fix"]
+MODES = ["iw4x32", "iw4x32", "vanilla", "server", "vanilla-server", "uninstall", "fix", "native-vanilla-server"]
 # IW4x-32: [0] is the native run, [1] the Wine/Proton one - the same "iw4x32" mode, so an older kit's mode.txt and
 # menu entries keep working. Which of the two the number keys mean follows the player's last choice.
 REMOTE_EVERY = 15 * 60        # s between the official launcher's online checks (GitHub: 60 requests an hour)
@@ -113,7 +114,7 @@ LEGACY = ["AI_CREDITS.txt", "CHANGES.txt", "SHA256SUMS.txt", "IW4x-32 Launcher.b
 LEGACY_DIRS = ["source"]                                                    # v1.x: the patch manifests
 DESKTOP = ["iw4x32.desktop", "iw4x32-server.desktop", "iw4x32-vanilla.desktop",
            "iw4x32-play.desktop", "iw4x32-vanilla-server.desktop", "iw4x32-native.desktop",
-           "iw4x32-native-server.desktop"]    # the last three: made by the v2.1 test builds; the native pair is new
+           "iw4x32-native-server.desktop", "iw4x32-native-vanilla-server.desktop"]
 
 
 class Opts:
@@ -147,7 +148,7 @@ def parse(argv):
             O.mode, O.runtime = "server", "native"
         elif a in ("--play", "--iw4x32"):
             O.mode = "iw4x32"
-        elif a in ("--vanilla", "--server", "--vanilla-server", "--uninstall", "--fix"):
+        elif a in ("--vanilla", "--server", "--vanilla-server", "--native-vanilla-server", "--uninstall", "--fix"):
             O.mode = a[2:]
         elif a == "--setup":
             O.setup = True
@@ -165,7 +166,7 @@ def parse(argv):
         elif a in ("-h", "--help"):
             print(__doc__)
             sys.exit(0)
-        elif a.isdigit() and O.mode in ("server", "vanilla-server"):
+        elif a.isdigit() and O.mode in ("server", "vanilla-server", "native-vanilla-server"):
             O.port = a
         else:
             O.game_args.append(a)
@@ -614,6 +615,8 @@ def shortcut_entries():
                        "the real IW4x client on Vulkan, no Wine", " --native"))
         out.append(("iw4x32-native-server.desktop", "IW4x-32 Server (native Linux)",
                     f"{PLAYERS}-player dedicated server, no Wine", " --native-server"))
+        out.append(("iw4x32-native-vanilla-server.desktop", "IW4x 18-slot Server (native Linux)",
+                    "Headless native server for stock IW4x clients", " --native-vanilla-server"))
     return out
 
 
@@ -814,12 +817,12 @@ def i386_libs():
     return {l.strip().split()[0] for l in ldconfig_lines().splitlines() if "(libc6)" in l and "=>" in l}
 
 
-def missing_i386():
+def missing_i386(required=I386_PKGS):
     """the i386 libraries a native start needs: [] when they are all there"""
     have = i386_libs()
     if not have:
         return []                                    # no ldconfig to ask: the loader itself answers
-    return sorted({pkg for son, pkg in I386_PKGS.items() if son not in have for pkg in [son]})
+    return sorted(set(required) - have)
 
 
 def pkg_names(sonames):
@@ -883,7 +886,7 @@ def vk_device():
     return True, f"{n32} of {len(man)} Vulkan driver(s) loadable by a 32-bit process"
 
 
-def native_ok():
+def native_ok(*, headless=False):
     """can a native run start on this machine? (ok, why-not) - a missing Vulkan device names the driver package,
     a missing i386 runtime names the exact packages; an unknown answer is a NO, never a quiet maybe"""
     if not native_available():
@@ -891,10 +894,14 @@ def native_ok():
                        "the one this kit ships")
     if os.environ.get("IW4X32_NO_CHECKS") == "1":
         return True, "machine checks skipped (IW4X32_NO_CHECKS=1) - the loader's own error answers instead"
-    bad = missing_i386()
+    # IW4x-32: the dedicated loader links to SDL2 and libc, and never opens a Vulkan device.
+    required = ("libc.so.6", "libSDL2-2.0.so.0") if headless else I386_PKGS
+    bad = missing_i386(required)
     if bad:
         return False, (f"missing 32-bit libraries for iw4x-native: {pkg_names(bad)} "
-                       f"- sudo apt install {pkg_names(bad)} {I386_OTHER}")
+                       f"- sudo apt install {pkg_names(bad)}" + ("" if headless else f" {I386_OTHER}"))
+    if headless:
+        return True, "32-bit dedicated loader runtime available"
     return vk_device()
 
 
@@ -944,12 +951,16 @@ def select_mode():
                    "  [2] Play IW4x-32, Wine/Proton   the same client through Steam's Proton or Wine"] if nat else
                   [f"  [1] Play IW4x-32          IW4x-32 servers up to {PLAYERS} players, and normal ones"])
         base = len(lines_)
+        tail = TAIL.copy()
         lines_ += [f"  [{base + 1}] Play vanilla IW4x     the official IW4x",
                    f"  [{base + 2}] Host a {PLAYERS}-player server   (port {O.port}; "
                    f"{'native Linux' if rt == 'native' else 'Wine/Proton'})",
                    f"  [{base + 3}] Host a normal IW4x server (port {O.port})",
                    f"  [{base + 4}] Uninstall IW4x-32",
                    f"  [{base + 5}] Game crashed / stuck?  closes what is left of it, so Steam can start it again"]
+        if nat:
+            tail.append("native-vanilla-server")
+            lines_.append(f"  [{len(lines_) + 1}] Host a native 18-slot server (port {O.port}, stock clients)")
         print(f"\n  IW4x-32 {installed_version()} - Modern Warfare 2 with up to {PLAYERS} players\n  game: {GAME}")
         print(f"  {version_status()}\n")
         for l in lines_:
@@ -959,11 +970,11 @@ def select_mode():
             print("\n  how it runs: " + ("native Linux (Vulkan)" if rt == "native" else "Wine / Proton")
                   + ("" if ok else f" - not possible on this PC: {why}") + "   (N or W switches it)")
         m = read_mode()
-        d = play if m == "iw4x32" else base + TAIL.index(m) if m in TAIL else play
+        d = play if m == "iw4x32" else base + tail.index(m) if m in tail else play
         print(f"  Press 1-{len(lines_)}" + (", N or W" if nat else "") + f" - or wait: [{d + 1}] starts in 5 s ",
               end="", flush=True)
         try:
-            c = read_key(5, "\r\n1234567nw")
+            c = read_key(5, "\r\n12345678nw")
         except Exception:                                   # no real terminal: a line, then
             c = sys.stdin.readline().strip()[:1].lower() if select.select([sys.stdin], [], [], 5)[0] else ""
         if c in ("n", "w") and nat:
@@ -972,7 +983,7 @@ def select_mode():
             continue
         print(c if c.isdigit() else "")
         i = int(c) - 1 if c.isdigit() and 1 <= int(c) <= len(lines_) else d
-        mode = "iw4x32" if i < base else TAIL[i - base]
+        mode = "iw4x32" if i < base else tail[i - base]
         O.runtime = rt
         if mode in MODES:
             try:
@@ -1233,13 +1244,9 @@ def start_server(slots, cfg, label, runtime=None):
 
 
 def start_server_native(slots, cfg, label):
-    """the same dedicated server with no Wine in it: our loader maps the official iw4x.exe + our iw4x.dll. A vanilla
-    server (18 slots) is stock IW4x and stays under Wine."""
-    if slots != PLAYERS:
-        say("a vanilla IW4x server runs the official files - that one runs under Wine")
-        return start_server(slots, cfg, label, runtime="wine")
+    """Run the shared IW4x-32 build headless. At 18 slots it uses the stock entity layout."""
     b = native_path()
-    ok, why = native_ok()
+    ok, why = native_ok(headless=True)
     if not ok:
         return refuse_native(why)
     if not os.path.isfile(G("iw4x.exe")) or sha(G("iw4x.dll")) != sha(F("iw4x.dll")):
@@ -1497,6 +1504,11 @@ def self_test():
          "native kit: hosting with --wine is the Proton/Wine server - both ways stay first-class")
     out, rc = run_kit("--vanilla-server", env=base)
     gate(rc == 0 and "sv_maxclients 18" in out, "native kit: a vanilla (official) server still runs the official files")
+    out, rc = run_kit("--native-vanilla-server", "28963", env=dict(base, IW4X32_VK_ICD_DIR=icd64))
+    cmds = [line for line in out.splitlines() if "command:" in line]
+    gate(rc == 0 and cmds and "iw4x-native" in cmds[0] and "-dedicated" in cmds[0]
+         and "sv_maxclients 18" in cmds[0] and "net_port 28963" in cmds[0],
+         "native kit: 18-slot dedicated host uses the loader without a 32-bit Vulkan driver")
     out, rc = run_kit("--native", "--dry", env=dict(base, IW4X32_VK_ICD_DIR=icd64))
     gate(rc != 0 and "mesa-vulkan-drivers" in out and "command:" not in out,
          "native kit: no Vulkan device for a 32-bit process -> names the driver package and exits non-zero")
@@ -1611,11 +1623,13 @@ def main():
     if mode == "vanilla-server":
         if not O.dry:
             restore_official()
-        return start_server(18, "server_vanilla.cfg", "IW4x server - vanilla, 18 players")
+        return start_server(18, "server_vanilla.cfg", "IW4x server - vanilla, 18 players", runtime="wine")
     if mode == "uninstall":
         return do_uninstall()
     if not O.dry:
         do_update()
+    if mode == "native-vanilla-server":
+        return start_server_native(18, "server_vanilla.cfg", "IW4x server - native Linux, 18 slots")
     if mode == "server":
         nat = pick_runtime() == "native"
         return start_server(PLAYERS, "server_iw4x32.cfg",
