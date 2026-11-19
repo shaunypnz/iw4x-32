@@ -172,8 +172,12 @@ task-runs/
 # IW4x-32: checksum-verified CI dependency downloaded by fetch_vulkan_headers.py
 /deps/vulkan/
 
-# Private diagnostic evidence must never enter a source commit.
-/_scratch/
+# Private diagnostic evidence must never enter a source commit. Every such folder at the repo root is named
+# `_scratch*`, so one glob covers them all (2026-11-19, measured): a native CHECK planted its bad-case captures in
+# `_scratch_van_bad/`, 48 files whose console lines carry the test box's own machine paths, and git-privacy-check
+# refused the push. A per-file entry in the clone's .git/info/exclude hides them on one machine only - a fresh
+# worktree (the merge check) stages them again, so the rule belongs in the ignore file that travels.
+/_scratch*/
 
 # IW4x-32: the live native CHECK stages a copy of the table set into the native tree so it ships with the
 # tree to the test host (the judge on that box grades the run against its own copy). A copy of a file the
@@ -185,3 +189,10 @@ task-runs/
 # iw4x32/native/.gitignore (a `*` for the private native tree) covers it once that file is readable; this line names
 # the scratch tree in the repo's own ignore file too, so a game copy can never become stageable again.
 /iw4x32/native/_scratch_wide/
+
+# IW4x-32 (2026-11-19, measured): the private native tree's own ignore file (iw4x32/native/.gitignore, a `*` over
+# everything under it) reaches a worktree as a SYMLINK, and git never follows a symlinked .gitignore - it warns
+# "Too many levels of symbolic links" on every command and applies nothing, so every path under iw4x32/native/
+# (its build output, its game copies, the loader binary) was kept out of the index only by machine-local excludes.
+# The worktree copy has to be a real file for that `*` to answer; these lines cover the same ground from here.
+/iw4x32/native/
