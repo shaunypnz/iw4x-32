@@ -476,6 +476,15 @@ def update_iw4x():
         say(f"the IW4x launcher did not update IW4x (exit {getattr(r, 'returncode', '-')}) - start again later to retry")
 
 
+def kit_exec(p):
+    """IW4x-32: which kit files come back runnable. The scripts and the native loader, and any shared object the kit
+    ships beside them (a native kit carries its DXVK-native as files/lib/libdxvk_d3d9.so.0): an update that wrote
+    such a library 0644 hands the player a kit whose loader loads nothing - the bit belongs to those files the way
+    their bytes do, so it is decided here, from the path, for every file the manifest carries."""
+    name = os.path.basename(p)
+    return p.endswith((".sh", ".py")) or p == "files/" + NATIVE_FILE or name.endswith(".so") or ".so." in name
+
+
 def update_kit(m):
     """every file of the release whose SHA-256 differs: download all, check all, then swap them in"""
     skip = set(m.get("legacy") or [])
@@ -497,7 +506,7 @@ def update_kit(m):
             os.replace(os.path.join(stage, p), dst)
             # IW4x-32: the executable bit is part of the file: the scripts AND the native loader (files/iw4x-native)
             # come back runnable, or a native kit updates itself into a kit that cannot start anything.
-            os.chmod(dst, 0o755 if p.endswith((".sh", ".py")) or p == "files/" + NATIVE_FILE else 0o644)
+            os.chmod(dst, 0o755 if kit_exec(p) else 0o644)
     finally:
         shutil.rmtree(stage, ignore_errors=True)
 
@@ -1320,8 +1329,10 @@ def self_test():
     REV = built_for()                                     # the IW4x release our own dll is built for (its string)
     OFF = f"OFFICIAL-DLL IW4x {REV}"                      # what the fake official IW4x launcher installs
     kit = os.path.join(t, "kit")
+    # the throwaway kit starts as a PUBLIC kit: a native kit's own loader (and the DXVK-native it ships next to
+    # it) is added below by name, so the "public kit" gates describe a public kit in a native kit's checkout too.
     shutil.copytree(KIT, kit, ignore=shutil.ignore_patterns("__pycache__", "backup", "mode.txt", "state.json",
-                                                            "runtime.txt"))
+                                                            "runtime.txt", NATIVE_FILE, "lib"))
     FILES = os.path.join(kit, "files")                    # the probes below read THIS kit, not the one running us
     steam, lib = os.path.join(t, "steam"), os.path.join(t, "lib")
     game = os.path.join(lib, "steamapps", "common", MW2)
@@ -1549,9 +1560,17 @@ def self_test():
     # ---- self-update: the native loader keeps its exec bit, and a signed release still swaps in --------------------
     shutil.copy2(stub, put)                                    # the kit carries the loader again for the release
     os.chmod(put, 0o755)
+    # IW4x-32: a native kit also ships a shared object in a NESTED folder (files/lib/libdxvk_d3d9.so.0). The update
+    # has to create that folder, bring back a file an install lost, keep its exec bit, and still leave a text file
+    # non-executable - all four are gated on the same swap.
+    lib_so = os.path.join(kit, "files", "lib", "libdxvk_d3d9.so.0")
+    os.makedirs(os.path.dirname(lib_so), exist_ok=True)
+    open(lib_so, "wb").write(b"DXVK-STUB one\n")
+    os.chmod(lib_so, 0o755)
     # the version test needs a real difference between the installed kit and the game's copy of it
     open(os.path.join(kit, "files", CHANGES_MARK), "w", newline="").write("self-test\r\n")
     os.chmod(os.path.join(kit, "files", NATIVE_FILE), 0o644)   # an install that lost the loader's exec bit
+    os.remove(lib_so)                                          # ... and one that lost its library altogether
     shutil.rmtree(os.path.join(web, "rel99"), ignore_errors=True)
     shutil.copytree(kit, os.path.join(web, "rel99"), ignore=shutil.ignore_patterns("backup"))
     readme = open(os.path.join(web, "rel99", "README.txt"), encoding="utf-8", errors="replace").read()
@@ -1561,6 +1580,8 @@ def self_test():
     # the release's loader differs by one comment, so the update really re-downloads it: that is the only way the
     # exec bit is measured and not read as "fine" by luck (an unchanged file is never downloaded at all)
     open(os.path.join(web, "rel99", "files", NATIVE_FILE), "a").write("# v9.99\n")
+    os.makedirs(os.path.join(web, "rel99", "files", "lib"), exist_ok=True)   # the release carries the library too
+    open(os.path.join(web, "rel99", "files", "lib", "libdxvk_d3d9.so.0"), "wb").write(b"DXVK-STUB two\n")
     publish("rel99", "v9.99-" + REV)
     out, rc = run_kit("--play", env=base)                             # NO_START=1: it prints the start, runs nothing
     gate("v9.99-" + REV in out and installed_version(kit) == "v9.99-" + REV,
@@ -1569,6 +1590,11 @@ def self_test():
          "update: files/iw4x-native comes back executable (a native kit is useless without its exec bit)")
     gate(os.access(os.path.join(kit, "files", "iw4x32.py"), os.X_OK) and os.access(os.path.join(kit, "IW4x-32.sh"), os.X_OK),
          "update: the scripts keep their exec bits too")
+    so = os.path.join(kit, "files", "lib", "libdxvk_d3d9.so.0")
+    gate(os.path.isfile(so) and open(so, "rb").read() == b"DXVK-STUB two\n" and os.access(so, os.X_OK),
+         "update: the nested files/lib/libdxvk_d3d9.so.0 is created, is the release's bytes, and comes back executable")
+    gate(not os.access(os.path.join(kit, "files", CHANGES_MARK), os.X_OK),
+         "control: the exec-bit rule is not \"everything 755\" - a text file stays non-executable")
     os.remove(os.path.join(web, "latest.json.sig"))
     out, rc = run_kit("--play", env=base)
     gate("update refused" in out and "command:" in out, "update: an unsigned release is refused and the game starts anyway")
