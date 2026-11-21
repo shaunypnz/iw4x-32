@@ -195,4 +195,23 @@ task-runs/
 # "Too many levels of symbolic links" on every command and applies nothing, so every path under iw4x32/native/
 # (its build output, its game copies, the loader binary) was kept out of the index only by machine-local excludes.
 # The worktree copy has to be a real file for that `*` to answer; these lines cover the same ground from here.
-/iw4x32/native/
+#
+# IW4x-32 (2026-11-22, merge round, measured): that blanket line hid more than the junk - it hid the four files the
+# phase-h CHECK owns, and an ignored file cannot travel a branch, so the queue's merge worktree had no
+# iw4x32/native/tests/host64_pe_map.sh to run (exit 127, CHECK fails on the merged tree). Same protection, one level
+# narrower: everything at the top of the native tree stays out (build output, game copies, scratch trees), its src/
+# and tests/ folders stay out as well - every entry in them reaches a worktree as a symlink into the private tree and
+# a committed link is a machine path - and only the four files this task wrote are named back in. They are private
+# loader scaffolding, marked PRIVATE at the top of each: the queue's privatize() moves them into the private dir (and
+# records them in its manifest, which is what links them into every later worktree), so the public branch never
+# carries them. What the old line broke was the trip between the two: a branch that cannot hold the CHECK cannot be
+# checked on a merged tree at all.
+/iw4x32/native/*
+!/iw4x32/native/src
+!/iw4x32/native/tests
+/iw4x32/native/src/*
+/iw4x32/native/tests/*
+!/iw4x32/native/src/host64_map.c
+!/iw4x32/native/src/host64_pe.c
+!/iw4x32/native/tests/host64_pe_map.sh
+!/iw4x32/native/tests/gen_pe_fixture.py
