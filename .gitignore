@@ -206,6 +206,16 @@ task-runs/
 # records them in its manifest, which is what links them into every later worktree), so the public branch never
 # carries them. What the old line broke was the trip between the two: a branch that cannot hold the CHECK cannot be
 # checked on a merged tree at all.
+#
+# IW4x-32 (2026-11-23, merge round 3, measured): those four names stay uncommitted - host64_pe.c carries
+# "PRIVATE - not for publication" in its own header, and a merged tree does not need them from git: it is handed the
+# native files this run's private-snapshot manifest names (884 of them here: the Makefile, pe.h, both host64 sources,
+# gen_pe_fixture.py, host64_pe_map.sh), which is what makes the CHECK runnable there. What that manifest does NOT
+# carry is a file NEW to the native tree, and that is the trap: the pass that put the 32-bit transfer in its own
+# src/host64_call.S left the merged build at "No rule to make target 'src/host64_call.S'", and the CHECK then graded
+# leftovers. So the transfer is assembler text inside the one PE source the manifest does carry, tests/host64_pe_map.sh
+# grades that rule (it refuses a rule naming a second PE source or a missing one), and anything the CHECK needs from a
+# real image is read off a tracked file of this repo, never off a private-only path.
 /iw4x32/native/*
 !/iw4x32/native/src
 !/iw4x32/native/tests
